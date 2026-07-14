@@ -104,13 +104,6 @@ Contributions are welcome:
 
 If you'd like to take an active role in development, reach out via the contact methods below — contributors who stick around may receive write access to the repo.
 
-### Planned Features
-
-- EasyNews debrid provider
-- OffCloud debrid provider
-
----
-
 ## Contact
 
 - **Discord:** The Steampunk Owl#3126
