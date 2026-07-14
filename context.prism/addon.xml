@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<addon id="context.prism" version="3.0.2" name="Prism - Global Context Menu Items" provider-name="Nixgates">
+<addon id="context.prism" version="4.0.0" name="Prism - Global Context Menu Items" provider-name="Nixgates">
 	<requires>
 		<import addon="xbmc.addon" version="17.9.910" />
 		<import addon="xbmc.python" version="3.0.0" />
@@ -55,10 +55,10 @@
 		<source></source>
 		<disclaimer lang="en"></disclaimer>
 		<assets>
-			<icon>resources/images/ico-prism-3.png</icon>
-			<fanart>fanart-prism-3.jpg</fanart>
-			<clearlogo>resources/images/logo-prism-3.png</clearlogo>
-			<poster>resources/images/poster-prism-3.png</poster>
+			<icon>resources/images/ico-prism-4.png</icon>
+			<fanart>fanart-prism-4.jpg</fanart>
+			<clearlogo>resources/images/logo-prism-4.png</clearlogo>
+			<poster>resources/images/poster-prism-4.png</poster>
 		</assets>
 		<news>
 			Changelog 3.0.2
