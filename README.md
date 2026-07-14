@@ -1,52 +1,135 @@
-[![Kodi version](https://img.shields.io/badge/kodi%20versions-19--20-blue)](https://kodi.tv/)
-[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://github.com/pre-commit/pre-commit)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-![CI](https://github.com/SerenKodi/SerenDevelopment/workflows/CI/badge.svg?branch=v2-Development)
-[![codecov](https://codecov.io/gh/SerenKodi/SerenDevelopment/branch/v2-Development/graph/badge.svg?token=LCX9WOPJ2M)](https://codecov.io/gh/SerenKodi/SerenDevelopment)
-[![License: GPL3](https://img.shields.io/badge/License-GPL3-yellow.svg)](https://opensource.org/licenses/GPL-3.0)
+# Prism
 
-# Seren (plugin.video.seren)
+[![Kodi version](https://img.shields.io/badge/Kodi%2020%2B%2F21%2F22-blue?style=for-the-badge)](https://kodi.tv/)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL3-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/GPL-3.0)
+[![GitHub Wiki](https://img.shields.io/badge/docs-wiki-blue?style=for-the-badge)](https://github.com/Goldenfreddy0703/Prism/wiki)
 
-Seren is a multi-source addon for Kodi with the added ability to install custom provider modules. Unlike other Kodi addons which are generally built for a single service use, Seren allows users to connect to multiple online/offline services at once for their viewing with a single click.
+**Prism** is an all-in-one Kodi addon for **Movies**, **TV Shows**, and **Anime** — built from a fork of the original [Seren](https://github.com/nixgates/plugin.video.seren) addon by **Nixgates**.
 
-## Contribution
+Browse, discover, track, and stream from a single menu. Prism is tightly integrated with [Simkl](https://simkl.com/) for watchlists, progress, and library sync. Playback is flexible — use **local files**, optional **debrid services**, or install **provider packages** for adaptive and embedded sources from streaming sites.
 
-Install all dependencies in requirements.txt
-```shell
-pip install -r requirements.txt
-```
+> **Credit where it's due:** All original Seren work belongs to [Nixgates](https://github.com/nixgates). Prism is a community-maintained fork built to keep the project alive and expand it with new features like anime support.
 
-Configure hooks for automated pre commit changes:
-```sh
-pre-commit install
-```
-Ensure that `git` is available in your PATH
+---
 
-## FAQ
+## Features
 
-> #### How do I install a new provider?
+- **All-in-one media hub** — Movies, TV Shows, and Anime from one addon
+- **Discover Anime** — Dedicated anime browsing with TV and movie categories, plus unified anime search
+- **Simkl integration** — Sync watchlists, progress, ratings, Next Up, and personal libraries
+- **Local file playback** — Browse and play media from folders on your device or network
+- **Debrid support** *(optional)* — Real-Debrid, Premiumize, AllDebrid, and TorBox
+- **Modular providers** — Install and manage provider packages from within the addon, including adaptive and embedded sources from streaming websites
+- **Smart Play & filtering** — Source sorting, quality filters, adaptive playback, and more
+- **Kodi 20–22** — Tested on Nexus, Omega, and Pulsar
 
-In the settings menu of Seren you will find a providers tab. Inside this tab you will find the install provider package option.
+For setup guides, provider configuration, and troubleshooting, see the **[Prism Wiki](https://github.com/Goldenfreddy0703/Prism/wiki)**.
 
-> #### How do manage my providers?
+---
 
-Within Seren's settings, you will find the providers tab. Within this tab you can disable/enable single providers inside provide packs, enable/disable entire provider packages, enable/ disable automatic provider updates and manually for a update check for your providers.
+## Requirements
 
-> #### Seren won't show me season or episode lists and instead begins playing automatically?
+- **Kodi 20 Nexus or later** (Kodi 19 and earlier are not supported)
+- A **Simkl account** (recommended) for full library and sync features
 
-Please disable the Auto Episode Resume setting in the general tab of Seren's settings.
+### Playback options
 
-> #### I'm experiencing an issue whilst using Seren. Where can I get help?
-You can often find help from users in the Addons4Kodi subreddit or you are always welcome to log a github issue and I will contact you directly to investigate the issue.
+Prism does **not** require a debrid account. How you play content is up to you:
+
+- **Local files** — Point Prism at a folder on your device or network and play from your own library
+- **Debrid services** *(recommended)* — Real-Debrid, Premiumize, AllDebrid, or TorBox for cached torrent and cloud playback
+- **Provider packages** — Install adaptive or embedded providers to scrape streaming websites directly, if you choose to use them
+
+---
+
+## Installation
+
+The recommended way to install Prism is through the **Prism Repository**, which enables automatic updates.
+
+| Resource | URL |
+|----------|-----|
+| **Repository source** | `https://goldenfreddy0703.github.io/repository.prism` |
+| **Repository repo** | [github.com/Goldenfreddy0703/repository.prism](https://github.com/Goldenfreddy0703/repository.prism) |
+| **Addon source** | [github.com/Goldenfreddy0703/Prism](https://github.com/Goldenfreddy0703/Prism) |
+
+> **Note:** The Prism Repository is being finalized for release. Once live, add the source URL above in Kodi's File Manager to install and receive updates automatically.
+
+### Install via Repository (Recommended)
+
+1. In Kodi, go to **Settings → File Manager → Add source**
+2. Enter this URL as the source:
+   ```
+   https://goldenfreddy0703.github.io/repository.prism
+   ```
+3. Name it something like `Prism` and confirm
+4. Go to **Add-ons → Install from zip file**, select your new source, and install `repository.prism`
+5. Go to **Add-ons → Install from repository → Prism Repository** and install:
+   - **Context Prism** (required dependency)
+   - **Prism**
+
+After installation, open Prism settings to set up playback — local folders, debrid accounts, provider packages, and Simkl. See the [Wiki](https://github.com/Goldenfreddy0703/Prism/wiki) for a full walkthrough.
+
+### Manual Installation
+
+Only use this if the repository is not yet available. Future updates should always come from the repository.
+
+1. Install dependencies **in this order**:
+   - Context Menu Addon (`context.prism`)
+   - Prism Addon (`plugin.video.prism`)
+2. After each update, **clear cache and rebuild the database** so changes take effect properly
+
+Pre-built zip packages will be hosted in [repository.prism](https://github.com/Goldenfreddy0703/repository.prism) once the repository is published.
+
+---
+
+## Troubleshooting
+
+Run into issues? Start here:
+
+- **[Prism Wiki](https://github.com/Goldenfreddy0703/Prism/wiki)** — Setup, configuration, and common fixes
+- **[GitHub Issues](https://github.com/Goldenfreddy0703/Prism/issues)** — Bug reports and troubleshooting
+- **Addons4Kodi Discord** — Community support (link below)
+
+---
+
+## Contributing
+
+Prism is a **community-driven** project. Seren was originally created by Nixgates, and this fork is maintained by volunteers who want to keep it going and improve it.
+
+Contributions are welcome:
+
+- **Bug reports & feature requests** — Open an [issue](https://github.com/Goldenfreddy0703/Prism/issues)
+- **Code contributions** — Submit a pull request
+- **Community support** — Help others in issues or on Discord
+
+If you'd like to take an active role in development, reach out via the contact methods below — contributors who stick around may receive write access to the repo.
+
+### Planned Features
+
+- EasyNews debrid provider
+- OffCloud debrid provider
+
+---
+
+## Contact
+
+- **Discord:** The Steampunk Owl#3126
+- **Keybase:** [Goldenfreddy0703](https://keybase.io/goldenfreddy0703)
+- **Bug Reports:** [GitHub Issues](https://github.com/Goldenfreddy0703/Prism/issues)
+- **Community Support:** [Addons4Kodi Discord](https://discord.gg/SqX7buB)
+
+---
+
+## Disclaimer
+
+Prism is and always will be **free and open-source**. None of its code or resources may be sold or redistributed for commercial purposes.
+
+This addon and its developers **do not** host, create, or distribute any of the content displayed in the addon. It scrapes publicly available websites. Users are responsible for complying with all applicable laws and regulations in their country.
+
+Prism and its developers are not affiliated with Team Kodi, Simkl, or any of the sites and providers used in the addon.
+
+---
 
 ## License
 
-Licensed under The GPL License.
-
-
-## [![Repography logo](https://images.repography.com/logo.svg)](https://repography.com) Recent activity [![Time period](https://images.repography.com/31557107/SerenKodi/SerenDevelopment/recent-activity/54b09eb47a7d1f063e1adf376fe18f03_badge.svg)](https://repography.com)
-[![Timeline graph](https://images.repography.com/31557107/SerenKodi/SerenDevelopment/recent-activity/54b09eb47a7d1f063e1adf376fe18f03_timeline.svg)](https://github.com/SerenKodi/SerenDevelopment/commits)
-[![Issue status graph](https://images.repography.com/31557107/SerenKodi/SerenDevelopment/recent-activity/54b09eb47a7d1f063e1adf376fe18f03_issues.svg)](https://github.com/SerenKodi/SerenDevelopment/issues)
-[![Pull request status graph](https://images.repography.com/31557107/SerenKodi/SerenDevelopment/recent-activity/54b09eb47a7d1f063e1adf376fe18f03_prs.svg)](https://github.com/SerenKodi/SerenDevelopment/pulls)
-[![Trending topics](https://images.repography.com/31557107/SerenKodi/SerenDevelopment/recent-activity/54b09eb47a7d1f063e1adf376fe18f03_words.svg)](https://github.com/SerenKodi/SerenDevelopment/commits)
-
+Prism is licensed under the **[GPL-3.0 License](https://opensource.org/licenses/GPL-3.0)**.

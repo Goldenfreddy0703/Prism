@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<window>
+	<onload>Dialog.Close(fullscreeninfo,true)</onload>
+	<onload>Dialog.Close(videoosd,true)</onload>
+
+	<defaultcontrol always="true">3001</defaultcontrol>
+
+	<controls>
+
+		<control type="group">
+			<right>20</right>
+			<bottom>150</bottom>
+			<width>600</width>
+			<height>56</height>
+
+			<animation type="WindowOpen" reversible="false">
+				<effect type="fade" start="0" end="100" time="300" tween="cubic" easing="in"/>
+				<effect type="slide" start="400%,0" end="0,0" time="400" tween="cubic" easing="in"/>
+			</animation>
+
+			<animation type="WindowClose" reversible="false">
+				<effect type="slide" start="0,0" end="400%,0" time="400" tween="cubic" easing="in"/>
+			</animation>
+
+			<!-- Buttons -->
+			<control type="grouplist">
+				<orientation>horizontal</orientation>
+				<height>56</height>
+				<right>20</right>
+				<itemgap>20</itemgap>
+				<align>right</align>
+
+				<!-- Skip -->
+				<control type="button" id="3001">
+					<label>$INFO[Window.Property(skip.label)]</label>
+					<height>56</height>
+					<width>auto</width>
+					<font>font12</font>
+					<textoffsetx>20</textoffsetx>
+					<textcolor>ddffffff</textcolor>
+					<focusedcolor>eeffffff</focusedcolor>
+					<selectedcolor>ddffffff</selectedcolor>
+					<align>center</align>
+					<texturefocus border="10" colordiffuse="$INFO[Window.Property(settings.color)]">white.png</texturefocus>
+					<texturenofocus border="10" colordiffuse="99000000">white.png</texturenofocus>
+					<pulseonselect>no</pulseonselect>
+				</control>
+
+				<!-- Close -->
+				<control type="button" id="3002">
+					<label>$ADDON[plugin.video.prism 30459]</label>
+					<height>56</height>
+					<width>auto</width>
+					<font>font12</font>
+					<textoffsetx>20</textoffsetx>
+					<textcolor>ddffffff</textcolor>
+					<focusedcolor>eeffffff</focusedcolor>
+					<selectedcolor>ddffffff</selectedcolor>
+					<align>center</align>
+					<texturefocus border="10" colordiffuse="$INFO[Window.Property(settings.color)]">white.png</texturefocus>
+					<texturenofocus border="10" colordiffuse="99000000">white.png</texturenofocus>
+					<pulseonselect>no</pulseonselect>
+				</control>
+			</control>
+		</control>
+	</controls>
+</window>

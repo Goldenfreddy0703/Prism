@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<window type="dialog">
+    <defaultcontrol>4001</defaultcontrol>
+    <controls>
+        <control type="image">
+            <texture colordiffuse="aa000000">$INFO[Window.Property(texture.white)]</texture>
+        </control>
+
+        <control type="group">
+            <left>420</left>
+            <top>140</top>
+
+            <control type="image">
+                <width>1080</width>
+                <height>800</height>
+                <texture border="10" colordiffuse="ff1a1a1a">$INFO[Window.Property(texture.white)]</texture>
+            </control>
+
+            <control type="image">
+                <centerleft>540</centerleft>
+                <top>60</top>
+                <width>485</width>
+                <height>485</height>
+                <texture>$INFO[Window.Property(qr_code)]</texture>
+                <aspectratio>keep</aspectratio>
+            </control>
+
+            <control type="label" id="3002">
+                <left>40</left>
+                <top>10</top>
+                <width>1000</width>
+                <height>40</height>
+                <font>font15_title</font>
+                <align>center</align>
+                <textcolor>ffffffff</textcolor>
+                <label>$INFO[Window.Property(auth.heading)]</label>
+            </control>
+
+            <control type="label" id="3005">
+                <left>40</left>
+                <top>550</top>
+                <width>1000</width>
+                <height>90</height>
+                <font>font14</font>
+                <align>center</align>
+                <textcolor>ffaaaaaa</textcolor>
+                <label>$INFO[Window.Property(auth.text)]</label>
+            </control>
+
+            <control type="progress" id="3003">
+                <left>190</left>
+                <top>650</top>
+                <width>700</width>
+                <height>30</height>
+            </control>
+
+            <control type="button" id="4001">
+                <left>390</left>
+                <top>710</top>
+                <width>300</width>
+                <height>60</height>
+                <label>$ADDON[plugin.video.prism 30070]</label>
+                <align>center</align>
+                <textcolor>FFFFFFFF</textcolor>
+                <texturefocus border="10" colordiffuse="$INFO[Window().Property(settings.color)]">white.png</texturefocus>
+                <texturenofocus border="10" colordiffuse="22000000">white.png</texturenofocus>
+                <pulseonselect>false</pulseonselect>
+            </control>
+        </control>
+    </controls>
+</window>

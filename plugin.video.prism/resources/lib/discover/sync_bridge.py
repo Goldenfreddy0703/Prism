@@ -1,0 +1,52 @@
+"""Insert discover items into Simkl sync DB."""
+from __future__ import annotations
+
+from resources.lib.modules.globals import g
+
+
+def simkl_refs(items: list[dict]) -> list[dict]:
+    """Minimal refs for get_movie_list / get_show_list — same shape discover menus use."""
+    refs: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        simkl_id = item.get("simkl_id")
+        if simkl_id is None:
+            continue
+        ref: dict = {"simkl_id": int(simkl_id)}
+        catalog = item.get("catalog")
+        if catalog:
+            ref["catalog"] = catalog
+        refs.append(ref)
+    return refs
+
+
+def insert_discover_page(catalog: str, items: list[dict], *, force_simkl_meta: bool = False) -> list[dict]:
+    """Insert a browse page into simkl_sync.db and return simkl_id refs for list builders."""
+    if not items:
+        return []
+
+    movies = [i for i in items if i.get("catalog") == "movie"]
+    shows = [i for i in items if i.get("catalog") in ("tv", "anime")]
+
+    if movies:
+        from resources.lib.database.simkl_sync.movies import SimklSyncDatabase
+
+        SimklSyncDatabase().insert_simkl_movies(movies, force_meta=force_simkl_meta)
+
+    if shows:
+        from resources.lib.database.simkl_sync.shows import SimklSyncDatabase
+
+        SimklSyncDatabase().insert_simkl_shows(shows, force_meta=force_simkl_meta)
+
+    if catalog == "anime" and movies:
+        g.log(f"Discover anime page: {len(movies)} movie(s), {len(shows)} series", "debug")
+
+    # Preserve discovery order (Tenrai/TMDB/Simkl page order). Do not group movies before shows.
+    return simkl_refs(items)
+
+
+def paginate_items(items: list, page: int, page_size: int) -> list:
+    start = (page - 1) * page_size
+    end = start + page_size
+    return items[start:end]

@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon id="context.prism" version="3.0.2" name="Prism - Global Context Menu Items" provider-name="Nixgates">
+	<requires>
+		<import addon="xbmc.addon" version="17.9.910" />
+		<import addon="xbmc.python" version="3.0.0" />
+	</requires>
+	<extension point="kodi.context.item">
+		<menu id="kodi.core.main">
+			<item library="context.py" args="quickResume">
+				<label>$ADDON[context.prism 30000]</label>
+				<visible>String.IsEmpty(Window(home).Property(context.prism.quickResume)) + String.StartsWith(ListItem.path,plugin://plugin.video.prism/)+String.IsEqual(ListItem.dbtype,tvshow)</visible>
+			</item>
+			<item library="context.py" args="shuffle">
+				<label>$ADDON[context.prism 30001]</label>
+				<visible>String.IsEmpty(Window(home).Property(context.prism.shuffle)) + String.StartsWith(ListItem.path,plugin://plugin.video.prism/)+[String.IsEqual(ListItem.dbtype,tvshow)|String.IsEqual(ListItem.dbtype,episode)]</visible>
+			</item>
+			<item library="context.py" args="playFromRandomPoint">
+				<label>$ADDON[context.prism 30002]</label>
+				<visible>String.IsEmpty(Window(home).Property(context.prism.playFromRandomPoint)) + String.StartsWith(ListItem.path,plugin://plugin.video.prism/)+String.IsEqual(ListItem.dbtype,tvshow)</visible>
+			</item>
+			<item library="context.py" args="rescrape">
+				<label>$ADDON[context.prism 30003]</label>
+				<visible>String.IsEmpty(Window(home).Property(context.prism.rescrape)) + String.StartsWith(ListItem.path,plugin://plugin.video.prism/)+[String.IsEqual(ListItem.dbtype,episode)|String.IsEqual(ListItem.dbtype,movie)]</visible>
+			</item>
+			<item library="context.py" args="rescrape_ss">
+				<label>$ADDON[context.prism 30010]</label>
+				<visible>String.IsEmpty(Window(home).Property(context.prism.rescrape_ss)) + String.StartsWith(ListItem.path,plugin://plugin.video.prism/)+[String.IsEqual(ListItem.dbtype,episode)|String.IsEqual(ListItem.dbtype,movie)]</visible>
+			</item>
+			<item library="context.py" args="sourceSelect">
+				<label>$ADDON[context.prism 30004]</label>
+				<visible>String.IsEmpty(Window(home).Property(context.prism.sourceSelect)) + String.StartsWith(ListItem.path,plugin://plugin.video.prism/)+[String.IsEqual(ListItem.dbtype,episode)|String.IsEqual(ListItem.dbtype,movie)]</visible>
+			</item>
+			<item library="context.py" args="findRecommendations">
+				<label>$ADDON[context.prism 30005]</label>
+				<visible>String.IsEmpty(Window(home).Property(context.prism.findRecommendations)) + String.StartsWith(ListItem.path,plugin://plugin.video.prism/)+[String.IsEqual(ListItem.dbtype,tvshow)|String.IsEqual(ListItem.dbtype,movie)]</visible>
+			</item>
+			<item library="context.py" args="findRelations">
+				<label>$ADDON[context.prism 30011]</label>
+				<visible>String.IsEmpty(Window(home).Property(context.prism.findRelations)) + String.StartsWith(ListItem.path,plugin://plugin.video.prism/)+String.IsEqual(ListItem.dbtype,tvshow)</visible>
+			</item>
+			<item library="context.py" args="simklManager">
+				<label>$ADDON[context.prism 30008]</label>
+				<visible>String.IsEmpty(Window(home).Property(context.prism.simklManager)) + String.StartsWith(ListItem.path,plugin://plugin.video.prism/)+[String.IsEqual(ListItem.dbtype,episode)|String.IsEqual(ListItem.dbtype,tvshow)|String.IsEqual(ListItem.dbtype,season)|String.IsEqual(ListItem.dbtype,movie)]</visible>
+			</item>
+		</menu>
+	</extension>
+	<extension point="xbmc.service" library="service.py" />
+	<extension point="xbmc.addon.metadata">
+		<summary lang="en">Prism - Global Context Menu Items</summary>
+		<description lang="en">Adds Context Menu items for Prism menu items throughout Kodi</description>
+		<platform>all</platform>
+		<license>GNU GENERAL PUBLIC LICENSE. Version 3, 29 June 2007</license>
+		<forum></forum>
+		<website></website>
+		<source></source>
+		<disclaimer lang="en"></disclaimer>
+		<assets>
+			<icon>resources/images/ico-prism-3.png</icon>
+			<fanart>fanart-prism-3.jpg</fanart>
+			<clearlogo>resources/images/logo-prism-3.png</clearlogo>
+			<poster>resources/images/poster-prism-3.png</poster>
+		</assets>
+		<news>
+			Changelog 3.0.2
+			Compressed icons from 3.53 MB to 1.34
+			Update background color to Black
+
+			Changelog 3.0.1
+			Fix Shuffle play copy pasta mix up		
+			Resolve settings not showing in Kodi
+
+			Changelog 3.0.0
+			Re-write of context menu addon, supporting py3 only (Matrix and above)
+			Update icons to match Prism 3.0.0 release
+			Update language support set to match Prism (add auto-translated Hebrew)
+
+			Changelog 2.2.0
+			Added "Rescrape and Source Select" context menu item.
+
+			Changelog 2.1.2
+			Added Polish translation
+
+			Changelog 2.1.1:
+			Implemented a workaround for broken future.backports module method (fixes Leia issues)
+
+			Changelog 2.1.0:
+			Refactored code to modern standards
+			Use backported URL lib for py2 to ensure unicode compatibility
+			Extracted out common functions and reused
+			Add settings to enable/disable individual items
+			Add more localizations
+			Add GitHub issue templates
+
+			Changelog 2.0.2:
+			Make python version agnostic
+
+			Changelog 2.0.1:
+			Fixed addon icons/fanart
+
+			Changelog 2.0.0:
+			Rework for Prism 2.0
+		</news>
+	</extension>
+</addon>

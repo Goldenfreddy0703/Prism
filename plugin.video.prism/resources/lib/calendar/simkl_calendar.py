@@ -1,0 +1,881 @@
+"""Simkl CDN airing calendars for movies, TV, and anime."""
+from __future__ import annotations
+
+import datetime
+import json
+import os
+from typing import Any
+
+import xbmcgui
+
+from resources.lib.common import tools
+from resources.lib.database.simkl_discover.mdblist_enrich import (
+    DEFAULT_BATCH_SIZE,
+    lookup_target,
+    mdblist_batch,
+    mdblist_ratings_to_map,
+    resolve_mdblist_api_key,
+    response_lookup_id,
+)
+from resources.lib.discover.cdn_store import get_rows_by_ids
+from resources.lib.indexers.simkl_cdn import SimklCDN
+from resources.lib.modules.globals import g
+from resources.lib.simkl.images import simkl_image_url
+
+CACHE_SECONDS = 86400
+DEFAULT_WINDOW_DAYS = 7  # Sunday–Saturday calendar week containing today.
+
+_CALENDAR_RATING_SOURCES = (
+    "simkl",
+    "imdb",
+    "trakt",
+    "tmdb",
+    "mal",
+)
+
+
+def _cache_dir() -> str:
+    path = tools.translate_path(os.path.join(g.ADDON_USERDATA_PATH, "calendar"))
+    tools.makedirs(path, exist_ok=True)
+    return path
+
+
+def _cache_file(catalog: str) -> str:
+    return os.path.join(_cache_dir(), f"{catalog}.json")
+
+
+def _load_file_cache(catalog: str) -> list[dict[str, Any]] | None:
+    path = _cache_file(catalog)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, dict):
+            return None
+        ts = float(payload.get("timestamp") or 0)
+        if datetime.datetime.now().timestamp() - ts > CACHE_SECONDS:
+            return None
+        rows = payload.get("items")
+        return rows if isinstance(rows, list) else None
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def _save_file_cache(catalog: str, rows: list[dict[str, Any]]) -> None:
+    path = _cache_file(catalog)
+    payload = {
+        "timestamp": datetime.datetime.now().timestamp(),
+        "items": rows,
+    }
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+    except OSError:
+        g.log_stacktrace()
+
+
+def fetch_calendar_rows(catalog: str, *, force_refresh: bool = False) -> list[dict[str, Any]]:
+    if not force_refresh:
+        cached = _load_file_cache(catalog)
+        if cached is not None:
+            g.log(f"Simkl calendar: using cached {catalog} data ({len(cached)} rows)", "info")
+            return cached
+
+    cdn = SimklCDN()
+    rows = cdn.calendar_list(catalog)
+    if rows:
+        _save_file_cache(catalog, rows)
+        g.log(f"Simkl calendar: fetched {len(rows)} {catalog} rows from CDN", "info")
+    return rows
+
+
+def _parse_air_datetime(raw: str | None) -> datetime.datetime | None:
+    if not raw or not str(raw).strip():
+        return None
+    text = str(raw).strip()
+    if text == "0001-01-01T00:00:00Z":
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _row_air_datetime(row: dict[str, Any]) -> datetime.datetime | None:
+    return _parse_air_datetime(row.get("date")) or _parse_air_datetime(row.get("release_date"))
+
+
+def _has_airing_info(row: dict[str, Any]) -> bool:
+    return _row_air_datetime(row) is not None
+
+
+def _week_window_bounds() -> tuple[datetime.datetime, datetime.datetime]:
+    """Local timezone: current calendar week (Sunday 00:00 through Saturday 23:59)."""
+    now = datetime.datetime.now().astimezone()
+    today = now.date()
+    # Python weekday(): Mon=0 … Sun=6 → days back to most recent Sunday (including today).
+    days_since_sunday = (today.weekday() + 1) % 7
+    week_start = today - datetime.timedelta(days=days_since_sunday)
+    start = datetime.datetime.combine(week_start, datetime.time.min, tzinfo=now.tzinfo)
+    end = start + datetime.timedelta(days=DEFAULT_WINDOW_DAYS)
+    return start, end
+
+
+def _week_range_label() -> str:
+    start, end = _week_window_bounds()
+    last = end - datetime.timedelta(days=1)
+    if start.year != last.year:
+        return f"Sun {start.strftime('%b %d, %Y')} – Sat {last.strftime('%b %d, %Y')}"
+    if start.month != last.month:
+        return f"Sun {start.strftime('%b %d')} – Sat {last.strftime('%b %d, %Y')}"
+    return f"Sun {start.strftime('%b %d')} – Sat {last.strftime('%d, %Y')}"
+
+
+def _row_in_week_window(catalog: str, row: dict[str, Any], start: datetime.datetime, end: datetime.datetime) -> bool:
+    if catalog == "movie":
+        day = _parse_date_only(row.get("release_date"))
+        if day is None:
+            return False
+        return start.date() <= day < end.date()
+
+    dt = _row_air_datetime(row)
+    if dt is None:
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    local_dt = dt.astimezone()
+    return start <= local_dt < end
+
+
+def filter_coming_soon_rows(
+    rows: list[dict[str, Any]],
+    *,
+    catalog: str,
+) -> list[dict[str, Any]]:
+    """Keep calendar rows with future air/release dates, soonest first.
+
+    TV/anime calendar files list upcoming episodes; dedupe to one row per show
+    (nearest upcoming air date). Movies use release_date.
+    """
+    now = datetime.datetime.now().astimezone()
+    today = now.date()
+    upcoming: list[tuple[datetime.datetime, dict[str, Any]]] = []
+    best_by_show: dict[int, tuple[datetime.datetime, dict[str, Any]]] = {}
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        if catalog == "movie":
+            day = _parse_date_only(row.get("release_date") or row.get("date"))
+            if day is None or day < today:
+                continue
+            sort_dt = datetime.datetime.combine(day, datetime.time.min, tzinfo=now.tzinfo)
+            upcoming.append((sort_dt, row))
+            continue
+
+        dt = _row_air_datetime(row)
+        if dt is None:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        local_dt = dt.astimezone(now.tzinfo)
+        if local_dt <= now:
+            continue
+
+        simkl_id = _simkl_ids_for_row(row)
+        if simkl_id is not None:
+            existing = best_by_show.get(simkl_id)
+            if existing is None or local_dt < existing[0]:
+                best_by_show[simkl_id] = (local_dt, row)
+        else:
+            upcoming.append((local_dt, row))
+
+    if catalog != "movie":
+        upcoming.extend(best_by_show.values())
+
+    upcoming.sort(key=lambda pair: pair[0])
+    filtered = [row for _, row in upcoming]
+    g.log(f"Simkl coming soon: {len(filtered)} {catalog} rows", "info")
+    return filtered
+
+
+def filter_calendar_rows(
+    rows: list[dict[str, Any]],
+    *,
+    catalog: str = "anime",
+    window_days: int = DEFAULT_WINDOW_DAYS,
+) -> list[dict[str, Any]]:
+    start, end = _week_window_bounds()
+    if window_days != DEFAULT_WINDOW_DAYS:
+        end = start + datetime.timedelta(days=max(1, window_days))
+    filtered: list[dict[str, Any]] = []
+
+    for row in rows:
+        if not isinstance(row, dict) or not _has_airing_info(row):
+            continue
+        if not _row_in_week_window(catalog, row, start, end):
+            continue
+        filtered.append(row)
+
+    filtered.sort(
+        key=lambda item: (_row_air_datetime(item) or datetime.datetime.max.replace(tzinfo=datetime.timezone.utc))
+    )
+    g.log(
+        f"Simkl calendar: Sun–Sat week {_week_range_label()} — {len(filtered)} {catalog} rows",
+        "info",
+    )
+    return filtered
+
+
+def _parse_date_only(raw: str | None) -> datetime.date | None:
+    if not raw:
+        return None
+    text = str(raw).strip()[:10]
+    try:
+        return datetime.datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _format_countdown_from_date(day: datetime.date) -> str:
+    today = datetime.date.today()
+    delta = (day - today).days
+    if delta < 0:
+        return "Released"
+    if delta == 0:
+        return "Today"
+    if delta == 1:
+        return "Tomorrow"
+    return f"{delta}d"
+
+
+def _format_air_display(catalog: str, row: dict[str, Any]) -> dict[str, str]:
+    """Movies use release_date (date-only). TV/anime use episode air datetime."""
+    if catalog == "movie":
+        release_day = _parse_date_only(row.get("release_date"))
+        if release_day is not None:
+            weekday = datetime.datetime.combine(release_day, datetime.time.min).strftime("%A")
+            date_fmt = release_day.strftime("%d %b")
+            return {
+                "raw_time": "",
+                "raw_day": weekday,
+                "raw_date_formatted": date_fmt,
+                "air_date_label": f"{weekday} {date_fmt}",
+                "raw_countdown": _format_countdown_from_date(release_day),
+            }
+
+    air_raw = row.get("date") or row.get("release_date")
+    raw_day = _format_day(air_raw)
+    raw_date = _format_date(air_raw)
+    return {
+        "raw_time": _format_time(air_raw),
+        "raw_day": raw_day,
+        "raw_date_formatted": raw_date,
+        "air_date_label": f"{raw_day} {raw_date}" if raw_day != "TBA" and raw_date != "TBA" else raw_day,
+        "raw_countdown": _format_countdown(air_raw),
+    }
+
+
+def _format_day(episode_date: str | None) -> str:
+    dt = _parse_air_datetime(episode_date)
+    if dt is None:
+        return "TBA"
+    try:
+        return dt.astimezone().strftime("%A")
+    except ValueError:
+        return "TBA"
+
+
+def _format_date(episode_date: str | None) -> str:
+    dt = _parse_air_datetime(episode_date)
+    if dt is None:
+        return "TBA"
+    try:
+        return dt.astimezone().strftime("%d %b")
+    except ValueError:
+        return "TBA"
+
+
+def _format_time(episode_date: str | None) -> str:
+    dt = _parse_air_datetime(episode_date)
+    if dt is None:
+        return "TBA"
+    try:
+        return dt.astimezone().strftime("%I:%M %p")
+    except ValueError:
+        return "TBA"
+
+
+def _format_countdown(episode_date: str | None) -> str:
+    dt = _parse_air_datetime(episode_date)
+    if dt is None:
+        return "TBA"
+    try:
+        now = datetime.datetime.now(dt.tzinfo or datetime.timezone.utc)
+        diff = dt - now
+        if diff.total_seconds() < 0:
+            return "Released"
+        total_minutes = int(diff.total_seconds() / 60)
+        hours = total_minutes // 60
+        minutes = total_minutes % 60
+        if hours > 24:
+            days = hours // 24
+            hours = hours % 24
+            return f"{days}d {hours}h {minutes}m"
+        return f"{hours}h {minutes}m"
+    except ValueError:
+        return "TBA"
+
+
+def _display_rating(value: Any) -> str:
+    if value in (None, "", 0, 0.0):
+        return "-"
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if num <= 0:
+        return "-"
+    if num > 10:
+        return str(int(round(num)))
+    if num == int(num):
+        return str(int(num))
+    return str(round(num, 1))
+
+
+def _simkl_rating(row: dict[str, Any]) -> str:
+    ratings = row.get("ratings") or {}
+    simkl = ratings.get("simkl") if isinstance(ratings, dict) else None
+    if isinstance(simkl, dict):
+        return _display_rating(simkl.get("rating") or simkl.get("score"))
+    return "-"
+
+
+def _format_genres(genres: Any) -> str:
+    if not genres:
+        return ""
+    if isinstance(genres, str):
+        return genres.strip()
+    if isinstance(genres, list):
+        names: list[str] = []
+        for entry in genres:
+            if isinstance(entry, dict):
+                name = entry.get("name") or entry.get("title")
+                if name:
+                    names.append(str(name))
+            elif entry:
+                names.append(str(entry))
+        return ", ".join(names)
+    return str(genres)
+
+
+def _lookup_key(provider: str, lookup_id: str | int) -> str:
+    if provider == "imdb":
+        return str(lookup_id).strip().lower()
+    return str(lookup_id).strip()
+
+
+def _simkl_ids_from_rows(rows: list[dict[str, Any]]) -> list[int]:
+    ids: list[int] = []
+    seen: set[int] = set()
+    for row in rows:
+        raw_ids = row.get("ids") if isinstance(row.get("ids"), dict) else {}
+        simkl_id = raw_ids.get("simkl_id") or raw_ids.get("simkl")
+        try:
+            sid = int(simkl_id)
+        except (TypeError, ValueError):
+            continue
+        if sid not in seen:
+            seen.add(sid)
+            ids.append(sid)
+    return ids
+
+
+def _fetch_discover_db_rows(catalog: str, rows: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    """Load cached CDN discover rows for calendar enrichment."""
+    simkl_ids = _simkl_ids_from_rows(rows)
+    if not simkl_ids:
+        return {}
+    return get_rows_by_ids(catalog, simkl_ids)
+
+
+def _discover_row_to_enrichment(db_row: dict[str, Any]) -> dict[str, Any]:
+    """Shape discover DB row like an MDBList batch item for calendar formatting."""
+    genres = None
+    if db_row.get("genres_json"):
+        try:
+            genres = json.loads(db_row["genres_json"])
+        except json.JSONDecodeError:
+            genres = None
+
+    ratings = None
+    if db_row.get("ratings_json"):
+        try:
+            ratings = json.loads(db_row["ratings_json"])
+        except json.JSONDecodeError:
+            ratings = None
+
+    ratings_list: list[dict[str, Any]] = []
+    if isinstance(ratings, dict):
+        for source, payload in ratings.items():
+            if not isinstance(payload, dict):
+                continue
+            ratings_list.append(
+                {
+                    "source": source,
+                    "value": payload.get("rating"),
+                    "score": payload.get("score"),
+                    "votes": payload.get("votes"),
+                }
+            )
+
+    score_average = db_row.get("mdblist_score")
+    return {
+        "title": db_row.get("title"),
+        "poster": db_row.get("poster"),
+        "overview": db_row.get("overview"),
+        "description": db_row.get("overview"),
+        "genres": genres,
+        "ratings": ratings_list,
+        "score_average": score_average,
+        "score": score_average,
+    }
+
+
+def _enrichment_has_plot(item: dict[str, Any] | None) -> bool:
+    if not item:
+        return False
+    for key in ("overview", "plot", "description"):
+        val = item.get(key)
+        if isinstance(val, str) and val.strip():
+            return True
+    return False
+
+
+def _merge_ratings_lists(
+    base: Any,
+    extra: Any,
+) -> list[dict[str, Any]]:
+    merged_map = mdblist_ratings_to_map(base if isinstance(base, list) else None)
+    for source, payload in mdblist_ratings_to_map(extra if isinstance(extra, list) else None).items():
+        merged_map.setdefault(source, payload)
+    return [
+        {
+            "source": source,
+            "value": payload.get("rating"),
+            "score": payload.get("score"),
+            "votes": payload.get("votes"),
+        }
+        for source, payload in merged_map.items()
+    ]
+
+
+def _ratings_dict_to_list(ratings: dict[str, Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for source, payload in ratings.items():
+        if not isinstance(payload, dict):
+            continue
+        out.append(
+            {
+                "source": source,
+                "value": payload.get("rating") or payload.get("score"),
+                "score": payload.get("score") or payload.get("rating"),
+                "votes": payload.get("votes"),
+            }
+        )
+    return out
+
+
+def _merge_enrichment(
+    base: dict[str, Any] | None,
+    extra: dict[str, Any] | None,
+) -> dict[str, Any]:
+    merged = dict(base or {})
+    if not extra:
+        return merged
+    for key in ("title", "poster", "overview", "plot", "description", "score_average", "score"):
+        if not merged.get(key) and extra.get(key):
+            merged[key] = extra[key]
+    if not merged.get("genres") and extra.get("genres"):
+        merged["genres"] = extra["genres"]
+    if extra.get("ratings"):
+        if merged.get("ratings"):
+            merged["ratings"] = _merge_ratings_lists(merged["ratings"], extra["ratings"])
+        else:
+            merged["ratings"] = extra["ratings"]
+    return merged
+
+
+def _simkl_detail_enrichment(catalog: str, simkl_id: int) -> dict[str, Any]:
+    """Simkl REST detail — used when discover DB / MDBList did not provide a plot."""
+    from resources.lib.simkl.enrich import _simkl_detail_sync_dict
+
+    detail = _simkl_detail_sync_dict(simkl_id, catalog)
+    if not detail:
+        return {}
+
+    info = (detail.get("simkl_object") or {}).get("info") or {}
+    art = (detail.get("simkl_object") or {}).get("art") or {}
+
+    ratings_list: list[dict[str, Any]] = []
+    stored_ratings = info.get("ratings")
+    if isinstance(stored_ratings, dict):
+        ratings_list = _ratings_dict_to_list(stored_ratings)
+
+    score = info.get("score") or info.get("rating")
+    return {
+        "title": info.get("title"),
+        "poster": art.get("poster"),
+        "overview": info.get("plot") or info.get("overview"),
+        "description": info.get("plot") or info.get("overview"),
+        "genres": info.get("genres") or info.get("genre"),
+        "ratings": ratings_list,
+        "score_average": score,
+        "score": score,
+    }
+
+
+def _simkl_ids_for_row(row: dict[str, Any]) -> int | None:
+    ids = row.get("ids") if isinstance(row.get("ids"), dict) else {}
+    simkl_id = ids.get("simkl_id") or ids.get("simkl")
+    try:
+        return int(simkl_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fetch_mdblist_by_simkl_id(catalog: str, rows: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    api_key = resolve_mdblist_api_key()
+    if not api_key:
+        g.log("Simkl calendar: MDBList API key not set — using discover DB / Simkl CDN only", "info")
+        return {}
+    if not rows:
+        return {}
+
+    lookup_to_simkl: dict[tuple[str, str, str], list[int]] = {}
+    lookup_ids: dict[tuple[str, str, str], str | int] = {}
+
+    for row in rows:
+        simkl_id = _simkl_ids_for_row(row)
+        if simkl_id is None:
+            continue
+        ids = dict(row.get("ids") or {})
+        if ids.get("simkl_id") is None and ids.get("simkl") is not None:
+            ids["simkl_id"] = ids.get("simkl")
+        target = lookup_target(catalog, ids)
+        if target is None:
+            continue
+        provider, media_type, lookup_id = target
+        lookup = _lookup_key(provider, lookup_id)
+        bucket_key = (provider, media_type, lookup)
+        lookup_to_simkl.setdefault(bucket_key, []).append(simkl_id)
+        lookup_ids[bucket_key] = lookup_id
+
+    buckets: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+    for (provider, media_type, lookup), simkl_ids in lookup_to_simkl.items():
+        bucket_key = (provider, media_type)
+        buckets.setdefault(bucket_key, {})[lookup] = {
+            "lookup_id": lookup_ids[(provider, media_type, lookup)],
+            "simkl_ids": simkl_ids,
+        }
+
+    out: dict[int, dict[str, Any]] = {}
+    for (provider, media_type), id_map in buckets.items():
+        id_list = [entry["lookup_id"] for entry in id_map.values()]
+        for i in range(0, len(id_list), DEFAULT_BATCH_SIZE):
+            chunk = id_list[i : i + DEFAULT_BATCH_SIZE]
+            try:
+                results = mdblist_batch(api_key, provider, media_type, chunk)
+            except Exception:
+                g.log(f"MDBList calendar batch failed for {provider}/{media_type}", "warning")
+                g.log_stacktrace()
+                continue
+
+            by_lookup: dict[str, dict[str, Any]] = {}
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                ids_obj = item.get("ids") if isinstance(item.get("ids"), dict) else {}
+                response_id = response_lookup_id(provider, ids_obj)
+                if response_id is not None:
+                    by_lookup[_lookup_key(provider, response_id)] = item
+
+            for lookup, entry in id_map.items():
+                item = by_lookup.get(lookup)
+                if not item:
+                    continue
+                for simkl_id in entry["simkl_ids"]:
+                    out[int(simkl_id)] = item
+
+    g.log(f"Simkl calendar: MDBList matched {len(out)} titles", "info")
+    return out
+
+
+def _build_metadata_cache(catalog: str, rows: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    """Discover DB + MDBList, then Simkl detail API for titles still missing plot."""
+    discover_rows = _fetch_discover_db_rows(catalog, rows)
+    mdblist_map = _fetch_mdblist_by_simkl_id(catalog, rows)
+    cache: dict[int, dict[str, Any]] = {}
+
+    for simkl_id in _simkl_ids_from_rows(rows):
+        item: dict[str, Any] = {}
+        if simkl_id in discover_rows:
+            item = _merge_enrichment(item, _discover_row_to_enrichment(discover_rows[simkl_id]))
+        if simkl_id in mdblist_map:
+            item = _merge_enrichment(item, mdblist_map[simkl_id])
+        cache[simkl_id] = item
+
+    detail_fetched = 0
+    for simkl_id in _simkl_ids_from_rows(rows):
+        if _enrichment_has_plot(cache.get(simkl_id)):
+            continue
+        detail = _simkl_detail_enrichment(catalog, simkl_id)
+        if detail:
+            cache[simkl_id] = _merge_enrichment(cache.get(simkl_id), detail)
+            detail_fetched += 1
+
+    filled = sum(1 for sid in cache if _enrichment_has_plot(cache.get(sid)))
+    g.log(
+        f"Simkl calendar: metadata plot available for {filled}/{len(cache)} titles "
+        f"({detail_fetched} via Simkl detail API)",
+        "info",
+    )
+    return cache
+
+
+def _resolve_poster(
+    row: dict[str, Any],
+    enrichment: dict[str, Any] | None,
+) -> str:
+    if enrichment:
+        mdb_poster = enrichment.get("poster")
+        if mdb_poster:
+            text = str(mdb_poster).strip()
+            if text.startswith("http://") or text.startswith("https://"):
+                return text
+            poster = simkl_image_url(text, kind="posters")
+            if poster:
+                return poster
+
+    poster = simkl_image_url(row.get("poster"), kind="posters", placeholder=True)
+    return poster or ""
+
+
+def _rating_properties(
+    row: dict[str, Any],
+    mdblist_item: dict[str, Any] | None,
+) -> dict[str, str]:
+    props: dict[str, str] = {"rating_simkl": _simkl_rating(row)}
+
+    mdblist_map = mdblist_ratings_to_map((mdblist_item or {}).get("ratings"))
+    score_average = (mdblist_item or {}).get("score_average") or (mdblist_item or {}).get("score")
+
+    for source in _CALENDAR_RATING_SOURCES:
+        if source == "simkl":
+            entry = mdblist_map.get("simkl")
+            if entry:
+                props["rating_simkl"] = _display_rating(entry.get("rating") or entry.get("score"))
+            continue
+        entry = mdblist_map.get(source)
+        if entry:
+            props[f"rating_{source}"] = _display_rating(entry.get("rating") or entry.get("score"))
+
+    if score_average not in (None, "", 0, 0.0):
+        try:
+            avg = int(float(score_average))
+        except (TypeError, ValueError):
+            avg = 0
+        props["rating_average"] = str(avg) if avg > 0 else "-"
+    else:
+        props["rating_average"] = "-"
+
+    for source in _CALENDAR_RATING_SOURCES:
+        props.setdefault(f"rating_{source}", "-")
+
+    if props.get("rating_mal") == "-":
+        mal_entry = mdblist_map.get("myanimelist")
+        if mal_entry:
+            props["rating_mal"] = _display_rating(mal_entry.get("rating") or mal_entry.get("score"))
+
+    return props
+
+
+def _airing_tag(catalog: str, row: dict[str, Any]) -> str:
+    if catalog == "movie":
+        return "Release"
+    episode = row.get("episode") if isinstance(row.get("episode"), dict) else {}
+    ep_num = episode.get("episode")
+    if catalog == "tv":
+        season = episode.get("season")
+        if season is not None and ep_num is not None:
+            return f"S{season} E{ep_num}"
+        if ep_num is not None:
+            return f"E{ep_num}"
+        return "Airing"
+    if ep_num is not None:
+        return f"Ep {ep_num}"
+    return "Airing"
+
+
+def _episode_number(catalog: str, row: dict[str, Any]) -> int:
+    if catalog == "movie":
+        return 1
+    episode = row.get("episode") if isinstance(row.get("episode"), dict) else {}
+    try:
+        return int(episode.get("episode") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def format_for_calendar(
+    rows: list[dict[str, Any]],
+    catalog: str,
+    metadata_cache: dict[int, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    metadata_cache = metadata_cache or {}
+    formatted: list[dict[str, Any]] = []
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        ids = row.get("ids") if isinstance(row.get("ids"), dict) else {}
+        simkl_id = ids.get("simkl_id") or ids.get("simkl")
+        simkl_id_int = _simkl_ids_for_row(row)
+
+        title = row.get("title") or ""
+        enrichment = metadata_cache.get(simkl_id_int) if simkl_id_int is not None else None
+        poster = _resolve_poster(row, enrichment)
+        ratings = _rating_properties(row, enrichment)
+
+        plot = ""
+        genres = ""
+        if enrichment:
+            plot = (
+                enrichment.get("overview")
+                or enrichment.get("plot")
+                or enrichment.get("description")
+                or ""
+            )
+            if isinstance(plot, str):
+                plot = plot.strip()
+            genres = _format_genres(enrichment.get("genres"))
+            if not title:
+                title = enrichment.get("title") or title
+
+        ep_num = _episode_number(catalog, row)
+        air_fields = _format_air_display(catalog, row)
+        avg = ratings.get("rating_average", "-")
+        item = {
+            "release_title": title,
+            "title": title,
+            "catalog": catalog,
+            "simkl_id": simkl_id or 0,
+            "mal_id": ids.get("mal") or 0,
+            "poster": poster,
+            "airing_tag": _airing_tag(catalog, row),
+            "plot": plot,
+            "genres": genres,
+            "raw_episode": ep_num if catalog != "movie" else 0,
+            "rating_average_label": f"{avg}%" if avg not in ("-", "", None) else "-",
+            "_raw": row,
+            **air_fields,
+            **ratings,
+        }
+        formatted.append(item)
+
+    return formatted
+
+
+def get_calendar_items(catalog: str, *, window_days: int = DEFAULT_WINDOW_DAYS) -> tuple[list[dict[str, Any]], str]:
+    rows = fetch_calendar_rows(catalog)
+    filtered = filter_calendar_rows(rows, catalog=catalog, window_days=window_days)
+    metadata_cache = _build_metadata_cache(catalog, filtered)
+    return format_for_calendar(filtered, catalog, metadata_cache), _week_range_label()
+
+
+def open_calendar(catalog: str) -> None:
+    labels = {
+        "movie": "Weekly Movie Calendar",
+        "tv": "Weekly Show Calendar",
+        "anime": "Weekly Anime Calendar",
+    }
+    g.show_busy_dialog()
+    try:
+        items, week_label = get_calendar_items(catalog)
+    finally:
+        g.close_busy_dialog()
+
+    if not items:
+        xbmcgui.Dialog().ok(
+            g.ADDON_NAME,
+            f"No upcoming items found for {labels.get(catalog, catalog)} ({week_label}).",
+        )
+        g.cancel_directory()
+        return
+
+    from resources.lib.database.skinManager import SkinManager
+    from resources.lib.gui.windows.calendar_window import CalendarWindow
+
+    xml_file, skin_path = SkinManager().confirm_skin_path("calendar.xml")
+    window = CalendarWindow(
+        xml_file,
+        skin_path,
+        calendar_items=items,
+        catalog=catalog,
+        week_label=week_label,
+    )
+    selection = window.doModal()
+
+    if not selection:
+        g.cancel_directory()
+        return
+
+    _navigate_calendar_selection(selection)
+
+
+def _navigate_calendar_selection(selected: dict[str, Any]) -> None:
+    from resources.lib.gui.tvshowMenus import Menus as ShowMenus
+    from resources.lib.modules.list_builder import ListBuilder
+    from resources.lib.simkl.media_ref import enrich_and_persist, normalize_simkl_item
+
+    catalog = selected.get("catalog") or "tv"
+    raw = selected.get("_raw")
+    if not isinstance(raw, dict):
+        g.cancel_directory()
+        return
+
+    sync = normalize_simkl_item(raw, catalog)
+    if not sync:
+        g.cancel_directory()
+        return
+
+    g.show_busy_dialog()
+    try:
+        refs = enrich_and_persist(catalog, [sync], force_simkl_meta=True)
+    finally:
+        g.close_busy_dialog()
+
+    if not refs:
+        xbmcgui.Dialog().ok(g.ADDON_NAME, "Could not load item details.")
+        g.cancel_directory()
+        return
+
+    if catalog == "movie":
+        from resources.lib.discover.renderer import discover_list_kwargs
+
+        ListBuilder().movie_menu_builder(refs, **discover_list_kwargs())
+        g.close_directory(g.CONTENT_MOVIE)
+        return
+
+    args = {
+        "simkl_id": refs[0].get("simkl_id") or sync.get("simkl_id"),
+        "mediatype": g.MEDIA_SHOW,
+        "catalog": catalog,
+    }
+    ShowMenus().show_seasons(args)
+    g.close_directory(g.CONTENT_ANIME if catalog == "anime" else g.CONTENT_SHOW)
