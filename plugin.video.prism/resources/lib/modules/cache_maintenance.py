@@ -6,6 +6,7 @@ import os
 
 import xbmcvfs
 
+from resources.lib.common import tools
 from resources.lib.database.cache import Cache
 from resources.lib.modules.globals import g
 
