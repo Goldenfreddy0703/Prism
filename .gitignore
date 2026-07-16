@@ -1,0 +1,10 @@
+# Python bytecode / cache (auto-generated when Kodi runs the addon)
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Local editor / OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
