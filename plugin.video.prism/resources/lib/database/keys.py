@@ -71,7 +71,23 @@ def _db_client_secret(row) -> str | None:
     return secret or None
 
 
+def _metadata_provider_for_api(api_name: str) -> str | None:
+    from resources.lib.modules.metadata_providers import _API_NAME_BY_PROVIDER
+
+    for provider, mapped_name in _API_NAME_BY_PROVIDER.items():
+        if mapped_name == api_name:
+            return provider
+    return None
+
+
 def get_api_key(api_name: str, fallback: str | None = None) -> str | None:
+    provider = _metadata_provider_for_api(api_name)
+    if provider is not None:
+        from resources.lib.modules.metadata_providers import provider_enabled
+
+        if not provider_enabled(provider):
+            return None
+
     setting_id = _SETTING_API_KEYS.get(api_name)
     if setting_id:
         key = _setting_value(setting_id)

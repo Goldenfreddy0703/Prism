@@ -104,6 +104,7 @@ class ActorMenus:
 
     def search_by_actor(self, query=None):
 
+        from resources.lib.modules.metadata_providers import notify_tmdb_required, provider_enabled
         from resources.lib.simkl.search_menus import (
             _actor_pagination_catalog,
             normalize_actor_args,
@@ -113,7 +114,10 @@ class ActorMenus:
             render_person_picker,
         )
 
-
+        if not provider_enabled("tmdb"):
+            notify_tmdb_required()
+            g.cancel_directory()
+            return
 
         args = normalize_actor_args(query)
 
@@ -165,8 +169,14 @@ class ActorMenus:
 
     def actor_credits(self, action_args):
 
+        from resources.lib.modules.metadata_providers import notify_tmdb_required, provider_enabled
         from resources.lib.simkl.person_ref import fetch_filmography_page, normalize_person_ref
         from resources.lib.simkl.search_menus import notify_empty_search, persist_search_pagination
+
+        if not provider_enabled("tmdb"):
+            notify_tmdb_required()
+            g.cancel_directory()
+            return
 
         args = normalize_person_ref(action_args)
 

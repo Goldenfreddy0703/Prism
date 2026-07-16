@@ -121,12 +121,18 @@ class MetadataHandler:
                 self.episode_fanart,
                 self.tvshows_preferred_art_source,
                 self.movies_preferred_art_source,
+                self._effective_preferred_art_source("movie"),
+                self._effective_preferred_art_source("tvshow"),
                 self.preferred_artwork_size,
                 self.tmdb_api.meta_hash,
                 self.tvdb_api.meta_hash,
                 self.simkl_api.meta_hash,
                 self.fanarttv_api.meta_hash,
                 self.fanarttv_api.fanart_support,
+                self._provider_enabled("tmdb"),
+                self._provider_enabled("tvdb"),
+                self._provider_enabled("fanart"),
+                self._provider_enabled("mdblist"),
             ]
         )
 
@@ -559,20 +565,30 @@ class MetadataHandler:
         elif tvdb_data is not None and tvdb_data.get("cast", []):
             result["cast"] = tvdb_data.get("cast", [])
 
-    def _is_fanart_artwork_selected(self, media_type):
-        return (media_type in ["tvshow", "season", "episode"] and self.tvshows_preferred_art_source == ART_FANART) or (
-            media_type == "movie" and self.movies_preferred_art_source == ART_FANART
+    def _effective_preferred_art_source(self, media_type: str) -> int:
+        from resources.lib.modules.metadata_providers import effective_preferred_art_source
+
+        raw = (
+            self.movies_preferred_art_source
+            if media_type == "movie"
+            else self.tvshows_preferred_art_source
         )
+        return effective_preferred_art_source(raw)
+
+    def _is_fanart_artwork_selected(self, media_type):
+        from resources.lib.modules.metadata_providers import ART_FANART
+
+        return self._effective_preferred_art_source(media_type) == ART_FANART
 
     def _is_tmdb_artwork_selected(self, media_type):
-        return (media_type in ["tvshow", "season", "episode"] and self.tvshows_preferred_art_source == ART_TMDB) or (
-            media_type == "movie" and self.movies_preferred_art_source == ART_TMDB
-        )
+        from resources.lib.modules.metadata_providers import ART_TMDB
+
+        return self._effective_preferred_art_source(media_type) == ART_TMDB
 
     def _is_tvdb_artwork_selected(self, media_type):
-        return (media_type == "movie" and self.movies_preferred_art_source == ART_TVDB) or (
-            media_type in ["tvshow", "season", "episode"] and self.tvshows_preferred_art_source == ART_TVDB
-        )
+        from resources.lib.modules.metadata_providers import ART_TVDB
+
+        return self._effective_preferred_art_source(media_type) == ART_TVDB
 
     def _handle_art(self, media_type, art_data):
         if art_data is None:
@@ -745,6 +761,8 @@ class MetadataHandler:
         return  # Prism: Simkl API removed — metadata from Simkl/MDBList/TMDB/TVDB
 
     def _update_movie_tmdb(self, db_object):
+        if not self._provider_enabled("tmdb"):
+            return
         if not self._tmdb_id_valid(db_object):
             return
         if not (self._tmdb_needs_update(db_object) or self._force_update(db_object)):
@@ -752,6 +770,8 @@ class MetadataHandler:
         tools.smart_merge_dictionary(db_object, self.tmdb_api.get_movie(db_object["tmdb_id"]))
 
     def _update_movie_tvdb(self, db_object):
+        if not self._provider_enabled("tvdb"):
+            return
         if not self._tvdb_id_valid(db_object):
             return
         if not (self._tvdb_needs_update(db_object) or self._force_update(db_object)):
@@ -759,6 +779,8 @@ class MetadataHandler:
         tools.smart_merge_dictionary(db_object, self.tvdb_api.get_movie(db_object["tvdb_id"]))
 
     def _update_movie_fanart(self, db_object):
+        if not self._provider_enabled("fanart"):
+            return
         if self.fanarttv_api.fanart_support and (self._fanart_needs_update(db_object) or self._force_update(db_object)):
             if self._tmdb_id_valid(db_object):
                 tools.smart_merge_dictionary(db_object, self.fanarttv_api.get_movie(db_object.get("tmdb_id")))
@@ -766,17 +788,17 @@ class MetadataHandler:
                 tools.smart_merge_dictionary(db_object, self.fanarttv_api.get_movie(db_object.get("imdb_id")))
 
     def _update_movie_fallback(self, db_object):
-        if self._tmdb_id_valid(db_object) and not self._tmdb_art_meta_up_to_par("movie", db_object):
+        if self._provider_enabled("tmdb") and self._tmdb_id_valid(db_object) and not self._tmdb_art_meta_up_to_par("movie", db_object):
             tools.smart_merge_dictionary(db_object, self.tmdb_api.get_movie_art(db_object["tmdb_id"]))
-        if self._tvdb_id_valid(db_object) and not self._tvdb_art_meta_up_to_par("movie", db_object):
+        if self._provider_enabled("tvdb") and self._tvdb_id_valid(db_object) and not self._tvdb_art_meta_up_to_par("movie", db_object):
             tools.smart_merge_dictionary(db_object, self.tvdb_api.get_movie_art(db_object["tvdb_id"]))
 
     def _update_movie_ratings(self, db_object):
-        if self._tmdb_id_valid(db_object):
+        if self._provider_enabled("tmdb") and self._tmdb_id_valid(db_object):
             tools.smart_merge_dictionary(db_object, self.tmdb_api.get_movie_rating(db_object["tmdb_id"]))
 
     def _update_movie_cast(self, db_object):
-        if self._tmdb_id_valid(db_object):
+        if self._provider_enabled("tmdb") and self._tmdb_id_valid(db_object):
             tools.smart_merge_dictionary(db_object, self.tmdb_api.get_movie_cast(db_object["tmdb_id"]))
 
     # endregion
@@ -795,6 +817,8 @@ class MetadataHandler:
         return  # Prism: Simkl API removed — metadata from Simkl/MDBList/TMDB/TVDB
 
     def _update_tvshow_tmdb(self, db_object):
+        if not self._provider_enabled("tmdb"):
+            return
         if not self._tmdb_id_valid(db_object):
             return
         if not (self._tmdb_needs_update(db_object) or self._force_update(db_object)):
@@ -802,6 +826,8 @@ class MetadataHandler:
         tools.smart_merge_dictionary(db_object, self.tmdb_api.get_show(db_object["tmdb_id"]))
 
     def _update_tvshow_tvdb(self, db_object):
+        if not self._provider_enabled("tvdb"):
+            return
         if not self._tvdb_id_valid(db_object):
             return
         if not (self._tvdb_needs_update(db_object) or self._force_update(db_object)):
@@ -809,6 +835,8 @@ class MetadataHandler:
         tools.smart_merge_dictionary(db_object, self.tvdb_api.get_show(db_object["tvdb_id"]))
 
     def _update_tvshow_fanart(self, db_object):
+        if not self._provider_enabled("fanart"):
+            return
         if (
             self.fanarttv_api.fanart_support
             and (self._fanart_needs_update(db_object) or self._force_update(db_object))
@@ -817,22 +845,23 @@ class MetadataHandler:
             tools.smart_merge_dictionary(db_object, self.fanarttv_api.get_show(db_object.get("tvdb_id")))
 
     def _update_tvshow_fallback(self, db_object):
-        if self._tmdb_id_valid(db_object) and not self._tmdb_art_meta_up_to_par("tvshow", db_object):
+        if self._provider_enabled("tmdb") and self._tmdb_id_valid(db_object) and not self._tmdb_art_meta_up_to_par("tvshow", db_object):
             tools.smart_merge_dictionary(db_object, self.tmdb_api.get_show_art(db_object["tmdb_id"]))
-        if self._tvdb_id_valid(db_object) and not self._tvdb_art_meta_up_to_par("tvshow", db_object):
+        if self._provider_enabled("tvdb") and self._tvdb_id_valid(db_object) and not self._tvdb_art_meta_up_to_par("tvshow", db_object):
             tools.smart_merge_dictionary(db_object, self.tvdb_api.get_show_art(db_object["tvdb_id"]))
 
     def _update_tvshow_rating(self, db_object):
-        if not tools.safe_dict_get(db_object, "tmdb_object", "info") and self._tmdb_id_valid(db_object):
+        if self._provider_enabled("tmdb") and not tools.safe_dict_get(db_object, "tmdb_object", "info") and self._tmdb_id_valid(db_object):
             tools.smart_merge_dictionary(db_object, self.tmdb_api.get_show_rating(db_object["tmdb_id"]))
-        if not tools.safe_dict_get(db_object, "tvdb_object", "info") and self._tvdb_id_valid(db_object):
+        if self._provider_enabled("tvdb") and not tools.safe_dict_get(db_object, "tvdb_object", "info") and self._tvdb_id_valid(db_object):
             tools.smart_merge_dictionary(db_object, self.tvdb_api.get_show_rating(db_object["tvdb_id"]))
 
     def _update_tvshow_cast(self, db_object):
-        if not tools.safe_dict_get(db_object, "tmdb_object", "cast") and self._tmdb_id_valid(db_object):
+        if self._provider_enabled("tmdb") and not tools.safe_dict_get(db_object, "tmdb_object", "cast") and self._tmdb_id_valid(db_object):
             tools.smart_merge_dictionary(db_object, self.tmdb_api.get_show_cast(db_object["tmdb_id"]))
         if (
-            not tools.safe_dict_get(db_object, "tvdb_object", "cast")
+            self._provider_enabled("tvdb")
+            and not tools.safe_dict_get(db_object, "tvdb_object", "cast")
             and not tools.safe_dict_get(db_object, "tmdb_object", "cast")
             and self._tvdb_id_valid(db_object)
         ):
@@ -859,6 +888,8 @@ class MetadataHandler:
         self._update_season_fallback(db_object)
 
     def _update_season_tmdb(self, db_object):
+        if not self._provider_enabled("tmdb"):
+            return
         if not self._tmdb_show_id_valid(db_object):
             return
         season_num = self._simkl_season_lookup(db_object)
@@ -872,6 +903,8 @@ class MetadataHandler:
             )
 
     def _update_season_tvdb(self, db_object):
+        if not self._provider_enabled("tvdb"):
+            return
         if not self._tvdb_show_id_valid(db_object):
             return
         season_num = self._simkl_season_lookup(db_object)
@@ -885,6 +918,8 @@ class MetadataHandler:
             )
 
     def _update_season_fanart(self, db_object):
+        if not self._provider_enabled("fanart"):
+            return
         if (
             self.fanarttv_api.fanart_support
             and (self._fanart_needs_update(db_object) or self._force_update(db_object))
@@ -903,7 +938,8 @@ class MetadataHandler:
         if season_num is None:
             return
         if (
-            self._tmdb_show_id_valid(db_object)
+            self._provider_enabled("tmdb")
+            and self._tmdb_show_id_valid(db_object)
             and not self._tmdb_art_meta_up_to_par("season", db_object)
             and self.tvshows_preferred_art_source != ART_TMDB
         ):
@@ -912,7 +948,8 @@ class MetadataHandler:
                 self.tmdb_api.get_season_art(db_object["tmdb_show_id"], season_num),
             )
         if (
-            self._tvdb_show_id_valid(db_object)
+            self._provider_enabled("tvdb")
+            and self._tvdb_show_id_valid(db_object)
             and not self._tvdb_art_meta_up_to_par("season", db_object)
             and self.tvshows_preferred_art_source != ART_TVDB
         ):
@@ -938,6 +975,8 @@ class MetadataHandler:
         self._update_episode_fallback(db_object)
 
     def _update_episode_tmdb(self, db_object):
+        if not self._provider_enabled("tmdb"):
+            return
         if not self._tmdb_show_id_valid(db_object):
             return
         season_num, episode_num = self._simkl_episode_lookup(db_object)
@@ -956,6 +995,8 @@ class MetadataHandler:
             )
 
     def _update_episode_tvdb(self, db_object):
+        if not self._provider_enabled("tvdb"):
+            return
         if not self._tvdb_show_id_valid(db_object):
             return
         season_num, episode_num = self._simkl_episode_lookup(db_object)
@@ -978,7 +1019,8 @@ class MetadataHandler:
         if episode_num is None:
             return
         if (
-            self._tmdb_show_id_valid(db_object)
+            self._provider_enabled("tmdb")
+            and self._tmdb_show_id_valid(db_object)
             and not self._tmdb_art_meta_up_to_par("episode", db_object)
             and self.tvshows_preferred_art_source != ART_TMDB
         ):
@@ -987,7 +1029,8 @@ class MetadataHandler:
                 self.tmdb_api.get_episode_art(db_object["tmdb_show_id"], season_num, episode_num),
             )
         if (
-            self._tvdb_show_id_valid(db_object)
+            self._provider_enabled("tvdb")
+            and self._tvdb_show_id_valid(db_object)
             and not self._tvdb_art_meta_up_to_par("episode", db_object)
             and self.tvshows_preferred_art_source != ART_TVDB
         ):
@@ -1000,12 +1043,12 @@ class MetadataHandler:
         season_num, episode_num = self._simkl_episode_lookup(db_object)
         if episode_num is None:
             return
-        if self._tmdb_show_id_valid(db_object):
+        if self._provider_enabled("tmdb") and self._tmdb_show_id_valid(db_object):
             self._merge_episode_external(
                 db_object,
                 self.tmdb_api.get_episode_rating(db_object["tmdb_show_id"], season_num, episode_num),
             )
-        if self._tvdb_show_id_valid(db_object):
+        if self._provider_enabled("tvdb") and self._tvdb_show_id_valid(db_object):
             self._merge_episode_external(
                 db_object,
                 self.tvdb_api.get_episode_rating(db_object["tvdb_show_id"], season_num, episode_num),
@@ -1085,8 +1128,15 @@ class MetadataHandler:
 
     @staticmethod
     def _can_fetch_provider_meta(row: dict) -> bool:
-        info = row.get("info") if isinstance(row.get("info"), dict) else {}
-        return bool(info.get("tmdb_id") or info.get("tvdb_id") or info.get("imdb_id"))
+        from resources.lib.modules.metadata_providers import gapfill_provider_available_for_row
+
+        return gapfill_provider_available_for_row(row)
+
+    @staticmethod
+    def _provider_enabled(provider: str) -> bool:
+        from resources.lib.modules.metadata_providers import provider_enabled
+
+        return provider_enabled(provider)
 
     @staticmethod
     def _cast_has_photos(cast: list) -> bool:
@@ -1110,9 +1160,11 @@ class MetadataHandler:
         return row_needs_refresh(normalized, row)
 
     def _row_meta_gaps(self, row: dict, media_type: str) -> list[str]:
+        from resources.lib.modules.metadata_providers import art_gapfill_available, cast_gapfill_available
+
         gaps: list[str] = []
         cast = row.get("cast")
-        if self._can_fetch_provider_meta(row) and (
+        if cast_gapfill_available(row, media_type) and (
             not cast
             or not isinstance(cast, list)
             or len(cast) == 0
@@ -1143,7 +1195,7 @@ class MetadataHandler:
             if self.tvshows_landscape:
                 online_art_keys.append("landscape")
         for art_key in online_art_keys:
-            if not self._art_key_present(art, art_key):
+            if art_gapfill_available(row) and not self._art_key_present(art, art_key):
                 gaps.append(art_key)
         return gaps
 

@@ -101,6 +101,7 @@ class DiscoverRenderer:
     @staticmethod
     def show_discover_menu(catalog: Catalog):
         from resources.lib.discover.definitions import CATALOG_LISTS
+        from resources.lib.modules.metadata_providers import filter_discover_lists, provider_enabled
 
         search_actions = {
             "movie": ("moviesSearch", "moviesSearchHistory"),
@@ -123,7 +124,7 @@ class DiscoverRenderer:
             menu_item=g.create_icon_dict(cal_icon, g.ICONS_PATH),
         )
 
-        for item in CATALOG_LISTS[catalog]:
+        for item in filter_discover_lists(CATALOG_LISTS[catalog]):
             g.add_directory_item(
                 item.label,
                 action="simklDiscoverList",
@@ -142,13 +143,14 @@ class DiscoverRenderer:
         )
 
         if catalog in search_actions:
-            g.add_directory_item(
-                g.get_language_string(30327),
-                action=actor_action,
-                catalog=catalog,
-                description=g.get_language_string(30776),
-                menu_item=g.create_icon_dict(f"{_ICON_PREFIX.get(catalog, 'movies')}_actor", g.ICONS_PATH),
-            )
+            if provider_enabled("tmdb"):
+                g.add_directory_item(
+                    g.get_language_string(30327),
+                    action=actor_action,
+                    catalog=catalog,
+                    description=g.get_language_string(30776),
+                    menu_item=g.create_icon_dict(f"{_ICON_PREFIX.get(catalog, 'movies')}_actor", g.ICONS_PATH),
+                )
             direct_action, history_action = search_actions[catalog]
             action = history_action if g.get_bool_setting("searchHistory") else direct_action
             g.add_directory_item(
@@ -163,6 +165,13 @@ class DiscoverRenderer:
         discover_list = get_list(catalog, list_id)
         if discover_list is None:
             xbmcgui.Dialog().ok(g.ADDON_NAME, f"Unknown discover list: {list_id}")
+            g.cancel_directory()
+            return
+
+        from resources.lib.modules.metadata_providers import discover_list_visible
+
+        if not discover_list_visible(discover_list):
+            xbmcgui.Dialog().ok(g.ADDON_NAME, g.get_language_string(30964))
             g.cancel_directory()
             return
 

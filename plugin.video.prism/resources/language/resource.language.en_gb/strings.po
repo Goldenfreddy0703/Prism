@@ -5051,3 +5051,51 @@ msgstr "Enable adult content"
 msgctxt "#30953"
 msgid "Shows Erotica in movie and TV genre menus, and Ecchi/Hentai/Erotica in the anime multi-select genre picker."
 msgstr "Shows Erotica in movie and TV genre menus, and Ecchi/Hentai/Erotica in the anime multi-select genre picker."
+
+msgctxt "#30955"
+msgid "Enable TMDB metadata"
+msgstr "Enable TMDB metadata"
+
+msgctxt "#30956"
+msgid "Enable TVDB metadata"
+msgstr "Enable TVDB metadata"
+
+msgctxt "#30957"
+msgid "Enable Fanart.tv metadata"
+msgstr "Enable Fanart.tv metadata"
+
+msgctxt "#30958"
+msgid "Enable MDBList metadata"
+msgstr "Enable MDBList metadata"
+
+msgctxt "#30959"
+msgid "TMDB metadata is disabled in settings"
+msgstr "TMDB metadata is disabled in settings"
+
+msgctxt "#30960"
+msgid "Fetch cast, artwork, ratings, and browse menus from TMDB when Simkl data is incomplete."
+msgstr "Fetch cast, artwork, ratings, and browse menus from TMDB when Simkl data is incomplete."
+
+msgctxt "#30961"
+msgid "Fetch artwork and metadata from TVDB when Simkl data is incomplete."
+msgstr "Fetch artwork and metadata from TVDB when Simkl data is incomplete."
+
+msgctxt "#30962"
+msgid "Fetch clearlogo, clearart, discart, and other extended artwork from Fanart.tv."
+msgstr "Fetch clearlogo, clearart, discart, and other extended artwork from Fanart.tv."
+
+msgctxt "#30963"
+msgid "Use MDBList for the airing calendar and MDBList discover lists. Offline discover database scores remain available when disabled."
+msgstr "Use MDBList for the airing calendar and MDBList discover lists. Offline discover database scores remain available when disabled."
+
+msgctxt "#30964"
+msgid "MDBList metadata is disabled in settings"
+msgstr "MDBList metadata is disabled in settings"
+
+msgctxt "#30965"
+msgid "When the chosen provider is disabled, Prism uses the next available source, then Simkl artwork."
+msgstr "When the chosen provider is disabled, Prism uses the next available source, then Simkl artwork."
+
+msgctxt "#30966"
+msgid "When the chosen provider is disabled, Prism uses the next available source, then Simkl artwork."
+msgstr "When the chosen provider is disabled, Prism uses the next available source, then Simkl artwork."

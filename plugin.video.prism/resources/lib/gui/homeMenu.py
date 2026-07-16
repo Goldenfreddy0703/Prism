@@ -65,6 +65,8 @@ class Menus:
 
     @staticmethod
     def search_menu():
+        from resources.lib.modules.metadata_providers import provider_enabled
+
         if g.get_bool_setting('searchHistory'):
             g.add_directory_item(
                 g.get_language_string(30025),
@@ -84,12 +86,13 @@ class Menus:
                 description=g.get_language_string(30771),
                 menu_item=g.create_icon_dict("anime_search", g.ICONS_PATH),
             )
-            g.add_directory_item(
-                g.get_language_string(30327),
-                action='actorSearchHistory',
-                description=g.get_language_string(30777),
-                menu_item=g.create_icon_dict("actor_search", g.ICONS_PATH),
-            )
+            if provider_enabled("tmdb"):
+                g.add_directory_item(
+                    g.get_language_string(30327),
+                    action='actorSearchHistory',
+                    description=g.get_language_string(30777),
+                    menu_item=g.create_icon_dict("actor_search", g.ICONS_PATH),
+                )
         else:
             g.add_directory_item(
                 g.get_language_string(30025),
@@ -109,12 +112,13 @@ class Menus:
                 description=g.get_language_string(30770),
                 menu_item=g.create_icon_dict("anime_search", g.ICONS_PATH),
             )
-            g.add_directory_item(
-                g.get_language_string(30327),
-                action='searchByActor',
-                description=g.get_language_string(30776),
-                menu_item=g.create_icon_dict("actor_search", g.ICONS_PATH),
-            )
+            if provider_enabled("tmdb"):
+                g.add_directory_item(
+                    g.get_language_string(30327),
+                    action='searchByActor',
+                    description=g.get_language_string(30776),
+                    menu_item=g.create_icon_dict("actor_search", g.ICONS_PATH),
+                )
         g.close_directory(g.CONTENT_MENU)
 
     @staticmethod

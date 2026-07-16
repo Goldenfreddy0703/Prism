@@ -18,6 +18,10 @@ USER_AGENT = "plugin.video.prism/simkl-discover-builder"
 def resolve_mdblist_api_key(explicit: str | None = None) -> str:
     if explicit:
         return explicit
+    from resources.lib.modules.metadata_providers import mdblist_runtime_enabled
+
+    if not mdblist_runtime_enabled():
+        return ""
     try:
         from resources.lib.database.keys import get_api_key
 

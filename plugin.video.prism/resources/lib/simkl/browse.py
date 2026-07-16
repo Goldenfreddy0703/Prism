@@ -13,6 +13,12 @@ from resources.lib.modules.globals import g
 from resources.lib.simkl.enrich import _simkl_detail_sync_dict
 from resources.lib.simkl.menu_helpers import genre_sort_segment
 
+
+def _tmdb_runtime_enabled() -> bool:
+    from resources.lib.modules.metadata_providers import provider_enabled
+
+    return provider_enabled("tmdb")
+
 DISCOVER_ENDPOINTS: dict[str, dict[str, str]] = {
     "movie": {
         "trending": "movie_week",
@@ -347,6 +353,8 @@ TMDB_GENRE_POPULARITY_SORTS = frozenset(
 @use_cache(cache_hours=24)
 def get_tmdb_genres(catalog: str) -> list[dict[str, Any]]:
     """Return ``[{id, name}]`` from TMDB genre list endpoints."""
+    if not _tmdb_runtime_enabled():
+        return []
     if catalog not in ("movie", "tv"):
         return []
     tmdb = TMDBAPI()
@@ -420,6 +428,8 @@ def discover_by_tmdb_genres(
     tmdb_offset: int = 0,
 ) -> GenreBrowsePage:
     """TMDB discover for comma-separated genre IDs (AND), bridged through Simkl."""
+    if not _tmdb_runtime_enabled():
+        return GenreBrowsePage([], False)
     if catalog not in ("movie", "tv"):
         return GenreBrowsePage([], False)
 
@@ -941,6 +951,8 @@ def resolve_mal_to_simkl(mal_id: int) -> dict | None:
 
 
 def tmdb_discover_page(catalog: str, page: int, page_limit: int, **filters) -> list[dict]:
+    if not _tmdb_runtime_enabled():
+        return []
     tmdb = TMDBAPI()
     media_type = "movie" if catalog == "movie" else "tv"
     params: dict[str, Any] = {
@@ -992,6 +1004,8 @@ def search_person_id(query: str) -> int | None:
 
 
 def search_people(query: str, limit: int = 20) -> list[dict]:
+    if not _tmdb_runtime_enabled():
+        return []
     tmdb = TMDBAPI()
     response = tmdb.get_json("search/person", raw=True, query=query, page=1, language=tmdb.lang_full_code)
     results = (response or {}).get("results") or []
@@ -1006,6 +1020,8 @@ def get_person_combined_cast(person_id: int) -> list[dict]:
 
 @use_cache(cache_hours=24)
 def _fetch_person_combined_cast(person_id: int) -> list[dict]:
+    if not _tmdb_runtime_enabled():
+        return []
     tmdb = TMDBAPI()
     response = tmdb.get_json(
         f"person/{person_id}/combined_credits",

@@ -618,7 +618,7 @@
 				</setting>
 			</group>
 			<group id="3" label="30268">
-				<setting id="movies.preferedsource" type="integer" label="30254" help="">
+				<setting id="movies.preferedsource" type="integer" label="30254" help="30965">
 					<level>0</level>
 					<default>1</default>
 					<constraints>
@@ -701,7 +701,8 @@
 						<dependency type="visible">
 							<and>
 								<condition operator="is" setting="movie.artwork.advanced">true</condition>
-								<condition operator="!is" setting="fanart.apikey"/>
+								<condition operator="is" setting="metadata.fanart.enabled">true</condition>
+								<condition operator="is" setting="fanart.apikey"/>
 							</and>
 						</dependency>
 					</dependencies>
@@ -716,7 +717,8 @@
 						<dependency type="visible">
 							<and>
 								<condition operator="is" setting="movie.artwork.advanced">true</condition>
-								<condition operator="!is" setting="fanart.apikey"/>
+								<condition operator="is" setting="metadata.fanart.enabled">true</condition>
+								<condition operator="is" setting="fanart.apikey"/>
 							</and>
 						</dependency>
 					</dependencies>
@@ -729,7 +731,8 @@
 						<dependency type="visible">
 							<and>
 								<condition operator="is" setting="movie.artwork.advanced">true</condition>
-								<condition operator="!is" setting="fanart.apikey"/>
+								<condition operator="is" setting="metadata.fanart.enabled">true</condition>
+								<condition operator="is" setting="fanart.apikey"/>
 							</and>
 						</dependency>
 					</dependencies>
@@ -742,7 +745,8 @@
 						<dependency type="visible">
 							<and>
 								<condition operator="is" setting="movie.artwork.advanced">true</condition>
-								<condition operator="!is" setting="fanart.apikey"/>
+								<condition operator="is" setting="metadata.fanart.enabled">true</condition>
+								<condition operator="is" setting="fanart.apikey"/>
 							</and>
 						</dependency>
 					</dependencies>
@@ -760,7 +764,8 @@
 						<dependency type="visible">
 							<and>
 								<condition operator="is" setting="movie.artwork.advanced">true</condition>
-								<condition operator="!is" setting="fanart.apikey"/>
+								<condition operator="is" setting="metadata.fanart.enabled">true</condition>
+								<condition operator="is" setting="fanart.apikey"/>
 							</and>
 						</dependency>
 					</dependencies>
@@ -770,7 +775,7 @@
 				</setting>
 			</group>
 			<group id="4" label="30269">
-				<setting id="tvshows.preferedsource" type="integer" label="30255" help="">
+				<setting id="tvshows.preferedsource" type="integer" label="30255" help="30966">
 					<level>0</level>
 					<default>1</default>
 					<constraints>
@@ -853,7 +858,8 @@
 						<dependency type="visible">
 							<and>
 								<condition operator="is" setting="tv.artwork.advanced">true</condition>
-								<condition operator="!is" setting="fanart.apikey"/>
+								<condition operator="is" setting="metadata.fanart.enabled">true</condition>
+								<condition operator="is" setting="fanart.apikey"/>
 							</and>
 						</dependency>
 					</dependencies>
@@ -868,7 +874,8 @@
 						<dependency type="visible">
 							<and>
 								<condition operator="is" setting="tv.artwork.advanced">true</condition>
-								<condition operator="!is" setting="fanart.apikey"/>
+								<condition operator="is" setting="metadata.fanart.enabled">true</condition>
+								<condition operator="is" setting="fanart.apikey"/>
 							</and>
 						</dependency>
 					</dependencies>
@@ -881,7 +888,8 @@
 						<dependency type="visible">
 							<and>
 								<condition operator="is" setting="tv.artwork.advanced">true</condition>
-								<condition operator="!is" setting="fanart.apikey"/>
+								<condition operator="is" setting="metadata.fanart.enabled">true</condition>
+								<condition operator="is" setting="fanart.apikey"/>
 							</and>
 						</dependency>
 					</dependencies>
@@ -899,7 +907,8 @@
 						<dependency type="visible">
 							<and>
 								<condition operator="is" setting="tv.artwork.advanced">true</condition>
-								<condition operator="!is" setting="fanart.apikey"/>
+								<condition operator="is" setting="metadata.fanart.enabled">true</condition>
+								<condition operator="is" setting="fanart.apikey"/>
 							</and>
 						</dependency>
 					</dependencies>
@@ -3195,6 +3204,26 @@
 					<control type="edit" format="string">
 						<heading>30888</heading>
 					</control>
+				</setting>
+				<setting id="metadata.tmdb.enabled" type="boolean" label="30955" help="30960">
+					<level>0</level>
+					<default>true</default>
+					<control type="toggle"/>
+				</setting>
+				<setting id="metadata.tvdb.enabled" type="boolean" label="30956" help="30961">
+					<level>0</level>
+					<default>true</default>
+					<control type="toggle"/>
+				</setting>
+				<setting id="metadata.fanart.enabled" type="boolean" label="30957" help="30962">
+					<level>0</level>
+					<default>true</default>
+					<control type="toggle"/>
+				</setting>
+				<setting id="metadata.mdblist.enabled" type="boolean" label="30958" help="30963">
+					<level>0</level>
+					<default>true</default>
+					<control type="toggle"/>
 				</setting>
 			</group>
 			<group id="3" label="30547">

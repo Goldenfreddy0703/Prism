@@ -32,11 +32,14 @@ def show_genre_picker(catalog: str) -> None:
 
     if catalog in MULTI_GENRE_ACTIONS:
         multi_action, _ = MULTI_GENRE_ACTIONS[catalog]
-        g.add_directory_item(
-            g.get_language_string(30940),
-            action=multi_action,
-            menu_item=browse.genre_icon_dict(catalog, "multi-select"),
-        )
+        from resources.lib.modules.metadata_providers import provider_enabled
+
+        if catalog == "anime" or provider_enabled("tmdb"):
+            g.add_directory_item(
+                g.get_language_string(30940),
+                action=multi_action,
+                menu_item=browse.genre_icon_dict(catalog, "multi-select"),
+            )
 
     for genre in genres:
         g.add_directory_item(
@@ -50,6 +53,12 @@ def show_genre_picker(catalog: str) -> None:
 
 
 def show_tmdb_genre_multiselect(catalog: str, page_limit: int, list_builder) -> None:
+    from resources.lib.modules.metadata_providers import notify_tmdb_required, provider_enabled
+
+    if not provider_enabled("tmdb"):
+        notify_tmdb_required()
+        g.cancel_directory()
+        return
     if catalog not in MULTI_GENRE_ACTIONS:
         g.cancel_directory()
         return
