@@ -94,6 +94,8 @@ _SIMKL_EXTRA_INFO_KEYS = frozenset(
         "img",
         "anime_type",
         "catalog",
+        "title_en",
+        "title_romaji",
     }
 )
 
@@ -127,6 +129,7 @@ def _user_region_code() -> str:
 
 def _art_limits(media_type: str | None) -> dict[str, int]:
     from resources.lib.modules.globals import g
+    from resources.lib.modules.metadata_providers import art_option_enabled
 
     if media_type == "movie":
         return {
@@ -136,11 +139,11 @@ def _art_limits(media_type: str | None) -> dict[str, int]:
             "keyart": g.get_int_setting("movies.keyart_limit", 1),
             "thumb": 1,
             "icon": 1,
-            "clearlogo": 1 if g.get_bool_setting("movies.clearlogo", True) else 0,
-            "banner": 1 if g.get_bool_setting("movies.banner", True) else 0,
-            "landscape": 1 if g.get_bool_setting("movies.landscape", True) else 0,
-            "clearart": 1 if g.get_bool_setting("movies.clearart", True) else 0,
-            "discart": 1 if g.get_bool_setting("movies.discart", True) else 0,
+            "clearlogo": 1 if art_option_enabled("movies.clearlogo", "movie") else 0,
+            "banner": 1 if art_option_enabled("movies.banner", "movie") else 0,
+            "landscape": 1 if art_option_enabled("movies.landscape", "movie") else 0,
+            "clearart": 1 if art_option_enabled("movies.clearart", "movie") else 0,
+            "discart": 1 if art_option_enabled("movies.discart", "movie") else 0,
         }
     return {
         "poster": g.get_int_setting("tvshows.poster_limit", 1),
@@ -149,10 +152,10 @@ def _art_limits(media_type: str | None) -> dict[str, int]:
         "keyart": g.get_int_setting("tvshows.keyart_limit", 1),
         "thumb": 1,
         "icon": 1,
-        "clearlogo": 1 if g.get_bool_setting("tvshows.clearlogo", True) else 0,
-        "banner": 1 if g.get_bool_setting("tvshows.banner", True) else 0,
-        "landscape": 1 if g.get_bool_setting("tvshows.landscape", True) else 0,
-        "clearart": 1 if g.get_bool_setting("tvshows.clearart", True) else 0,
+        "clearlogo": 1 if art_option_enabled("tvshows.clearlogo", "tvshow") else 0,
+        "banner": 1 if art_option_enabled("tvshows.banner", "tvshow") else 0,
+        "landscape": 1 if art_option_enabled("tvshows.landscape", "tvshow") else 0,
+        "clearart": 1 if art_option_enabled("tvshows.clearart", "tvshow") else 0,
     }
 
 

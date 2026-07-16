@@ -346,6 +346,9 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             meta_cache.set_many_rows("show", rows or [])
         if skip_update:
             rows = self.metadataHandler.gapfill_list_meta(rows, "tvshow", db=self, persist=True)
+        from resources.lib.simkl.enrich import gapfill_anime_title_rows
+
+        rows = gapfill_anime_title_rows(rows)
         return MetadataHandler.sort_list_items(rows, media_list)
 
     @guard_against_none(list, 1)
@@ -652,6 +655,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             """
 
         db_list_to_update = self.fetchall(sql_statement)
+        self._apply_request_force_update(db_list_to_update, list_to_update)
         updated_items = self._update_objects(db_list_to_update, "shows")
 
         formatted_items = self._format_objects(updated_items)

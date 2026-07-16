@@ -712,6 +712,22 @@ class SimklSyncDatabase(Database):
         )
         return None
 
+    @staticmethod
+    def _apply_request_force_update(db_rows, request_refs) -> None:
+        """Honor gap-fill requests that need a provider refresh even when DB says meta is current."""
+        force_ids = {
+            int(ref["simkl_id"])
+            for ref in request_refs or []
+            if ref.get("simkl_id") is not None
+            and ref.get("needs_update") in (True, "true", "True", 1, "1")
+        }
+        if not force_ids:
+            return
+        for row in db_rows or []:
+            simkl_id = row.get("simkl_id")
+            if simkl_id is not None and int(simkl_id) in force_ids:
+                row["needs_update"] = True
+
     def _set_needs_update(self, items, media_type):
         update_list = self.fetchall(f"SELECT simkl_id from {media_type} WHERE needs_update")
         if not update_list:
@@ -1343,9 +1359,9 @@ class SimklSyncDatabase(Database):
             ):
                 if not isinstance(info, dict):
                     continue
-                ids = info.get("ids") or {}
-                if ids.get("mal") or info.get("mal_id"):
-                    return "anime"
+            ids = info.get("ids") or {}
+            if ids.get("mal") or info.get("mal_id"):
+                return "anime"
                 if info.get("catalog") == "anime" or info.get("type") == "anime":
                     return "anime"
         return "tv"

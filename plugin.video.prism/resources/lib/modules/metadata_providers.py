@@ -37,16 +37,34 @@ def gapfill_providers_enabled() -> bool:
     return any(provider_enabled(name) for name in ("tmdb", "tvdb", "fanart"))
 
 
+def external_ids_from_row(row: dict) -> dict[str, object | None]:
+    """Resolve TMDB/TVDB/IMDB ids from row columns, flat info fields, and nested info.ids."""
+    if not isinstance(row, dict):
+        return {"tmdb_id": None, "tvdb_id": None, "imdb_id": None}
+
+    info = dict(row.get("info") or {})
+    from resources.lib.simkl.ids import sync_flat_ids_from_ids, sync_ids_from_flat
+
+    sync_ids_from_flat(info)
+    sync_flat_ids_from_ids(info)
+
+    return {
+        "tmdb_id": info.get("tmdb_id") or row.get("tmdb_id"),
+        "tvdb_id": info.get("tvdb_id") or row.get("tvdb_id"),
+        "imdb_id": info.get("imdb_id") or row.get("imdb_id"),
+    }
+
+
 def gapfill_provider_available_for_row(row: dict) -> bool:
     if not isinstance(row, dict):
         return False
-    info = row.get("info") if isinstance(row.get("info"), dict) else {}
-    if provider_enabled("tmdb") and info.get("tmdb_id"):
+    ids = external_ids_from_row(row)
+    if provider_enabled("tmdb") and ids.get("tmdb_id"):
         return True
-    if provider_enabled("tvdb") and info.get("tvdb_id"):
+    if provider_enabled("tvdb") and ids.get("tvdb_id"):
         return True
     if provider_enabled("fanart") and (
-        info.get("tmdb_id") or info.get("tvdb_id") or info.get("imdb_id")
+        ids.get("tmdb_id") or ids.get("tvdb_id") or ids.get("imdb_id")
     ):
         return True
     return False
@@ -55,10 +73,10 @@ def gapfill_provider_available_for_row(row: dict) -> bool:
 def cast_gapfill_available(row: dict, media_type: str) -> bool:
     if not isinstance(row, dict):
         return False
-    info = row.get("info") if isinstance(row.get("info"), dict) else {}
-    if provider_enabled("tmdb") and info.get("tmdb_id"):
+    ids = external_ids_from_row(row)
+    if provider_enabled("tmdb") and ids.get("tmdb_id"):
         return True
-    if media_type != "movie" and provider_enabled("tvdb") and info.get("tvdb_id"):
+    if media_type != "movie" and provider_enabled("tvdb") and ids.get("tvdb_id"):
         return True
     return False
 
@@ -66,16 +84,32 @@ def cast_gapfill_available(row: dict, media_type: str) -> bool:
 def art_gapfill_available(row: dict) -> bool:
     if not isinstance(row, dict):
         return False
-    info = row.get("info") if isinstance(row.get("info"), dict) else {}
-    if provider_enabled("fanart") and (
-        info.get("tmdb_id") or info.get("tvdb_id") or info.get("imdb_id")
+    ids = external_ids_from_row(row)
+    if fanart_art_usable() and (
+        ids.get("tmdb_id") or ids.get("tvdb_id") or ids.get("imdb_id")
     ):
         return True
-    if provider_enabled("tmdb") and info.get("tmdb_id"):
+    if provider_enabled("tmdb") and ids.get("tmdb_id"):
         return True
-    if provider_enabled("tvdb") and info.get("tvdb_id"):
+    if provider_enabled("tvdb") and ids.get("tvdb_id"):
         return True
     return False
+
+
+def advanced_artwork_enabled(media_type: str) -> bool:
+    from resources.lib.modules.globals import g
+
+    setting_id = "movie.artwork.advanced" if media_type == "movie" else "tv.artwork.advanced"
+    return g.get_bool_setting(setting_id, False)
+
+
+def art_option_enabled(setting_id: str, media_type: str, default: bool = True) -> bool:
+    """Advanced artwork toggles default on when the advanced panel is hidden."""
+    if not advanced_artwork_enabled(media_type):
+        return default
+    from resources.lib.modules.globals import g
+
+    return g.get_bool_setting(setting_id, default)
 
 
 def mdblist_runtime_enabled() -> bool:

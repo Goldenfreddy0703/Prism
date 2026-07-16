@@ -41,6 +41,9 @@ def api_detail_to_sync_dict(payload: dict[str, Any] | None, catalog: str) -> dic
 
     item = {
         "title": payload.get("title"),
+        "en_title": payload.get("en_title"),
+        "title_en": payload.get("title_en") or payload.get("en_title"),
+        "title_romaji": payload.get("title_romaji"),
         "overview": payload.get("overview") or payload.get("description"),
         "release_date": air_date,
         "poster": poster,

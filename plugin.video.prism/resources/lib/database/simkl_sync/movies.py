@@ -84,6 +84,9 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
 
         if skip_update:
             rows = self.metadataHandler.gapfill_list_meta(rows, "movie", db=self, persist=True)
+        from resources.lib.simkl.enrich import gapfill_anime_title_rows
+
+        rows = gapfill_anime_title_rows(rows)
         return MetadataHandler.sort_list_items(rows, media_list)
 
     @guard_against_none(list)
@@ -231,6 +234,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             """
 
         db_list_to_update = self.fetchall(sql_statement)
+        self._apply_request_force_update(db_list_to_update, list_to_update)
 
         for movie in db_list_to_update:
             movie["_entity"] = "movie"

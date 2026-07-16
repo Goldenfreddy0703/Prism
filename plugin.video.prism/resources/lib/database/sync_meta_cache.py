@@ -167,26 +167,40 @@ class SyncMetaCache:
         )
 
     @staticmethod
-    def _provider_miss_key(media_type: str, simkl_id: int) -> str:
-        return f"{media_type}.{int(simkl_id)}"
+    def _provider_miss_key(media_type: str, simkl_id: int, gap: str) -> str:
+        return f"{media_type}.{int(simkl_id)}.{gap}"
 
-    def is_provider_miss(self, media_type: str, simkl_id: int) -> bool:
+    def is_gap_miss(self, media_type: str, simkl_id: int, gap: str) -> bool:
         return (
-            self._provider_miss_cache.get(self._provider_miss_key(media_type, int(simkl_id)))
+            self._provider_miss_cache.get(self._provider_miss_key(media_type, int(simkl_id), gap))
             is not self._provider_miss_cache.NOT_CACHED
         )
 
-    def mark_provider_miss(self, media_type: str, simkl_id: int) -> None:
+    def mark_gap_miss(self, media_type: str, simkl_id: int, gap: str) -> None:
         self._provider_miss_cache.set(
-            self._provider_miss_key(media_type, int(simkl_id)),
+            self._provider_miss_key(media_type, int(simkl_id), gap),
             True,
             expiration=_PROVIDER_MISS_TTL,
         )
 
-    def clear_provider_miss(self, media_type: str, simkl_id: int) -> None:
-        g.clear_runtime_setting(
-            self._provider_miss_cache._create_key(self._provider_miss_key(media_type, int(simkl_id)))
+    def clear_gap_misses(self, media_type: str, simkl_id: int) -> None:
+        for gap in ("cast", "clearlogo", "clearart", "discart", "banner", "landscape"):
+            g.clear_runtime_setting(
+                self._provider_miss_cache._create_key(self._provider_miss_key(media_type, int(simkl_id), gap))
+            )
+
+    def is_provider_miss(self, media_type: str, simkl_id: int) -> bool:
+        return any(
+            self.is_gap_miss(media_type, int(simkl_id), gap)
+            for gap in ("cast", "clearlogo", "clearart", "discart", "banner", "landscape")
         )
+
+    def mark_provider_miss(self, media_type: str, simkl_id: int) -> None:
+        for gap in ("cast", "clearlogo", "clearart", "discart", "banner", "landscape"):
+            self.mark_gap_miss(media_type, int(simkl_id), gap)
+
+    def clear_provider_miss(self, media_type: str, simkl_id: int) -> None:
+        self.clear_gap_misses(media_type, int(simkl_id))
 
     def prefetch(self, limit: int = _PREFETCH_LIMIT) -> int:
         """Warm recent movies/shows metadata into window properties."""

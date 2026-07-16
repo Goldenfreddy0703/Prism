@@ -27,20 +27,22 @@ class MetadataHandler:
         self.movies_fanart_limit = g.get_int_setting("movies.fanart_limit", 1)
         self.movies_keyart_limit = g.get_int_setting("movies.keyart_limit", 1)
         self.movies_characterart_limit = g.get_int_setting("movies.characterart_limit", 1)
-        self.movies_banner = g.get_bool_setting("movies.banner", "true")
-        self.movies_clearlogo = g.get_bool_setting("movies.clearlogo", "true")
-        self.movies_landscape = g.get_bool_setting("movies.landscape", "true")
-        self.movies_clearart = g.get_bool_setting("movies.clearart", "true")
-        self.movies_discart = g.get_bool_setting("movies.discart", "true")
+        from resources.lib.modules.metadata_providers import art_option_enabled
+
+        self.movies_banner = art_option_enabled("movies.banner", "movie")
+        self.movies_clearlogo = art_option_enabled("movies.clearlogo", "movie")
+        self.movies_landscape = art_option_enabled("movies.landscape", "movie")
+        self.movies_clearart = art_option_enabled("movies.clearart", "movie")
+        self.movies_discart = art_option_enabled("movies.discart", "movie")
 
         self.tvshows_poster_limit = g.get_int_setting("tvshows.poster_limit", 1)
         self.tvshows_fanart_limit = g.get_int_setting("tvshows.fanart_limit", 1)
         self.tvshows_keyart_limit = g.get_int_setting("tvshows.keyart_limit", 1)
         self.tvshows_characterart_limit = g.get_int_setting("tvshows.characterart_limit", 1)
-        self.tvshows_banner = g.get_bool_setting("tvshows.banner", "true")
-        self.tvshows_clearlogo = g.get_bool_setting("tvshows.clearlogo", "true")
-        self.tvshows_landscape = g.get_bool_setting("tvshows.landscape", "true")
-        self.tvshows_clearart = g.get_bool_setting("tvshows.clearart", "true")
+        self.tvshows_banner = art_option_enabled("tvshows.banner", "tvshow")
+        self.tvshows_clearlogo = art_option_enabled("tvshows.clearlogo", "tvshow")
+        self.tvshows_landscape = art_option_enabled("tvshows.landscape", "tvshow")
+        self.tvshows_clearart = art_option_enabled("tvshows.clearart", "tvshow")
         self.season_poster = g.get_bool_setting("season.poster", "true")
         self.season_banner = g.get_bool_setting("season.banner", "true")
         self.season_landscape = g.get_bool_setting("season.landscape", "true")
@@ -1105,14 +1107,20 @@ class MetadataHandler:
         return any(key.startswith(prefix) and art.get(key) for key in art)
 
     def _db_object_for_row(self, row: dict, media_type: str) -> dict:
+        from resources.lib.modules.metadata_providers import external_ids_from_row
+
         info = dict(row.get("info") or {})
+        ids = external_ids_from_row(row)
+        for key, value in ids.items():
+            if value is not None and info.get(key) is None:
+                info[key] = value
         simkl_id = row.get("simkl_id") or info.get("simkl_id")
         db_object = {
             "simkl_id": simkl_id,
             "info": info,
-            "tmdb_id": info.get("tmdb_id"),
-            "tvdb_id": info.get("tvdb_id"),
-            "imdb_id": info.get("imdb_id"),
+            "tmdb_id": ids.get("tmdb_id"),
+            "tvdb_id": ids.get("tvdb_id"),
+            "imdb_id": ids.get("imdb_id"),
             "cast": row.get("cast") or [],
             "simkl_object": {
                 "info": info,
@@ -1346,6 +1354,7 @@ class MetadataHandler:
         from resources.lib.database.sync_meta_cache import SyncMetaCache
 
         meta_cache = SyncMetaCache()
+        cache_media_type = "movie" if media_type == "movie" else "show"
 
         for row in rows:
             if not isinstance(row, dict):
@@ -1356,13 +1365,17 @@ class MetadataHandler:
             stale = self._row_needs_refresh(updated, media_type)
             simkl_id = updated.get("simkl_id")
             if simkl_id is not None and stale:
-                meta_cache.delete_row("movie" if media_type == "movie" else "show", int(simkl_id))
-            if (gaps or stale) and self._can_fetch_provider_meta(updated):
-                if simkl_id is not None and not meta_cache.is_provider_miss(
-                    "movie" if media_type == "movie" else "show",
-                    int(simkl_id),
-                ):
-                    need_online_refs.append({"simkl_id": int(simkl_id)})
+                meta_cache.delete_row(cache_media_type, int(simkl_id))
+            actionable_gaps = [
+                gap
+                for gap in gaps
+                if simkl_id is None or not meta_cache.is_gap_miss(cache_media_type, int(simkl_id), gap)
+            ]
+            if (actionable_gaps or stale) and self._can_fetch_provider_meta(updated):
+                if simkl_id is not None:
+                    need_online_refs.append(
+                        {"simkl_id": int(simkl_id), "needs_update": True, "_gapfill_gaps": tuple(actionable_gaps)}
+                    )
             merged.append(updated)
 
         online_ids = self._online_update_refs(need_online_refs, media_type, db)
@@ -1386,9 +1399,10 @@ class MetadataHandler:
                 continue
             remaining_gaps = self._row_meta_gaps(row, media_type)
             if remaining_gaps and self._can_fetch_provider_meta(row):
-                meta_cache.mark_provider_miss("movie" if media_type == "movie" else "show", sid)
+                for gap in remaining_gaps:
+                    meta_cache.mark_gap_miss(cache_media_type, sid, gap)
             else:
-                meta_cache.clear_provider_miss("movie" if media_type == "movie" else "show", sid)
+                meta_cache.clear_provider_miss(cache_media_type, sid)
 
         if persist:
             self._persist_list_rows(merged, media_type, db=db, skip_ids=online_ids)
