@@ -10,6 +10,7 @@ from resources.lib.simkl.library_status import (
     apply_local_library_status,
     apply_local_status_after_watch,
     queue_library_sync,
+    _library_info,
 )
 from resources.lib.simkl.payloads import (
     info_to_history_payload,
@@ -26,15 +27,28 @@ from resources.lib.simkl.statuses import (
     resolved_watched_status_from_response,
     status_label,
     status_options_for_info,
+    movie_show_mark_watched,
+    effective_list_status,
+    on_simkl_watchlist,
+)
+from resources.lib.simkl.remote_state import (
+    fetch_remote_item_state,
+    reconcile_local_item_state,
 )
 
 
 class SimklContextMenu:
     def __init__(self, item_information):
-        item_type = item_information["action_args"]["mediatype"].lower()
+        self._action_args = item_information.get("action_args") or {}
+        self._library_status = self._action_args.get("library_status")
+        item_type = self._action_args.get("mediatype", "").lower()
+        if item_type == "movies":
+            item_type = "movie"
         simkl_id = item_information["simkl_id"]
 
         self._confirm_item_information(item_information)
+        self._remote_state = fetch_remote_item_state(_library_info(item_information))
+        reconcile_local_item_state(item_information, self._remote_state)
         self.dialog_list = []
         self._handle_watched_options(item_information, item_type)
         self._handle_library_options(item_information)
@@ -108,14 +122,18 @@ class SimklContextMenu:
             self.dialog_list.append(g.get_language_string(30284))
 
     def _handle_library_options(self, item_information):
-        info = item_information.get("info") or item_information
-        on_list = current_simkl_status(info) is not None
+        info = _library_info(item_information)
+        on_list = on_simkl_watchlist(
+            info, library_status=self._library_status, remote=self._remote_state
+        )
         if on_list:
             self.dialog_list.append(g.get_language_string(30753))
             self.dialog_list.append(g.get_language_string(30754))
         else:
             self.dialog_list.append(g.get_language_string(30762))
-            if in_simkl_library(item_information):
+            if in_simkl_library(item_information) and (
+                self._remote_state is None or self._remote_state.in_library
+            ):
                 self.dialog_list.append(g.get_language_string(30754))
 
     def _handle_rating_options(self, item_information):
@@ -225,7 +243,16 @@ class SimklContextMenu:
         g.trigger_widget_refresh()
 
     def _handle_watched_options(self, item_information, item_type):
-        if item_type in ["movie", "episode"]:
+        if item_type in ("movie", "movies"):
+            info = _library_info(item_information)
+            if movie_show_mark_watched(
+                info, library_status=self._library_status, remote=self._remote_state
+            ):
+                self.dialog_list.append(g.get_language_string(30278))
+            else:
+                self.dialog_list.append(g.get_language_string(30279))
+            return
+        if item_type == "episode":
             if item_information["play_count"] > 0:
                 self.dialog_list.append(g.get_language_string(30279))
             else:
@@ -383,7 +410,13 @@ class SimklContextMenu:
         self._change_list_status(item_information, exclude_current=True, dialog_string_id=30753)
 
     def _change_list_status(self, item_information, *, exclude_current: bool, dialog_string_id: int):
-        options = status_options_for_info(item_information, exclude_current=exclude_current)
+        info = _library_info(item_information)
+        options = status_options_for_info(
+            info,
+            exclude_current=exclude_current,
+            library_status=self._library_status,
+            remote=self._remote_state,
+        )
         if not options:
             g.notification(
                 f"{g.ADDON_NAME}: {g.get_language_string(30286)}",

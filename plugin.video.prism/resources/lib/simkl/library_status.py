@@ -22,11 +22,40 @@ def _library_info(item_or_info: dict) -> dict:
     info = item_or_info.get("info")
     if isinstance(info, dict):
         merged = dict(info)
-        for key in ("mediatype", "simkl_id", "season", "episode", "catalog", "play_count"):
+        for key in ("mediatype", "simkl_id", "season", "episode", "catalog", "play_count", "library_status"):
             if item_or_info.get(key) is not None and merged.get(key) is None:
                 merged[key] = item_or_info[key]
+        action_args = item_or_info.get("action_args")
+        if isinstance(action_args, dict):
+            for key in ("mediatype", "simkl_id", "season", "episode", "catalog", "library_status"):
+                if action_args.get(key) is not None and merged.get(key) is None:
+                    merged[key] = action_args[key]
         return merged
     return item_or_info
+
+
+def stamp_library_list_status(catalog: str, status: str, refs: list[dict]) -> None:
+    """Keep local list status + movie watched flags aligned with the Simkl list bucket being shown."""
+    if not refs or not status:
+        return
+
+    simkl_ids = [int(ref["simkl_id"]) for ref in refs if ref.get("simkl_id") is not None]
+    if not simkl_ids:
+        return
+
+    db = _library_db(catalog)
+    for simkl_id in simkl_ids:
+        db.set_simkl_status(simkl_id, catalog, status)
+
+    if catalog != "movie":
+        return
+
+    placeholders = ",".join("?" * len(simkl_ids))
+    params = tuple(simkl_ids)
+    if status == "completed":
+        db.execute_sql(f"UPDATE movies SET watched=1 WHERE simkl_id IN ({placeholders})", params)
+    elif status in ("plantowatch", "dropped", "hold", "watching"):
+        db.execute_sql(f"UPDATE movies SET watched=0 WHERE simkl_id IN ({placeholders})", params)
 
 
 def queue_library_sync(*, user_initiated: bool = True) -> None:

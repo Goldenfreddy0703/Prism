@@ -2,6 +2,11 @@ from resources.lib.modules.exceptions import RanOnceAlready
 from resources.lib.modules.globals import g
 
 
+def global_lock_running(lock_name: str) -> bool:
+    """True when another Prism instance holds the named global lock."""
+    return g.get_bool_runtime_setting(f"{g.ADDON_NAME}.GlobalLock.{lock_name}.Running")
+
+
 class GlobalLock:
     def __init__(self, lock_name, run_once=False, check_sum=None):
         self._lock_name = lock_name

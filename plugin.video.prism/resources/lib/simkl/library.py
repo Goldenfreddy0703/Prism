@@ -38,8 +38,10 @@ def simkl_entry_to_sync_dict(entry: dict, catalog: str) -> dict | None:
     return normalize_library_entry(entry, catalog)
 
 
-def fetch_library_refs(catalog: str, status: str = "plantowatch") -> list[dict]:
+def fetch_library_refs(catalog: str, status: str = "plantowatch", *, skip_persist: bool = False) -> list[dict]:
     """Return [{simkl_id, catalog}, ...] refs for list_builder after sync insert."""
+    from resources.lib.discover.sync_bridge import simkl_refs
+
     simkl_type = _CATALOG_TO_SIMKL_TYPE.get(catalog)
     if not simkl_type:
         return []
@@ -66,5 +68,8 @@ def fetch_library_refs(catalog: str, status: str = "plantowatch") -> list[dict]:
 
     if not sync_items:
         return []
+
+    if skip_persist:
+        return simkl_refs(sync_items)
 
     return persist_library_entries(catalog, entries, sync_items)

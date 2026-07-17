@@ -323,8 +323,15 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
             info = normalized["simkl_object"]["info"]
             if entry.get("status"):
                 info["simkl_status"] = entry.get("status")
-            if entry.get("last_watched_at") or entry.get("status") == "completed":
+            status = entry.get("status")
+            if status == "completed":
                 info["last_watched_at"] = entry.get("last_watched_at") or entry.get("added_to_watchlist_at")
+                info["watched"] = 1
+                watched_ids.append(normalized["simkl_id"])
+            elif status in ("plantowatch", "dropped", "hold", "watching"):
+                info["watched"] = 0
+            elif entry.get("last_watched_at"):
+                info["last_watched_at"] = entry.get("last_watched_at")
                 info["watched"] = 1
                 watched_ids.append(normalized["simkl_id"])
             movies.append(normalized)

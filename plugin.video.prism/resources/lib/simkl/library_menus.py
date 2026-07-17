@@ -102,7 +102,6 @@ def render_status_list(catalog: str, status: str) -> None:
     ListBuilder().show_list_builder(
         refs,
         no_paging=no_paging,
-        skip_mill=True,
         library_status=status,
         catalog=catalog,
         **list_kwargs,

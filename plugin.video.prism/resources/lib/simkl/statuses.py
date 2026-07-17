@@ -38,10 +38,76 @@ def _catalog_for_info(info: dict[str, Any]) -> str:
     return "show"
 
 
-def status_options_for_info(info: dict[str, Any], *, exclude_current: bool = True) -> list[tuple[str, int]]:
-    options = MOVIE_STATUS_OPTIONS if info.get("mediatype") == "movie" else SHOW_STATUS_OPTIONS
+def effective_list_status(
+    info: dict[str, Any],
+    library_status: str | None = None,
+    *,
+    remote: "SimklRemoteItemState | None" = None,
+) -> str | None:
+    """List bucket from live Simkl, menu context, or persisted simkl_status."""
+    if remote is not None and remote.matched:
+        return remote.list_status
+    if library_status:
+        return library_status
+    return info.get("library_status") or current_simkl_status(info)
+
+
+def movie_show_mark_watched(
+    info: dict[str, Any],
+    *,
+    library_status: str | None = None,
+    remote: "SimklRemoteItemState | None" = None,
+) -> bool:
+    """True when Simkl manager should offer Mark as Watched for a movie."""
+    mediatype = (info.get("mediatype") or "").lower()
+    if mediatype not in ("movie", "movies"):
+        return False
+
+    if remote is not None and remote.matched:
+        if remote.list_status in ("plantowatch", "dropped", "hold", "watching"):
+            return True
+        if remote.list_status == "completed":
+            return False
+        if not remote.in_library:
+            return True
+        return False
+
+    status = effective_list_status(info, library_status, remote=remote)
+    if status in ("plantowatch", "dropped", "hold", "watching"):
+        return True
+    if status == "completed":
+        return False
+    try:
+        return int(info.get("play_count") or 0) <= 0
+    except (TypeError, ValueError):
+        return True
+
+
+def on_simkl_watchlist(
+    info: dict[str, Any],
+    *,
+    library_status: str | None = None,
+    remote: "SimklRemoteItemState | None" = None,
+) -> bool:
+    """True when the item is on a Simkl watchlist bucket (not merely watch history)."""
+    if remote is not None and remote.matched:
+        return remote.on_watchlist
+    return effective_list_status(info, library_status, remote=remote) is not None
+
+
+def status_options_for_info(
+    info: dict[str, Any],
+    *,
+    exclude_current: bool = True,
+    library_status: str | None = None,
+    remote: "SimklRemoteItemState | None" = None,
+) -> list[tuple[str, int]]:
+    mediatype = (info.get("mediatype") or "").lower()
+    if mediatype == "movies":
+        mediatype = "movie"
+    options = MOVIE_STATUS_OPTIONS if mediatype == "movie" else SHOW_STATUS_OPTIONS
     if exclude_current:
-        current = current_simkl_status(info)
+        current = effective_list_status(info, library_status, remote=remote)
         if current:
             options = tuple((s, lid) for s, lid in options if s != current)
     return list(options)

@@ -107,21 +107,23 @@ def _save_cached_refs(catalog: str, status: str, refs: list[dict]) -> None:
     db = SimklSyncDatabase()
     ensure_library_cache_tables(db)
     now = int(time.time())
+    rows = [
+        (catalog, status, int(ref["simkl_id"]), order, now)
+        for order, ref in enumerate(refs)
+        if ref.get("simkl_id") is not None
+    ]
     db.execute_sql(
         "DELETE FROM library_status_cache WHERE catalog=? AND status=?",
         (catalog, status),
     )
-    for order, ref in enumerate(refs):
-        simkl_id = ref.get("simkl_id")
-        if simkl_id is None:
-            continue
+    if rows:
         db.execute_sql(
             """
             INSERT INTO library_status_cache
                 (catalog, status, simkl_id, item_order, last_updated)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (catalog, status, int(simkl_id), order, now),
+            rows,
         )
 
 
@@ -214,20 +216,37 @@ def load_library_list_refs(catalog: str, status: str) -> list[dict]:
     Simkl ``/sync/all-items/...`` is the source of truth for membership.
     Cached simklSync.db rows supply metadata when rendering the list.
     """
+    from resources.lib.modules.global_lock import global_lock_running
     from resources.lib.simkl.library import fetch_library_refs
     from resources.lib.simkl.library_sort import sort_library_refs
+    from resources.lib.simkl.library_status import stamp_library_list_status
+
+    sync_running = global_lock_running("simkl.sync")
+
+    if sync_running:
+        cached = _get_cached_refs(catalog, status)
+        if cached:
+            refs = sort_library_refs(cached, catalog)
+            stamp_library_list_status(catalog, status, refs)
+            return refs
 
     if should_refresh_library_cache(catalog, status):
-        refs = fetch_library_refs(catalog, status=status)
+        refs = fetch_library_refs(catalog, status=status, skip_persist=sync_running)
         if refs:
+            stamp_library_list_status(catalog, status, refs)
+        if refs and not sync_running:
             _save_cached_refs(catalog, status, refs)
         return refs
 
     refs = _get_cached_refs(catalog, status)
     if refs:
-        return sort_library_refs(refs, catalog)
+        refs = sort_library_refs(refs, catalog)
+        stamp_library_list_status(catalog, status, refs)
+        return refs
 
-    refs = fetch_library_refs(catalog, status=status)
+    refs = fetch_library_refs(catalog, status=status, skip_persist=sync_running)
     if refs:
+        stamp_library_list_status(catalog, status, refs)
+    if refs and not sync_running:
         _save_cached_refs(catalog, status, refs)
     return refs

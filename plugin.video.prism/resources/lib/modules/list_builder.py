@@ -492,6 +492,14 @@ class ListBuilder:
     def _use_parallel_list_build(count: int) -> bool:
         return g.get_bool_setting("general.fastMenus", True) and count > 3
 
+    def _action_args_for_item(self, processed, library_status=None):
+        args = self._menu_action_args(processed)
+        if not library_status or not isinstance(args, dict):
+            return args
+        stamped = dict(args)
+        stamped["library_status"] = library_status
+        return stamped
+
     def _build_directory_item_entry(self, item, action, params, prepend_date=False, mixed_list=False, library_status=None):
         processed = self._post_process(item, prepend_date, mixed_list, library_status=library_status)
         if processed is None:
@@ -500,7 +508,7 @@ class ListBuilder:
             processed.get("name"),
             action=action,
             menu_item=processed,
-            action_args=self._menu_action_args(processed),
+            action_args=self._action_args_for_item(processed, library_status),
             **params,
         )
 
@@ -665,7 +673,7 @@ class ListBuilder:
         if not isinstance(info, dict):
             return item
 
-        completed = library_status == "completed" or info.get("simkl_status") == "completed"
+        completed = library_status == "completed" if library_status else info.get("simkl_status") == "completed"
         if not completed:
             return item
 

@@ -1671,19 +1671,33 @@ class SimklSyncDatabase(Database):
                 self.mark_show_watched(show_id, 1)
 
     def apply_movie_watch_flags(self, entries):
-        watched_ids = []
+        """Align movies.watched with Simkl list status, not prior watch history alone."""
+        watched_ids: list[int] = []
+        unwatched_ids: list[int] = []
         for entry in entries or []:
             if not isinstance(entry, dict):
-                continue
-            if not (entry.get("last_watched_at") or entry.get("status") == "completed"):
                 continue
             blob = entry.get("movie") or entry
             if not isinstance(blob, dict):
                 continue
             simkl_id = (blob.get("ids") or {}).get("simkl")
-            if simkl_id is not None:
-                watched_ids.append(int(simkl_id))
+            if simkl_id is None:
+                continue
+            simkl_id = int(simkl_id)
+            status = entry.get("status")
+            if status == "completed":
+                watched_ids.append(simkl_id)
+            elif status in ("plantowatch", "dropped", "hold", "watching"):
+                unwatched_ids.append(simkl_id)
+            elif entry.get("last_watched_at"):
+                watched_ids.append(simkl_id)
 
+        if unwatched_ids:
+            placeholders = ",".join("?" * len(unwatched_ids))
+            self.execute_sql(
+                f"UPDATE movies SET watched=0 WHERE simkl_id IN ({placeholders})",
+                tuple(unwatched_ids),
+            )
         if not watched_ids:
             return
 
