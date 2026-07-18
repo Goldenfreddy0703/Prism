@@ -1135,11 +1135,15 @@ class SimklSyncDatabase(Database):
                 episode_ids = {}
 
                 for show in show_collection:
+                    show_id = self._ref_show_id(show)
+                    if show_id is None:
+                        continue
+                    self._ensure_show_ref_keys(show, show_id)
                     show_info = simkl_info(show)
                     show_catalog = (
                         show.get("catalog")
                         or show_info.get("catalog")
-                        or self._infer_show_catalog(get(show, "simkl_id"))
+                        or self._infer_show_catalog(show_id)
                     )
                     extended_seasons = {get(x, "season"): x for x in get(show, "seasons", [])}
                     # We make a dict here to ensure that the season numbers are unique due to a few bad simkl_meta records.
@@ -1343,6 +1347,8 @@ class SimklSyncDatabase(Database):
         return {show_id: pull_show_seasons(int(show_id), catalog, mill_episodes, slug=slug)}
 
     def _infer_show_catalog(self, show_id):
+        if show_id is None:
+            return "tv"
         row = self.fetchone(
             """
             SELECT m.value AS simkl_object, s.info AS show_info
@@ -1359,9 +1365,9 @@ class SimklSyncDatabase(Database):
             ):
                 if not isinstance(info, dict):
                     continue
-            ids = info.get("ids") or {}
-            if ids.get("mal") or info.get("mal_id"):
-                return "anime"
+                ids = info.get("ids") or {}
+                if ids.get("mal") or info.get("mal_id"):
+                    return "anime"
                 if info.get("catalog") == "anime" or info.get("type") == "anime":
                     return "anime"
         return "tv"
@@ -1510,6 +1516,26 @@ class SimklSyncDatabase(Database):
 
         g.log(f"Unsupported legacy browse URL (use Discover menus): {url}", "warning")
         return []
+
+    @staticmethod
+    def _ref_show_id(item: dict) -> int | None:
+        """Resolve Simkl show id from sync rows, bare refs, or nested simkl_object."""
+        if not isinstance(item, dict):
+            return None
+        for key in ("simkl_show_id", "simkl_id"):
+            value = item.get(key)
+            if value is not None:
+                return int(value)
+        value = MetadataHandler.get_simkl_info(item, "simkl_id")
+        return int(value) if value is not None else None
+
+    @staticmethod
+    def _ensure_show_ref_keys(show: dict, show_id: int) -> None:
+        show.setdefault("simkl_id", show_id)
+        show.setdefault("simkl_show_id", show_id)
+        simkl_object = show.setdefault("simkl_object", {})
+        info = simkl_object.setdefault("info", {})
+        info.setdefault("simkl_id", show_id)
 
     @staticmethod
     def _entry_show_simkl_id(entry: dict) -> int | None:
@@ -1667,8 +1693,17 @@ class SimklSyncDatabase(Database):
                 "SELECT COUNT(*) AS episode_count FROM episodes WHERE simkl_show_id=? AND season != 0",
                 (show_id,),
             )
-            if episode_rows and int(episode_rows.get("episode_count") or 0) > 0:
-                self.mark_show_watched(show_id, 1)
+            episode_count = int(episode_rows.get("episode_count") or 0) if episode_rows else 0
+            if episode_count > 0:
+                self.execute_sql(
+                    """
+                    UPDATE episodes
+                    SET watched=1, last_watched_at=COALESCE(last_watched_at, ?)
+                    WHERE simkl_show_id=? AND season != 0
+                    """,
+                    (self._get_datetime_now(), show_id),
+                )
+                self._update_shows_statistics_from_show_id(show_id)
 
     def apply_movie_watch_flags(self, entries):
         """Align movies.watched with Simkl list status, not prior watch history alone."""
