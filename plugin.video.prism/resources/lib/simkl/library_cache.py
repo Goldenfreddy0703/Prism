@@ -217,11 +217,20 @@ def load_library_list_refs(catalog: str, status: str) -> list[dict]:
     Cached simklSync.db rows supply metadata when rendering the list.
     """
     from resources.lib.modules.global_lock import global_lock_running
+    from resources.lib.modules.globals import g
+    from resources.lib.modules.widget_loader import mark_widget_session_loaded
     from resources.lib.simkl.library import fetch_library_refs
     from resources.lib.simkl.library_sort import sort_library_refs
     from resources.lib.simkl.library_status import stamp_library_list_status
 
     sync_running = global_lock_running("simkl.sync")
+
+    if g.FROM_WIDGET and mark_widget_session_loaded(f"library.{catalog}.{status}"):
+        cached = _get_cached_refs(catalog, status)
+        if cached:
+            refs = sort_library_refs(cached, catalog)
+            stamp_library_list_status(catalog, status, refs)
+            return refs
 
     if sync_running:
         cached = _get_cached_refs(catalog, status)

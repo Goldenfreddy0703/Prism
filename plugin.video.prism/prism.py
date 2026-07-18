@@ -31,7 +31,9 @@ def prism_endpoint():
         g.init_globals(sys.argv)
 
         if _sleeping_retry_handler() and not g.abort_requested():
-            with TimeLogger(f"{g.REQUEST_PARAMS.get('action', '')}"):
+            from resources.lib.modules.widget_loader import WidgetLoadGate
+
+            with WidgetLoadGate(), TimeLogger(f"{g.REQUEST_PARAMS.get('action', '')}"):
                 router.dispatch(g.REQUEST_PARAMS)
 
     except Exception:

@@ -1422,6 +1422,9 @@ class GlobalVariables:
             del player
             return
         try:
+            from resources.lib.modules.widget_loader import clear_widget_session_flags
+
+            clear_widget_session_flags()
             g.set_runtime_setting("widget_refreshing", True)
             while not self.abort_requested():
                 if xbmcgui.getCurrentWindowId() == 10000:
