@@ -256,7 +256,7 @@ def normalize_cast_to_actors(cast_list):
             continue
         role = cast_member.get("role", cast_member.get("character", ""))
         order = cast_member.get("order", idx)
-        thumbnail = cast_member.get("thumbnail", cast_member.get("thumb", ""))
+        thumbnail = cast_member.get("thumbnail") or cast_member.get("thumb") or cast_member.get("profile_path") or ""
         try:
             actors.append(xbmc.Actor(name, role, order, thumbnail or ""))
         except Exception:
@@ -570,12 +570,31 @@ class GlobalVariables:
         self.deinit()
 
     def deinit(self):
-        self.ADDON = None
-        del self.ADDON
+        # Keep ADDON alive while prefetch threads (and their enrich workers) are still running.
+        try:
+            from resources.lib.modules.page_prefetch import prefetch_threads_active
+
+            if not prefetch_threads_active():
+                self.ADDON = None
+        except Exception:
+            self.ADDON = None
         self.PLAYLIST = None
-        del self.PLAYLIST
         self.HOME_WINDOW = None
-        del self.HOME_WINDOW
+
+    def ensure_addon(self):
+        """Re-bind xbmcaddon when a background thread outlives the plugin request."""
+        addon = getattr(self, "ADDON", None)
+        if addon is not None:
+            return
+        self.ADDON = xbmcaddon.Addon()
+        if not getattr(self, "ADDON_ID", None):
+            self.ADDON_ID = self.ADDON.getAddonInfo("id")
+        if not getattr(self, "ADDON_NAME", None):
+            self.ADDON_NAME = self.ADDON.getAddonInfo("name")
+        if not getattr(self, "VERSION", None):
+            self.VERSION = self.ADDON.getAddonInfo("version")
+        if not getattr(self, "SETTINGS_CACHE", None):
+            self._init_settings_cache()
 
     def init_globals(self, argv=None, addon_id=None):
         self.IS_ADDON_FIRSTRUN = self.IS_ADDON_FIRSTRUN is None
@@ -603,6 +622,12 @@ class GlobalVariables:
             from resources.lib.database.sync_meta_cache import maybe_prefetch_sync_meta
 
             maybe_prefetch_sync_meta()
+        except Exception:
+            self.log_stacktrace()
+        try:
+            from resources.lib.calendar.simkl_calendar import maybe_prefetch_calendars
+
+            maybe_prefetch_calendars()
         except Exception:
             self.log_stacktrace()
 
@@ -844,6 +869,13 @@ class GlobalVariables:
                 params["action"] = "genericEndpoint"
                 params["endpoint"] = "boxoffice"
                 params["mediatype"] = "shows"
+            from resources.lib.discover.legacy_actions import ANIME_LEGACY_DISCOVER_ACTIONS
+
+            anime_endpoint = ANIME_LEGACY_DISCOVER_ACTIONS.get(params.get("action"))
+            if anime_endpoint:
+                params["action"] = "genericEndpoint"
+                params["endpoint"] = anime_endpoint
+                params["mediatype"] = "anime"
         return params
 
     def _init_paths(self):
@@ -1118,6 +1150,8 @@ class GlobalVariables:
         cache_id = f"A{str(localization_id)}" if addon else f"K{str(localization_id)}"
         text = self.LANGUAGE_CACHE.get(cache_id)
         if not text:
+            if addon:
+                self.ensure_addon()
             text = self.ADDON.getLocalizedString(localization_id) if addon else xbmc.getLocalizedString(localization_id)
             self.LANGUAGE_CACHE.update({cache_id: text})
 

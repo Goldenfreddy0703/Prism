@@ -83,7 +83,7 @@
 				</setting>
 				<setting id="general.widget.stagger" type="boolean" label="30967" help="30968">
 					<level>0</level>
-					<default>true</default>
+					<default>false</default>
 					<control type="toggle"/>
 				</setting>
 				<setting id="general.widget.delay" type="integer" label="30969" help="30970">
@@ -3109,6 +3109,16 @@
 				<setting id="general.fastMenus" type="boolean" label="30848" help="30849">
 					<level>0</level>
 					<default>true</default>
+					<control type="toggle"/>
+				</setting>
+				<setting id="general.prefetchNextPage" type="boolean" label="30978" help="30979">
+					<level>0</level>
+					<default>true</default>
+					<control type="toggle"/>
+				</setting>
+				<setting id="general.prefetchCalendars" type="boolean" label="30980" help="30981">
+					<level>0</level>
+					<default>false</default>
 					<control type="toggle"/>
 				</setting>
 				<setting id="general.force.widget.refresh.playback" type="boolean" label="30477" help="">

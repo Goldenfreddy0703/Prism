@@ -44,13 +44,25 @@ try:
         )
 
     xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=torrentCacheCleanup")')
+    xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=prefetchCalendars")')
+
+    def _service_db_idle() -> bool:
+        try:
+            from resources.lib.modules.page_prefetch import foreground_browse_busy
+
+            return not foreground_browse_busy()
+        except Exception:
+            return True
 
     while not monitor.abortRequested():
-        xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=runMaintenance")')
+        if _service_db_idle():
+            xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=runMaintenance")')
         if not g.wait_for_abort(15):  # Sleep to make sure tokens refreshed during maintenance
-            xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=syncSimklActivities")')
+            if _service_db_idle():
+                xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=syncSimklActivities")')
         if not g.wait_for_abort(15):  # Sleep to make sure we don't possibly clobber settings
-            xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=cleanOrphanedMetadata")')
+            if _service_db_idle():
+                xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=cleanOrphanedMetadata")')
         if not g.wait_for_abort(15):  # Sleep to make sure we don't possibly clobber settings
             xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=updateLocalTimezone")')
         if g.wait_for_abort(60 * randint(13, 17)):

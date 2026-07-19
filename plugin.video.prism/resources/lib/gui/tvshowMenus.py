@@ -89,9 +89,12 @@ class Menus:
 
     @simkl_auth_guard
     def my_shows_collection(self):
+        from resources.lib.discover.renderer import discover_list_kwargs
+
         self.list_builder.show_list_builder(
             self.shows_database.get_collected_shows(g.PAGE),
             no_paging=False,
+            **discover_list_kwargs(),
         )
 
     @simkl_auth_guard
@@ -102,9 +105,12 @@ class Menus:
 
     @simkl_auth_guard
     def my_show_progress(self):
+        from resources.lib.discover.renderer import discover_list_kwargs
+
         self.list_builder.show_list_builder(
             self.shows_database.get_unfinished_collected_shows(g.PAGE),
             no_paging=False,
+            **discover_list_kwargs(),
         )
 
     @simkl_auth_guard
@@ -128,19 +134,26 @@ class Menus:
 
     @simkl_auth_guard
     def my_recent_episodes(self):
+        from resources.lib.discover.renderer import discover_list_kwargs
         from resources.lib.simkl.ids import show_id_from_item
 
         hidden_shows = self.hidden_database.get_hidden_items("calendar", "shows")
         episodes = [
             ep for ep in browse.airing_episodes("today") if show_id_from_item(ep) not in hidden_shows
         ]
-        self.list_builder.mixed_episode_builder(episodes, hide_unaired=False)
+        self.list_builder.mixed_episode_builder(episodes, hide_unaired=False, **discover_list_kwargs())
 
     @simkl_auth_guard
     def my_upcoming_episodes(self):
+        from resources.lib.discover.renderer import discover_list_kwargs
+
         episodes = browse.airing_episodes("tomorrow")[: self.page_limit]
         self.list_builder.mixed_episode_builder(
-            episodes, prepend_date=True, no_paging=True, hide_unaired=False
+            episodes,
+            prepend_date=True,
+            no_paging=True,
+            hide_unaired=False,
+            **discover_list_kwargs(),
         )
 
     def shows_networks(self):
@@ -184,10 +197,9 @@ class Menus:
 
     def shows_search_results(self, query):
         from resources.lib.simkl.search_menus import (
-            filter_search_results,
             normalize_search_query,
-            notify_empty_search,
             persist_search_pagination,
+            render_search_results_list,
         )
 
         query = normalize_search_query(query)
@@ -196,30 +208,7 @@ class Menus:
             return
 
         persist_search_pagination(query)
-        from resources.lib.discover.renderer import discover_list_kwargs
-        from resources.lib.simkl.media_ref import persist_search_results
-        from resources.lib.simkl.search import search_page
-
-        media_list = search_page(
-            "search/show",
-            "shows",
-            g.PAGE,
-            self.page_limit,
-            query,
-        )
-
-        filtered = filter_search_results(media_list)
-        if not filtered:
-            notify_empty_search(30766)
-            return
-        from resources.lib.simkl.menu_helpers import list_filter_kwargs
-
-        refs = persist_search_results("tv", filtered)
-        list_kwargs = {
-            **discover_list_kwargs(),
-            **list_filter_kwargs(hide_unaired=False, hide_watched=False),
-        }
-        self.list_builder.show_list_builder(refs, **list_kwargs)
+        render_search_results_list("tv", query, self.page_limit, self.list_builder)
 
     def show_seasons(self, args):
         from resources.lib.simkl.ids import normalize_action_args, show_id_from_args
@@ -304,10 +293,11 @@ class Menus:
                 g.cancel_directory()
                 return
             from resources.lib.discover.renderer import discover_list_kwargs
+            from resources.lib.modules.meta_enrichment_queue import hybrid_enrich_on_insert
             from resources.lib.simkl.media_ref import enrich_and_persist
 
-            refs = enrich_and_persist("tv", items)
-            self.list_builder.show_list_builder(refs, **discover_list_kwargs())
+            refs = enrich_and_persist("tv", items, enrich=hybrid_enrich_on_insert())
+            self.list_builder.show_discover_builder(refs, **discover_list_kwargs())
 
     @simkl_auth_guard
     def my_watched_episode(self):

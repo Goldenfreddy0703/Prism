@@ -329,6 +329,21 @@ class SimklSyncDatabase(Database):
         self.hide_specials = g.get_bool_setting("general.hideSpecials")
         self.hide_watched = g.get_bool_setting("general.hideWatched")
         self.page_limit = g.get_int_setting("item.limit")
+        self._pending_list_enrichment = None
+
+    def consume_list_enrichment_refs(self) -> tuple[list[dict], str | None]:
+        """Return and clear refs queued during the last paint-first list load."""
+        pending = self._pending_list_enrichment
+        self._pending_list_enrichment = None
+        if not pending:
+            return [], None
+        return pending.get("refs") or [], pending.get("media_type")
+
+    def set_list_enrichment_refs(self, refs: list[dict], media_type: str) -> None:
+        if refs:
+            self._pending_list_enrichment = {"refs": refs, "media_type": media_type}
+        else:
+            self._pending_list_enrichment = None
 
     @cached_property
     def metadataHandler(self):
@@ -659,36 +674,95 @@ class SimklSyncDatabase(Database):
             return _normalize_imdb_id(ext_id)
         return _int_or_none(ext_id)
 
-    def load_cached_provider_meta(self, media_table: str, simkl_id: int, info: dict) -> dict:
-        """Load pickled provider blobs from *_meta for offline art merge."""
+    @staticmethod
+    def _provider_meta_from_blob_map(
+        media_table: str,
+        simkl_id: int,
+        info: dict,
+        blob_map: dict[tuple[str, str], object],
+    ) -> dict:
+        """Map batched *_meta rows onto a single row's provider object dict."""
         result: dict = {}
-        simkl_row = self.fetchone(
-            f"SELECT value FROM {media_table}_meta WHERE id=? AND type='simkl'",
-            (int(simkl_id),),
-        )
-        if simkl_row and simkl_row.get("value"):
-            result["simkl_object"] = simkl_row["value"]
+        simkl_key = (str(int(simkl_id)), "simkl")
+        if simkl_key in blob_map:
+            result["simkl_object"] = blob_map[simkl_key]
 
         for meta_type, id_key in (("tmdb", "tmdb_id"), ("tvdb", "tvdb_id"), ("imdb", "imdb_id")):
-            lookup_id = self._meta_table_lookup_id(meta_type, info.get(id_key))
+            lookup_id = SimklSyncDatabase._meta_table_lookup_id(meta_type, info.get(id_key))
             if lookup_id is None:
                 continue
-            row = self.fetchone(
-                f"SELECT value FROM {media_table}_meta WHERE id=? AND type=?",
-                (lookup_id, meta_type),
-            )
-            if row and row.get("value"):
-                result[f"{meta_type}_object"] = row["value"]
+            meta_key = (str(lookup_id), meta_type)
+            if meta_key in blob_map:
+                result[f"{meta_type}_object"] = blob_map[meta_key]
 
         fanart_id = info.get("tvdb_id") if media_table == "shows" else info.get("tmdb_id")
         fanart_lookup_id = _int_or_none(fanart_id)
         if fanart_lookup_id is not None:
-            row = self.fetchone(
-                f"SELECT value FROM {media_table}_meta WHERE id=? AND type='fanart'",
-                (fanart_lookup_id,),
-            )
-            if row and row.get("value"):
-                result["fanart_object"] = row["value"]
+            fanart_key = (str(fanart_lookup_id), "fanart")
+            if fanart_key in blob_map:
+                result["fanart_object"] = blob_map[fanart_key]
+        return result
+
+    def load_cached_provider_meta(self, media_table: str, simkl_id: int, info: dict) -> dict:
+        """Load pickled provider blobs from *_meta for offline art merge."""
+        return self.load_cached_provider_meta_batch(media_table, [{"simkl_id": simkl_id, "info": info}]).get(
+            int(simkl_id), {}
+        )
+
+    def load_cached_provider_meta_batch(self, media_table: str, rows: list[dict]) -> dict[int, dict]:
+        """Batch-load provider meta blobs for list rows; keyed by simkl_id."""
+        if not rows:
+            return {}
+
+        lookup_ids: set[str | int] = set()
+        row_by_simkl: dict[int, dict] = {}
+
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            info = row.get("info") if isinstance(row.get("info"), dict) else {}
+            simkl_id = row.get("simkl_id") or info.get("simkl_id")
+            if simkl_id is None:
+                continue
+            sid = int(simkl_id)
+            row_by_simkl[sid] = row
+            lookup_ids.add(sid)
+            for meta_type, id_key in (("tmdb", "tmdb_id"), ("tvdb", "tvdb_id"), ("imdb", "imdb_id")):
+                lookup_id = self._meta_table_lookup_id(meta_type, info.get(id_key))
+                if lookup_id is not None:
+                    lookup_ids.add(lookup_id)
+            fanart_id = info.get("tvdb_id") if media_table == "shows" else info.get("tmdb_id")
+            fanart_lookup_id = _int_or_none(fanart_id)
+            if fanart_lookup_id is not None:
+                lookup_ids.add(fanart_lookup_id)
+
+        if not lookup_ids:
+            return {}
+
+        placeholders = ",".join("?" * len(lookup_ids))
+        meta_rows = self.fetchall(
+            f"""
+            SELECT id, type, value
+            FROM {media_table}_meta
+            WHERE id IN ({placeholders})
+              AND type IN ('simkl', 'tmdb', 'tvdb', 'imdb', 'fanart')
+            """,
+            tuple(lookup_ids),
+        )
+        blob_map: dict[tuple[str, str], object] = {}
+        for meta_row in meta_rows or []:
+            if not isinstance(meta_row, dict):
+                continue
+            if meta_row.get("value") is None:
+                continue
+            blob_map[(str(meta_row["id"]), str(meta_row["type"]))] = meta_row["value"]
+
+        result: dict[int, dict] = {}
+        for sid, row in row_by_simkl.items():
+            info = row.get("info") if isinstance(row.get("info"), dict) else {}
+            provider_meta = self._provider_meta_from_blob_map(media_table, sid, info, blob_map)
+            if provider_meta:
+                result[sid] = provider_meta
         return result
 
     @staticmethod

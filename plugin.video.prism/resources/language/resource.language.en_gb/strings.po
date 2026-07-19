@@ -4543,8 +4543,8 @@ msgstr "Fast menus"
 
 #: /resources/settings.xml
 msgctxt "#30849"
-msgid "Skip redundant API/metadata passes when opening browse and search lists. Uses parallel list building when enabled."
-msgstr "Skip redundant API/metadata passes when opening browse and search lists. Uses parallel list building when enabled."
+msgid "Open lists quickly with full cast and artwork across discover, search, genres, library, and more. Page 1 is enriched before the list opens; later pages are warmed by prefetch."
+msgstr "Open lists quickly with full cast and artwork across discover, search, genres, library, and more. Page 1 is enriched before the list opens; later pages are warmed by prefetch."
 
 #: /resources/lib/gui/windows/color_picker.py
 msgctxt "#30850"
@@ -5130,3 +5130,23 @@ msgstr "When the chosen provider is disabled, Prism uses the next available sour
 msgctxt "#30973"
 msgid "Show Advanced Anime Artwork Settings"
 msgstr "Show Advanced Anime Artwork Settings"
+
+#: /resources/settings.xml
+msgctxt "#30978"
+msgid "Prefetch next page"
+msgstr "Prefetch next page"
+
+#: /resources/settings.xml
+msgctxt "#30979"
+msgid "While you browse any paginated list (discover, search, genres, watchlists, library, actor filmography, and more), warm the next page in the background so Next opens with full metadata."
+msgstr "While you browse any paginated list (discover, search, genres, watchlists, library, actor filmography, and more), warm the next page in the background so Next opens with full metadata."
+
+#: /resources/settings.xml
+msgctxt "#30980"
+msgid "Prefetch weekly calendars"
+msgstr "Prefetch weekly calendars"
+
+#: /resources/settings.xml
+msgctxt "#30981"
+msgid "Build movie, TV, and anime weekly airing calendars in the background so they open quickly from Discover."
+msgstr "Build movie, TV, and anime weekly airing calendars in the background so they open quickly from Discover."

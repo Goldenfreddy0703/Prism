@@ -36,9 +36,16 @@ def library_list_page(refs: list) -> tuple[list, bool]:
     if not paginate_simkl_lists():
         return refs, True
 
-    page_limit = g.get_int_setting("item.limit")
-    start = (g.PAGE - 1) * page_limit
-    return refs[start : start + page_limit], False
+    return paginate_refs_for_page(refs, g.PAGE), False
+
+
+def paginate_refs_for_page(refs: list, page: int, *, page_limit: int | None = None) -> list:
+    """Slice a pre-sorted ref list for a 1-based page number."""
+    if not refs:
+        return []
+    page_limit = page_limit or g.get_int_setting("item.limit")
+    start = (max(int(page), 1) - 1) * page_limit
+    return refs[start : start + page_limit]
 
 
 def list_filter_kwargs(**overrides) -> dict:

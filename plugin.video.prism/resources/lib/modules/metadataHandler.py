@@ -1328,7 +1328,15 @@ class MetadataHandler:
                 gaps.append(art_key)
         return gaps
 
-    def merge_row_from_cache(self, row: dict, media_type: str, *, db=None, art_profile: str | None = None) -> dict:
+    def merge_row_from_cache(
+        self,
+        row: dict,
+        media_type: str,
+        *,
+        db=None,
+        art_profile: str | None = None,
+        provider_cache: dict | None = None,
+    ) -> dict:
         """Merge full art, cast, and info from cached provider meta — no API calls."""
         if not isinstance(row, dict):
             return row
@@ -1356,7 +1364,10 @@ class MetadataHandler:
         table = "movies" if provider_type == "movie" else "shows"
         db_object = self._db_object_for_row(row, provider_type)
         db_object["_art_profile"] = art_profile
-        db_object.update(db.load_cached_provider_meta(table, int(simkl_id), info))
+        cached_meta = (provider_cache or {}).get(int(simkl_id))
+        if cached_meta is None:
+            cached_meta = db.load_cached_provider_meta(table, int(simkl_id), info)
+        db_object.update(cached_meta)
         if not any(
             db_object.get(f"{provider}_object")
             for provider in ("simkl", "tmdb", "tvdb", "fanart")
@@ -1381,13 +1392,215 @@ class MetadataHandler:
             merged["cast"] = formatted["cast"]
         return merged
 
+    def _collect_enrichment_ref(
+        self,
+        row: dict,
+        media_type: str,
+        *,
+        meta_cache,
+        art_profile: str | None = None,
+    ) -> dict | None:
+        from resources.lib.modules.artwork_profile import artwork_profile_for_row, provider_media_type
+        from resources.lib.simkl.ids import entity_simkl_id
+
+        if art_profile is None:
+            art_profile = artwork_profile_for_row(row, default_media_type=media_type)
+        provider_type = provider_media_type(art_profile)
+        cache_media_type = "movie" if provider_type == "movie" else "show"
+        gaps = self._row_meta_gaps(row, provider_type, art_profile=art_profile)
+        stale = self._row_needs_refresh(row, provider_type)
+        simkl_id = entity_simkl_id(row) or row.get("simkl_id")
+        if simkl_id is None:
+            return None
+        if stale:
+            meta_cache.delete_row(cache_media_type, int(simkl_id))
+        actionable_gaps = [
+            gap
+            for gap in gaps
+            if not meta_cache.is_gap_miss(cache_media_type, int(simkl_id), gap)
+        ]
+        if not ((actionable_gaps or stale) and self._can_fetch_provider_meta(row)):
+            return None
+        return {
+            "simkl_id": int(simkl_id),
+            "needs_update": True,
+            "_gapfill_gaps": list(actionable_gaps),
+            "_provider_type": provider_type,
+        }
+
+    def merge_list_meta_local(self, rows, media_type: str, *, db=None) -> tuple[list, list[dict]]:
+        """Merge cached provider meta for list paint — no HTTP, no DB writes."""
+        import time
+
+        if not rows:
+            return rows, []
+
+        if db is None:
+            from resources.lib.database.simkl_sync.database import SimklSyncDatabase
+
+            db = SimklSyncDatabase()
+
+        start = time.time()
+        merged: list = []
+        enrichment_refs: list[dict] = []
+        from resources.lib.database.sync_meta_cache import SyncMetaCache
+        from resources.lib.modules.artwork_profile import artwork_profile_for_row, provider_media_type
+
+        meta_cache = SyncMetaCache()
+        movie_rows: list[dict] = []
+        show_rows: list[dict] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            profile = artwork_profile_for_row(row, default_media_type=media_type)
+            if provider_media_type(profile) == "movie":
+                movie_rows.append(row)
+            else:
+                show_rows.append(row)
+
+        provider_cache: dict[int, dict] = {}
+        if movie_rows:
+            provider_cache.update(db.load_cached_provider_meta_batch("movies", movie_rows))
+        if show_rows:
+            provider_cache.update(db.load_cached_provider_meta_batch("shows", show_rows))
+
+        for row in rows:
+            if not isinstance(row, dict):
+                merged.append(row)
+                continue
+            info = row.get("info")
+            if isinstance(info, dict):
+                from resources.lib.simkl.ids import canonicalize_info_identity
+
+                canonicalize_info_identity(info)
+            profile = artwork_profile_for_row(row, default_media_type=media_type)
+            provider_type = provider_media_type(profile)
+            updated = self.merge_row_from_cache(
+                row,
+                provider_type,
+                db=db,
+                art_profile=profile,
+                provider_cache=provider_cache,
+            )
+            ref = self._collect_enrichment_ref(updated, provider_type, meta_cache=meta_cache, art_profile=profile)
+            if ref:
+                enrichment_refs.append(ref)
+            merged.append(updated)
+
+        g.log(
+            f"local_merge_ms={(time.time() - start) * 1000:.0f} rows={len(rows)} enrich_refs={len(enrichment_refs)}",
+            "debug",
+        )
+        return merged, enrichment_refs
+
+    def enrich_list_meta_online(
+        self,
+        refs: list[dict],
+        media_type: str,
+        *,
+        db=None,
+        persist: bool = True,
+    ) -> list:
+        """Fetch missing provider meta online and optionally persist merged rows."""
+        if not refs:
+            return []
+
+        if db is None:
+            from resources.lib.database.simkl_sync.database import SimklSyncDatabase
+
+            db = SimklSyncDatabase()
+
+        from resources.lib.database.sync_meta_cache import SyncMetaCache
+        from resources.lib.modules.artwork_profile import artwork_profile_for_row, provider_media_type
+
+        meta_cache = SyncMetaCache()
+        need_online_refs = [dict(ref) for ref in refs if ref.get("simkl_id") is not None]
+        online_ids: set[int] = set()
+        movie_refs = [ref for ref in need_online_refs if ref.get("_provider_type") == "movie"]
+        tvshow_refs = [ref for ref in need_online_refs if ref.get("_provider_type") != "movie"]
+        if movie_refs:
+            online_ids |= self._online_update_refs(movie_refs, "movie", db)
+        if tvshow_refs:
+            online_ids |= self._online_update_refs(tvshow_refs, "tvshow", db)
+
+        merged_by_id: dict[int, dict] = {}
+        if online_ids:
+            movie_ids = {
+                int(ref["simkl_id"])
+                for ref in movie_refs
+                if ref.get("simkl_id") is not None and int(ref["simkl_id"]) in online_ids
+            }
+            tvshow_ids = {
+                int(ref["simkl_id"])
+                for ref in tvshow_refs
+                if ref.get("simkl_id") is not None and int(ref["simkl_id"]) in online_ids
+            }
+            if movie_ids:
+                merged_by_id.update(self._reload_rows_by_id(db, "movie", movie_ids))
+            if tvshow_ids:
+                merged_by_id.update(self._reload_rows_by_id(db, "tvshow", tvshow_ids))
+
+        ref_by_id = {
+            int(ref["simkl_id"]): ref
+            for ref in need_online_refs
+            if ref.get("simkl_id") is not None
+        }
+        merged = list(merged_by_id.values())
+        for row in merged:
+            if not isinstance(row, dict):
+                continue
+            simkl_id = row.get("simkl_id")
+            if simkl_id is None:
+                continue
+            sid = int(simkl_id)
+            ref = ref_by_id.get(sid)
+            if not ref:
+                continue
+            provider_type = ref.get("_provider_type") or media_type
+            cache_media_type = "movie" if provider_type == "movie" else "show"
+            profile = artwork_profile_for_row(row, default_media_type=provider_type)
+            remaining_gaps = self._row_meta_gaps(row, provider_type, art_profile=profile)
+            if remaining_gaps and self._can_fetch_provider_meta(row):
+                for gap in remaining_gaps:
+                    meta_cache.mark_gap_miss(cache_media_type, sid, gap)
+            else:
+                meta_cache.clear_provider_miss(cache_media_type, sid)
+                meta_cache.set_row(cache_media_type, row)
+
+        if persist and merged:
+            movie_rows = [
+                row
+                for row in merged
+                if isinstance(row, dict) and provider_media_type(artwork_profile_for_row(row, media_type)) == "movie"
+            ]
+            tvshow_rows = [
+                row
+                for row in merged
+                if isinstance(row, dict) and provider_media_type(artwork_profile_for_row(row, media_type)) != "movie"
+            ]
+            if movie_rows:
+                self._persist_list_rows(movie_rows, "movie", db=db, skip_ids=online_ids)
+            if tvshow_rows:
+                self._persist_list_rows(tvshow_rows, "tvshow", db=db, skip_ids=online_ids)
+        return merged
+
     def _online_update_refs(self, refs: list[dict], media_type: str, db) -> set[int]:
         if not refs:
             return set()
         if media_type == "movie":
-            db._update_movies(refs)
+            updater = db if hasattr(db, "_update_movies") else None
+            if updater is None:
+                from resources.lib.database.simkl_sync.movies import SimklSyncDatabase as MoviesDB
+
+                updater = MoviesDB()
+            updater._update_movies(refs)
         else:
-            db._update_mill_format_shows(refs, False, skip_mill=True)
+            updater = db if hasattr(db, "_update_mill_format_shows") else None
+            if updater is None:
+                from resources.lib.database.simkl_sync.shows import SimklSyncDatabase as ShowsDB
+
+                updater = ShowsDB()
+            updater._update_mill_format_shows(refs, False, skip_mill=True)
         return {int(ref["simkl_id"]) for ref in refs if ref.get("simkl_id") is not None}
 
     @staticmethod
@@ -1451,11 +1664,13 @@ class MetadataHandler:
 
             slim = slim_db_row({"info": info, "art": art, "cast": cast})
             db.execute_sql(
-                f"UPDATE {table} SET info=?, art=?, cast=? WHERE simkl_id=?",
+                f"UPDATE {table} SET info=?, art=?, cast=?, meta_hash=?, last_updated=? WHERE simkl_id=?",
                 (
                     slim["info"],
                     slim["art"],
                     slim.get("cast") if isinstance(slim.get("cast"), list) else [],
+                    self.meta_hash,
+                    str(datetime.datetime.now().isoformat()),
                     int(simkl_id),
                 ),
             )
@@ -1481,119 +1696,22 @@ class MetadataHandler:
 
             db = SimklSyncDatabase()
 
-        merged: list = []
-        need_online_refs: list[dict] = []
-        from resources.lib.database.sync_meta_cache import SyncMetaCache
-        from resources.lib.modules.artwork_profile import artwork_profile_for_row, provider_media_type
-        from resources.lib.simkl.ids import canonicalize_info_identity, entity_simkl_id
-
-        meta_cache = SyncMetaCache()
-
-        for row in rows:
-            if not isinstance(row, dict):
-                merged.append(row)
-                continue
-            info = row.get("info")
-            if isinstance(info, dict):
-                canonicalize_info_identity(info)
-            profile = artwork_profile_for_row(row, default_media_type=media_type)
-            provider_type = provider_media_type(profile)
-            cache_media_type = "movie" if provider_type == "movie" else "show"
-            updated = self.merge_row_from_cache(row, provider_type, db=db, art_profile=profile)
-            gaps = self._row_meta_gaps(updated, provider_type, art_profile=profile)
-            stale = self._row_needs_refresh(updated, provider_type)
-            simkl_id = entity_simkl_id(updated) or updated.get("simkl_id")
-            if simkl_id is not None and stale:
-                meta_cache.delete_row(cache_media_type, int(simkl_id))
-            actionable_gaps = [
-                gap
-                for gap in gaps
-                if simkl_id is None or not meta_cache.is_gap_miss(cache_media_type, int(simkl_id), gap)
-            ]
-            if (actionable_gaps or stale) and self._can_fetch_provider_meta(updated):
-                if simkl_id is not None:
-                    need_online_refs.append(
-                        {
-                            "simkl_id": int(simkl_id),
-                            "needs_update": True,
-                            "_gapfill_gaps": tuple(actionable_gaps),
-                            "_provider_type": provider_type,
-                        }
-                    )
-            merged.append(updated)
-
-        online_ids: set[int] = set()
-        movie_refs = [ref for ref in need_online_refs if ref.get("_provider_type") == "movie"]
-        tvshow_refs = [ref for ref in need_online_refs if ref.get("_provider_type") != "movie"]
-        if movie_refs:
-            online_ids |= self._online_update_refs(movie_refs, "movie", db)
-        if tvshow_refs:
-            online_ids |= self._online_update_refs(tvshow_refs, "tvshow", db)
-
-        if online_ids:
-            movie_ids = {
-                int(ref["simkl_id"])
-                for ref in movie_refs
-                if ref.get("simkl_id") is not None and int(ref["simkl_id"]) in online_ids
-            }
+        merged, enrichment_refs = self.merge_list_meta_local(rows, media_type, db=db)
+        if enrichment_refs:
+            self.enrich_list_meta_online(enrichment_refs, media_type, db=db, persist=persist)
+            movie_ids = {int(ref["simkl_id"]) for ref in enrichment_refs if ref.get("_provider_type") == "movie"}
             tvshow_ids = {
-                int(ref["simkl_id"])
-                for ref in tvshow_refs
-                if ref.get("simkl_id") is not None and int(ref["simkl_id"]) in online_ids
+                int(ref["simkl_id"]) for ref in enrichment_refs if ref.get("_provider_type") != "movie"
             }
-            refreshed: dict[int, dict] = {}
+            reloaded: dict[int, dict] = {}
             if movie_ids:
-                refreshed.update(self._reload_rows_by_id(db, "movie", movie_ids))
+                reloaded.update(self._reload_rows_by_id(db, "movie", movie_ids))
             if tvshow_ids:
-                refreshed.update(self._reload_rows_by_id(db, "tvshow", tvshow_ids))
-            for index, row in enumerate(merged):
-                if not isinstance(row, dict):
-                    continue
-                simkl_id = row.get("simkl_id")
-                if simkl_id is not None and int(simkl_id) in refreshed:
-                    merged[index] = refreshed[int(simkl_id)]
-
-        ref_by_id = {
-            int(ref["simkl_id"]): ref
-            for ref in need_online_refs
-            if ref.get("simkl_id") is not None
-        }
-        for row in merged:
-            if not isinstance(row, dict):
-                continue
-            simkl_id = row.get("simkl_id")
-            if simkl_id is None:
-                continue
-            sid = int(simkl_id)
-            ref = ref_by_id.get(sid)
-            if not ref:
-                continue
-            provider_type = ref.get("_provider_type") or media_type
-            cache_media_type = "movie" if provider_type == "movie" else "show"
-            profile = artwork_profile_for_row(row, default_media_type=provider_type)
-            remaining_gaps = self._row_meta_gaps(row, provider_type, art_profile=profile)
-            if remaining_gaps and self._can_fetch_provider_meta(row):
-                for gap in remaining_gaps:
-                    meta_cache.mark_gap_miss(cache_media_type, sid, gap)
-            else:
-                meta_cache.clear_provider_miss(cache_media_type, sid)
-
-        if persist:
-            movie_rows = [
-                row
+                reloaded.update(self._reload_rows_by_id(db, "tvshow", tvshow_ids))
+            merged = [
+                reloaded.get(int(row["simkl_id"]), row) if isinstance(row, dict) and row.get("simkl_id") else row
                 for row in merged
-                if isinstance(row, dict) and provider_media_type(artwork_profile_for_row(row, media_type)) == "movie"
             ]
-            tvshow_rows = [
-                row
-                for row in merged
-                if isinstance(row, dict) and provider_media_type(artwork_profile_for_row(row, media_type)) != "movie"
-            ]
-            if movie_rows:
-                self._persist_list_rows(movie_rows, "movie", db=db, skip_ids=online_ids)
-            if tvshow_rows:
-                self._persist_list_rows(tvshow_rows, "tvshow", db=db, skip_ids=online_ids)
-
         return merged
 
     def gapfill_list_clearlogo(self, rows, media_type: str, *, db=None, persist: bool = False) -> list:

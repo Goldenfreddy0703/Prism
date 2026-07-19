@@ -12,6 +12,7 @@ from resources.lib.simkl.catalog import resolve_item_catalog
 
 @use_cache(cache_hours=12)
 def _simkl_detail_sync_dict(simkl_id: int, catalog: str) -> dict | None:
+    g.ensure_addon()
     from resources.lib.simkl.api_normalize import api_detail_to_sync_dict
     from resources.lib.simkl.related import _fetch_detail
 
@@ -315,18 +316,23 @@ def enrich_sync_items(
 
     sync_cache = _batch_load_sync_cache(rows)
     enricher = partial(_enrich_sync_item, sync_cache=sync_cache)
+
+    def _enrich_row(row: dict) -> dict:
+        g.ensure_addon()
+        return enricher(row)
+
     use_parallel = parallel
     if use_parallel is None:
         use_parallel = g.get_bool_setting("general.fastMenus", True) and len(rows) > 1
 
     if not use_parallel or len(rows) == 1:
-        enriched = [enricher(row) for row in rows]
+        enriched = [_enrich_row(row) for row in rows]
     else:
         from resources.lib.common.thread_pool import ThreadPool
 
         pool = ThreadPool()
         try:
-            enriched = list(pool.executor.map(enricher, rows))
+            enriched = list(pool.executor.map(_enrich_row, rows))
         finally:
             pool.executor.shutdown(wait=True)
 

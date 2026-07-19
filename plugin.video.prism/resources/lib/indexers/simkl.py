@@ -79,6 +79,7 @@ class SimklAPI:
     def session(self):
         import requests
 
+        g.ensure_addon()
         session = requests.Session()
         session.headers.update({"User-Agent": f"{g.ADDON_ID}/{g.ADDON.getAddonInfo('version')}"})
         return session

@@ -25,6 +25,10 @@ from resources.lib.simkl.images import simkl_image_url
 CACHE_SECONDS = 86400
 DEFAULT_WINDOW_DAYS = 7  # Sunday–Saturday calendar week containing today.
 
+
+def prefetch_calendars_enabled() -> bool:
+    return g.get_bool_setting("general.prefetchCalendars", True)
+
 _CALENDAR_RATING_SOURCES = (
     "simkl",
     "imdb",
@@ -42,6 +46,66 @@ def _cache_dir() -> str:
 
 def _cache_file(catalog: str) -> str:
     return os.path.join(_cache_dir(), f"{catalog}.json")
+
+
+def _weekly_cache_file(catalog: str) -> str:
+    return os.path.join(_cache_dir(), f"{catalog}_weekly.json")
+
+
+def _current_week_start() -> str:
+    start, _ = _week_window_bounds()
+    return start.date().isoformat()
+
+
+def _load_weekly_cache(catalog: str) -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]]] | None:
+    path = _weekly_cache_file(catalog)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("week_start") != _current_week_start():
+            return None
+        filtered_rows = payload.get("filtered_rows")
+        metadata_raw = payload.get("metadata_cache")
+        if not isinstance(filtered_rows, list) or not isinstance(metadata_raw, dict):
+            return None
+        metadata_cache: dict[int, dict[str, Any]] = {}
+        for key, value in metadata_raw.items():
+            if not isinstance(value, dict):
+                continue
+            try:
+                metadata_cache[int(key)] = value
+            except (TypeError, ValueError):
+                continue
+        return filtered_rows, metadata_cache
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def _save_weekly_cache(
+    catalog: str,
+    filtered_rows: list[dict[str, Any]],
+    metadata_cache: dict[int, dict[str, Any]],
+) -> None:
+    path = _weekly_cache_file(catalog)
+    payload = {
+        "timestamp": datetime.datetime.now().timestamp(),
+        "week_start": _current_week_start(),
+        "filtered_rows": filtered_rows,
+        "metadata_cache": {str(simkl_id): item for simkl_id, item in metadata_cache.items()},
+    }
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+    except OSError:
+        g.log_stacktrace()
+
+
+def weekly_cache_warm() -> bool:
+    return all(_load_weekly_cache(catalog) is not None for catalog in ("movie", "tv", "anime"))
 
 
 def _load_file_cache(catalog: str) -> list[dict[str, Any]] | None:
@@ -791,11 +855,83 @@ def format_for_calendar(
     return formatted
 
 
-def get_calendar_items(catalog: str, *, window_days: int = DEFAULT_WINDOW_DAYS) -> tuple[list[dict[str, Any]], str]:
+def _build_weekly_calendar(catalog: str, *, window_days: int = DEFAULT_WINDOW_DAYS) -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]]]:
     rows = fetch_calendar_rows(catalog)
     filtered = filter_calendar_rows(rows, catalog=catalog, window_days=window_days)
     metadata_cache = _build_metadata_cache(catalog, filtered)
-    return format_for_calendar(filtered, catalog, metadata_cache), _week_range_label()
+    return filtered, metadata_cache
+
+
+def prefetch_calendar(catalog: str, *, force_refresh: bool = False) -> int:
+    """Warm weekly calendar file cache (CDN rows + metadata) for instant open."""
+    if not prefetch_calendars_enabled():
+        return 0
+    g.ensure_addon()
+    if not force_refresh:
+        cached = _load_weekly_cache(catalog)
+        if cached is not None:
+            g.log(
+                f"Simkl calendar prefetch: {catalog} weekly cache already warm ({len(cached[0])} rows)",
+                "debug",
+            )
+            return len(cached[0])
+
+    filtered, metadata_cache = _build_weekly_calendar(catalog)
+    _save_weekly_cache(catalog, filtered, metadata_cache)
+    g.log(f"Simkl calendar prefetch: built {catalog} weekly cache ({len(filtered)} rows)", "info")
+    return len(filtered)
+
+
+def prefetch_all_calendars(*, force_refresh: bool = False) -> int:
+    g.ensure_addon()
+    total = 0
+    for catalog in ("movie", "tv", "anime"):
+        try:
+            total += prefetch_calendar(catalog, force_refresh=force_refresh)
+        except Exception:
+            g.log(f"Simkl calendar prefetch failed for {catalog}", "warning")
+            g.log_stacktrace()
+    return total
+
+
+def maybe_prefetch_calendars() -> None:
+    """Background warm once per Kodi session when weekly cache is missing."""
+    if not prefetch_calendars_enabled():
+        return
+    if g.get_bool_runtime_setting("calendar.prefetch.session_done"):
+        return
+    if weekly_cache_warm():
+        g.set_runtime_setting("calendar.prefetch.session_done", True)
+        return
+
+    import threading
+
+    def _run():
+        try:
+            g.ensure_addon()
+            prefetch_all_calendars()
+        except Exception:
+            g.log_stacktrace()
+        finally:
+            g.set_runtime_setting("calendar.prefetch.session_done", True)
+
+    threading.Thread(target=_run, daemon=True, name="prism-calendar-prefetch").start()
+
+
+def get_calendar_items(catalog: str, *, window_days: int = DEFAULT_WINDOW_DAYS) -> tuple[list[dict[str, Any]], str]:
+    week_label = _week_range_label()
+    if window_days == DEFAULT_WINDOW_DAYS:
+        cached = _load_weekly_cache(catalog)
+        if cached is not None:
+            filtered_rows, metadata_cache = cached
+            items = format_for_calendar(filtered_rows, catalog, metadata_cache)
+            g.log(f"Simkl calendar: using prefetched {catalog} weekly cache ({len(items)} items)", "info")
+            return items, week_label
+
+    filtered, metadata_cache = _build_weekly_calendar(catalog, window_days=window_days)
+    if window_days == DEFAULT_WINDOW_DAYS:
+        _save_weekly_cache(catalog, filtered, metadata_cache)
+    return format_for_calendar(filtered, catalog, metadata_cache), week_label
 
 
 def open_calendar(catalog: str) -> None:
@@ -804,11 +940,14 @@ def open_calendar(catalog: str) -> None:
         "tv": "Weekly Show Calendar",
         "anime": "Weekly Anime Calendar",
     }
-    g.show_busy_dialog()
+    use_busy = _load_weekly_cache(catalog) is None
+    if use_busy:
+        g.show_busy_dialog()
     try:
         items, week_label = get_calendar_items(catalog)
     finally:
-        g.close_busy_dialog()
+        if use_busy:
+            g.close_busy_dialog()
 
     if not items:
         xbmcgui.Dialog().ok(
@@ -841,6 +980,7 @@ def open_calendar(catalog: str) -> None:
 def _navigate_calendar_selection(selected: dict[str, Any]) -> None:
     from resources.lib.gui.tvshowMenus import Menus as ShowMenus
     from resources.lib.modules.list_builder import ListBuilder
+    from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue, meta_enrichment_background
     from resources.lib.simkl.media_ref import enrich_and_persist, normalize_simkl_item
 
     catalog = selected.get("catalog") or "tv"
@@ -854,16 +994,23 @@ def _navigate_calendar_selection(selected: dict[str, Any]) -> None:
         g.cancel_directory()
         return
 
-    g.show_busy_dialog()
+    fast_path = meta_enrichment_background()
+    if not fast_path:
+        g.show_busy_dialog()
     try:
-        refs = enrich_and_persist(catalog, [sync], force_simkl_meta=True)
+        refs = enrich_and_persist(catalog, [sync], force_simkl_meta=True, enrich=not fast_path)
     finally:
-        g.close_busy_dialog()
+        if not fast_path:
+            g.close_busy_dialog()
 
     if not refs:
         xbmcgui.Dialog().ok(g.ADDON_NAME, "Could not load item details.")
         g.cancel_directory()
         return
+
+    if fast_path:
+        media_type = "movie" if catalog == "movie" else "tvshow"
+        MetaEnrichmentQueue.schedule_run_plugin(refs, media_type, reason="calendar", catalog=catalog)
 
     if catalog == "movie":
         from resources.lib.discover.renderer import discover_list_kwargs

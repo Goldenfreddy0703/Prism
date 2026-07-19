@@ -283,12 +283,18 @@ def persist_search_results(
     items: list[dict[str, Any]],
     *,
     force_simkl_meta: bool = True,
+    enrich: bool | None = None,
 ) -> list[dict[str, Any]]:
     """Enrich + insert search results; return list-builder refs."""
+    from resources.lib.modules.meta_enrichment_queue import hybrid_enrich_on_insert
+
+    if enrich is None:
+        enrich = hybrid_enrich_on_insert()
     return enrich_and_persist(
         catalog,
         items,
         force_simkl_meta=force_simkl_meta,
+        enrich=enrich,
     )
 
 
@@ -299,10 +305,13 @@ def persist_genre_results(
     force_simkl_meta: bool = True,
 ) -> list[dict[str, Any]]:
     """Enrich + insert genre browse results; return list-builder refs."""
+    from resources.lib.modules.meta_enrichment_queue import hybrid_enrich_on_insert
+
     return enrich_and_persist(
         catalog,
         items,
         force_simkl_meta=force_simkl_meta,
+        enrich=hybrid_enrich_on_insert(),
     )
 
 
@@ -386,12 +395,14 @@ def render_mixed_sync_list(
 
     movies, tv, anime = partition_by_catalog(sync_items)
     refs: list[dict] = []
+    from resources.lib.modules.meta_enrichment_queue import hybrid_enrich_on_insert
+
     if movies:
-        refs.extend(enrich_and_persist("movie", movies, force_simkl_meta=True))
+        refs.extend(enrich_and_persist("movie", movies, force_simkl_meta=True, enrich=hybrid_enrich_on_insert()))
     if tv:
-        refs.extend(enrich_and_persist("tv", tv, force_simkl_meta=True))
+        refs.extend(enrich_and_persist("tv", tv, force_simkl_meta=True, enrich=hybrid_enrich_on_insert()))
     if anime:
-        refs.extend(enrich_and_persist("anime", anime, force_simkl_meta=True))
+        refs.extend(enrich_and_persist("anime", anime, force_simkl_meta=True, enrich=hybrid_enrich_on_insert()))
 
     if not refs:
         g.cancel_directory()

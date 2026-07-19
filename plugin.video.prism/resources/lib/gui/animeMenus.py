@@ -1,8 +1,9 @@
-"""Anime browse menus — backed by Simkl discover lists."""
+"""Anime browse menus — discover, search, genres, and library (mirrors movie/tv menu layout)."""
 from functools import cached_property
 
 from resources.lib.indexers import simkl_auth_guard
 from resources.lib.modules.globals import g
+from resources.lib.simkl import browse
 
 
 class Menus:
@@ -10,12 +11,6 @@ class Menus:
         self.page_limit = g.get_int_setting("item.limit")
         self.page_start = (g.PAGE - 1) * self.page_limit
         self.page_end = g.PAGE * self.page_limit
-
-    @cached_property
-    def shows_database(self):
-        from resources.lib.database.simkl_sync.shows import SimklSyncDatabase
-
-        return SimklSyncDatabase()
 
     @cached_property
     def search_history(self):
@@ -29,10 +24,29 @@ class Menus:
 
         return ListBuilder()
 
-    def discover_anime(self):
+    ######################################################
+    # DISCOVER
+    ######################################################
+
+    @staticmethod
+    def discover_anime():
         from resources.lib.discover.renderer import DiscoverRenderer
 
         DiscoverRenderer.show_discover_menu("anime")
+
+    def generic_endpoint(self, endpoint):
+        if not browse.render_discover_endpoint("anime", endpoint):
+            g.cancel_directory()
+
+    def anime_popular_recent(self):
+        browse.render_discover_endpoint("anime", "popular_recent")
+
+    def anime_trending_recent(self):
+        browse.render_discover_endpoint("anime", "trending_recent")
+
+    ######################################################
+    # SEARCH
+    ######################################################
 
     def anime_search_history(self):
         from resources.lib.simkl.search_menus import render_search_history
@@ -64,10 +78,9 @@ class Menus:
 
     def anime_search_results(self, query):
         from resources.lib.simkl.search_menus import (
-            filter_search_results,
             normalize_search_query,
-            notify_empty_search,
             persist_search_pagination,
+            render_search_results_list,
         )
 
         query = normalize_search_query(query)
@@ -76,24 +89,11 @@ class Menus:
             return
 
         persist_search_pagination(query)
-        from resources.lib.discover.renderer import discover_list_kwargs
-        from resources.lib.simkl.media_ref import persist_search_results
-        from resources.lib.simkl.search import search_page
+        render_search_results_list("anime", query, self.page_limit, self.list_builder)
 
-        media_list = search_page(
-            "search/anime",
-            "shows",
-            g.PAGE,
-            self.page_limit,
-            query,
-        )
-
-        filtered = filter_search_results(media_list)
-        if not filtered:
-            notify_empty_search(30766)
-            return
-        refs = persist_search_results("anime", filtered)
-        self.list_builder.anime_discover_builder(refs, **discover_list_kwargs())
+    ######################################################
+    # GENRES
+    ######################################################
 
     def anime_genres(self):
         from resources.lib.simkl.genre_menus import show_genre_picker
@@ -115,64 +115,9 @@ class Menus:
 
         render_anime_multi_genre_list(args, self.page_limit, self.list_builder)
 
-    def _render_discover(self, list_id: str):
-        from resources.lib.discover.renderer import DiscoverRenderer
-
-        DiscoverRenderer().render_list("anime", list_id)
-
-    def anime_shows_popular(self):
-        self._render_discover("anime_popular")
-
-    def anime_shows_trending(self):
-        self._render_discover("anime_week")
-
-    def anime_shows_popular_recent(self):
-        self._render_discover("anime_new_year")
-
-    def anime_shows_trending_recent(self):
-        self._render_discover("anime_week")
-
-    def anime_shows_new(self):
-        self._render_discover("anime_new")
-
-    def anime_shows_played(self):
-        self._render_discover("anime_most_watched")
-
-    def anime_shows_watched(self):
-        self._render_discover("anime_most_watched")
-
-    def anime_shows_collected(self):
-        self._render_discover("anime_completed")
-
-    def anime_shows_anticipated(self):
-        self._render_discover("anime_anticipated")
-
-    def anime_movies_popular(self):
-        self._render_discover("anime_popular")
-
-    def anime_movies_trending(self):
-        self._render_discover("anime_week")
-
-    def anime_movies_popular_recent(self):
-        self._render_discover("anime_new_year")
-
-    def anime_movies_trending_recent(self):
-        self._render_discover("anime_week")
-
-    def anime_movies_new(self):
-        self._render_discover("anime_new")
-
-    def anime_movies_played(self):
-        self._render_discover("anime_most_watched")
-
-    def anime_movies_watched(self):
-        self._render_discover("anime_most_watched")
-
-    def anime_movies_collected(self):
-        self._render_discover("anime_completed")
-
-    def anime_movies_anticipated(self):
-        self._render_discover("anime_anticipated")
+    ######################################################
+    # LIBRARY
+    ######################################################
 
     @staticmethod
     @simkl_auth_guard

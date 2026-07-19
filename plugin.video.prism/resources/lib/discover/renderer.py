@@ -25,11 +25,16 @@ DISCOVER_LIST_KWARGS = {**list_filter_kwargs(), "skip_mill": True}
 
 
 def discover_list_kwargs() -> dict:
-    """Shared list-builder kwargs for browse/search/discover/library menus."""
+    """Shared list-builder kwargs for all fast hybrid menus (discover, search, library, etc.)."""
     kwargs = dict(DISCOVER_LIST_KWARGS)
-    if g.get_bool_setting("general.fastMenus", True):
+    from resources.lib.modules.meta_enrichment_queue import meta_enrichment_background, hybrid_foreground_first_page
+
+    if meta_enrichment_background() and not hybrid_foreground_first_page():
         kwargs["skip_update"] = True
-    kwargs.setdefault("menu_cache", False)
+    if g.get_bool_setting("general.menucaching", True):
+        kwargs.setdefault("menu_cache", True)
+    else:
+        kwargs.setdefault("menu_cache", False)
     return kwargs
 
 # DB lists that load a candidate pool in SQL, rank/filter in Python, then paginate in memory.
@@ -161,6 +166,43 @@ class DiscoverRenderer:
             )
         g.close_directory(g.CONTENT_MENU)
 
+    def _collect_page_items(self, discover_list: DiscoverList, catalog: Catalog, page: int) -> tuple[list, bool]:
+        if discover_list.source == "cdn":
+            raw_items = self._fetch_cdn(discover_list, catalog)
+            sync_items = normalize_simkl_items(raw_items, catalog)
+            page_items = paginate_items(sync_items, page, self.page_size)
+            has_next = page * self.page_size < len(sync_items)
+            return page_items, has_next
+
+        query_name = discover_list.db_query or ""
+        sync_items = self._fetch_db(discover_list, catalog, page=page)
+        if query_name in _POST_FILTER_QUERIES:
+            page_items = paginate_items(sync_items, page, self.page_size)
+            has_next = page * self.page_size < len(sync_items)
+        else:
+            page_items = sync_items
+            has_next = len(sync_items) >= self.page_size
+        return page_items, has_next
+
+    def prefetch_page(self, catalog: Catalog, list_id: str, page: int) -> None:
+        """Warm sync DB + background enrichment for a discover page (no Kodi UI)."""
+        discover_list = get_list(catalog, list_id)
+        if discover_list is None:
+            return
+        from resources.lib.modules.metadata_providers import discover_list_visible
+
+        if not discover_list_visible(discover_list):
+            return
+
+        page_items, _has_next = self._collect_page_items(discover_list, catalog, int(page))
+        if not page_items:
+            return
+
+        refs = enrich_and_persist(catalog, page_items, force_simkl_meta=True, enrich=False)
+        from resources.lib.modules.page_prefetch import enrich_refs_blocking
+
+        enrich_refs_blocking(refs, catalog, reason="prefetch_discover")
+
     def render_list(self, catalog: Catalog, list_id: str):
         discover_list = get_list(catalog, list_id)
         if discover_list is None:
@@ -175,21 +217,7 @@ class DiscoverRenderer:
             g.cancel_directory()
             return
 
-        if discover_list.source == "cdn":
-            raw_items = self._fetch_cdn(discover_list, catalog)
-            sync_items = normalize_simkl_items(raw_items, catalog)
-            page_items = paginate_items(sync_items, g.PAGE, self.page_size)
-            has_next = g.PAGE * self.page_size < len(sync_items)
-        else:
-            query_name = discover_list.db_query or ""
-            sync_items = self._fetch_db(discover_list, catalog)
-            if query_name in _POST_FILTER_QUERIES:
-                page_items = paginate_items(sync_items, g.PAGE, self.page_size)
-                has_next = g.PAGE * self.page_size < len(sync_items)
-            else:
-                # SQL queries already apply LIMIT/OFFSET — do not paginate again in memory.
-                page_items = sync_items
-                has_next = len(sync_items) >= self.page_size
+        page_items, has_next = self._collect_page_items(discover_list, catalog, g.PAGE)
 
         if not page_items:
             empty_msg = (
@@ -201,27 +229,42 @@ class DiscoverRenderer:
             g.cancel_directory()
             return
 
-        refs = enrich_and_persist(catalog, page_items, force_simkl_meta=True)
+        from resources.lib.modules.meta_enrichment_queue import hybrid_enrich_on_insert
 
-        from resources.lib.modules.list_builder import ListBuilder
-        from resources.lib.simkl.field_map import display_rating_priority_for_discover
+        blocking_enrich = hybrid_enrich_on_insert()
+        if blocking_enrich:
+            g.show_busy_dialog()
+        try:
+            refs = enrich_and_persist(
+                catalog,
+                page_items,
+                force_simkl_meta=True,
+                enrich=blocking_enrich,
+            )
 
-        builder_kwargs = discover_list_kwargs()
-        builder_kwargs["display_rating_priority"] = display_rating_priority_for_discover(
-            catalog,
-            discover_list.db_query if discover_list.source == "db" else None,
-        )
-        if has_next:
-            builder_kwargs["next_action"] = "simklDiscoverList"
-            builder_kwargs["has_next_page"] = True
+            from resources.lib.modules.list_builder import ListBuilder
+            from resources.lib.simkl.field_map import display_rating_priority_for_discover
 
-        builder = ListBuilder()
-        if catalog == "anime":
-            builder.anime_discover_builder(refs, **builder_kwargs)
-        elif catalog == "movie":
-            builder.movie_discover_builder(refs, **builder_kwargs)
-        else:
-            builder.show_discover_builder(refs, **builder_kwargs)
+            builder_kwargs = discover_list_kwargs()
+            builder_kwargs["display_rating_priority"] = display_rating_priority_for_discover(
+                catalog,
+                discover_list.db_query if discover_list.source == "db" else None,
+            )
+            if has_next:
+                builder_kwargs["next_action"] = "simklDiscoverList"
+                builder_kwargs["has_next_page"] = True
+                builder_kwargs["list_id"] = list_id
+
+            builder = ListBuilder()
+            if catalog == "anime":
+                builder.anime_discover_builder(refs, **builder_kwargs)
+            elif catalog == "movie":
+                builder.movie_discover_builder(refs, **builder_kwargs)
+            else:
+                builder.show_discover_builder(refs, **builder_kwargs)
+        finally:
+            if blocking_enrich:
+                g.close_busy_dialog()
 
     def _fetch_cdn(self, discover_list: DiscoverList, catalog: Catalog) -> list:
         if not discover_list.cdn_path:
@@ -235,16 +278,17 @@ class DiscoverRenderer:
             return filter_coming_soon_rows(data, catalog=catalog)
         return data
 
-    def _fetch_db(self, discover_list: DiscoverList, catalog: Catalog) -> list[dict]:
+    def _fetch_db(self, discover_list: DiscoverList, catalog: Catalog, *, page: int | None = None) -> list[dict]:
         if not discover_list.db_query:
             return []
 
+        page_num = g.PAGE if page is None else int(page)
         query_name = discover_list.db_query
         catalog_rows = rows_for_catalog(catalog)
         if not catalog_rows:
             return []
 
-        offset = 0 if query_name in _POST_FILTER_QUERIES else (g.PAGE - 1) * self.page_size
+        offset = 0 if query_name in _POST_FILTER_QUERIES else (page_num - 1) * self.page_size
         rows = query_rows(
             catalog_rows,
             query_name,

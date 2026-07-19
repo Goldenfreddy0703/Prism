@@ -16,7 +16,7 @@ _AIRING_TTL = datetime.timedelta(days=4)
 _ENDED_TTL = datetime.timedelta(days=182)
 _ENRICH_MISS_TTL = datetime.timedelta(hours=48)
 _PROVIDER_MISS_TTL = datetime.timedelta(hours=48)
-_PREFETCH_LIMIT = 200
+_PREFETCH_LIMIT = 500
 
 
 def meta_expiry(media_type: str, row: dict[str, Any] | None) -> datetime.timedelta:

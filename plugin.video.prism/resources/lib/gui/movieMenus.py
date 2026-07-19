@@ -88,9 +88,12 @@ class Menus:
 
     @simkl_auth_guard
     def my_movie_collection(self):
+        from resources.lib.discover.renderer import discover_list_kwargs
+
         self.list_builder.movie_menu_builder(
             self.movies_database.get_collected_movies(g.PAGE),
             no_paging=False,
+            **discover_list_kwargs(),
         )
 
     @simkl_auth_guard
@@ -136,10 +139,9 @@ class Menus:
 
     def movies_search_results(self, query):
         from resources.lib.simkl.search_menus import (
-            filter_search_results,
             normalize_search_query,
-            notify_empty_search,
             persist_search_pagination,
+            render_search_results_list,
         )
 
         query = normalize_search_query(query)
@@ -148,30 +150,7 @@ class Menus:
             return
 
         persist_search_pagination(query)
-        from resources.lib.discover.renderer import discover_list_kwargs
-        from resources.lib.simkl.media_ref import persist_search_results
-        from resources.lib.simkl.search import search_page
-
-        media_list = search_page(
-            "search/movie",
-            "movies",
-            g.PAGE,
-            self.page_limit,
-            query,
-        )
-
-        filtered = filter_search_results(media_list)
-        if not filtered:
-            notify_empty_search(30766)
-            return
-        from resources.lib.simkl.menu_helpers import list_filter_kwargs
-
-        refs = persist_search_results("movie", filtered)
-        list_kwargs = {
-            **discover_list_kwargs(),
-            **list_filter_kwargs(hide_unaired=False, hide_watched=False),
-        }
-        self.list_builder.movie_discover_builder(refs, **list_kwargs)
+        render_search_results_list("movie", query, self.page_limit, self.list_builder)
 
     def movies_related(self, args):
         from resources.lib.simkl.related import render_recommendations
@@ -194,10 +173,11 @@ class Menus:
             g.cancel_directory()
             return
         from resources.lib.discover.renderer import discover_list_kwargs
+        from resources.lib.modules.meta_enrichment_queue import hybrid_enrich_on_insert
         from resources.lib.simkl.media_ref import enrich_and_persist
 
-        refs = enrich_and_persist("movie", items)
-        self.list_builder.movie_menu_builder(refs, **discover_list_kwargs())
+        refs = enrich_and_persist("movie", items, enrich=hybrid_enrich_on_insert())
+        self.list_builder.movie_discover_builder(refs, **discover_list_kwargs())
 
     def movies_genres(self):
         from resources.lib.simkl.genre_menus import show_genre_picker

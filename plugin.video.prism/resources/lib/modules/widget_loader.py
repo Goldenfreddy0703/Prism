@@ -1,9 +1,8 @@
-"""Serialize skin widget directory loads so multiple widgets do not hammer Simkl/DB at once."""
+"""Serialize optional skin widget inter-load delay (reads are not globally locked)."""
 from __future__ import annotations
 
 import time
 
-from resources.lib.modules.global_lock import GlobalLock
 from resources.lib.modules.globals import g
 
 _LAST_LOAD_MS_KEY = "widget.last_load_ms"
@@ -13,7 +12,7 @@ _SESSION_PREFIX = "widget.session."
 def widget_stagger_enabled() -> bool:
     if g.IS_SERVICE or not g.FROM_WIDGET:
         return False
-    if not g.get_bool_setting("general.widget.stagger", True):
+    if not g.get_bool_setting("general.widget.stagger", False):
         return False
     return True
 
@@ -61,36 +60,22 @@ def clear_widget_session_flags() -> None:
 
 
 class WidgetLoadGate:
-    """Context manager: one widget directory request at a time + optional inter-load delay."""
-
-    def __init__(self):
-        self._lock: GlobalLock | None = None
-
-    def _apply_delay(self) -> None:
-        delay_ms = max(0, g.get_int_setting("general.widget.delay", 1000))
-        if delay_ms <= 0:
-            return
-        last_ms = g.get_int_runtime_setting(_LAST_LOAD_MS_KEY, 0)
-        wait_ms = delay_ms - (int(time.time() * 1000) - last_ms)
-        if wait_ms > 0:
-            g.log(f"Widget stagger waiting {wait_ms}ms before {widget_request_key()}", "debug")
-            g.wait_for_abort(wait_ms / 1000.0)
+    """Context manager: optional inter-widget delay only (parallel reads allowed)."""
 
     def __enter__(self):
-        if not widget_stagger_enabled():
-            return self
-        self._lock = GlobalLock("widget.load")
-        self._lock.__enter__()
-        self._apply_delay()
-        g.log(f"Widget load started: {widget_request_key()}", "debug")
+        if widget_stagger_enabled():
+            delay_ms = max(0, g.get_int_setting("general.widget.delay", 1000))
+            if delay_ms > 0:
+                last_ms = g.get_int_runtime_setting(_LAST_LOAD_MS_KEY, 0)
+                wait_ms = delay_ms - (int(time.time() * 1000) - last_ms)
+                if wait_ms > 0:
+                    g.log(f"Widget stagger waiting {wait_ms}ms before {widget_request_key()}", "debug")
+                    g.wait_for_abort(wait_ms / 1000.0)
+            g.log(f"Widget load started: {widget_request_key()}", "debug")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if not self._lock:
-            return False
-        try:
-            return self._lock.__exit__(exc_type, exc_val, exc_tb)
-        finally:
+        if widget_stagger_enabled():
             g.set_runtime_setting(_LAST_LOAD_MS_KEY, int(time.time() * 1000))
             g.log(f"Widget load finished: {widget_request_key()}", "debug")
-            self._lock = None
+        return False

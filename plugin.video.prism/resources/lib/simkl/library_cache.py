@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 
 from resources.lib.indexers.simkl import SimklAPI
+from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue, meta_enrichment_background
 
 ACTIVITY_CHECK_SECONDS = 120
 CACHE_HOURS_FALLBACK = 24
@@ -209,6 +210,51 @@ def should_refresh_library_cache(catalog: str, status: str) -> bool:
     return not _cache_is_fresh(_get_cached_last_updated(catalog, status))
 
 
+def _schedule_library_refresh(catalog: str, status: str) -> None:
+    import xbmc
+
+    from resources.lib.common import tools
+    from resources.lib.modules.globals import g
+
+    url = g.create_url(
+        g.BASE_URL,
+        {
+            "action": "refreshLibraryCache",
+            "action_args": tools.construct_action_args({"catalog": catalog, "status": status}),
+        },
+    )
+    xbmc.executebuiltin(f'RunPlugin("{url}")')
+
+
+def refresh_library_cache_background(catalog: str | None, status: str | None) -> None:
+    """Background refresh of library membership cache after stale-while-revalidate paint."""
+    from resources.lib.modules.global_lock import global_lock_running
+    from resources.lib.modules.globals import g
+    from resources.lib.simkl.library import fetch_library_refs
+    from resources.lib.simkl.library_sort import sort_library_refs
+    from resources.lib.simkl.library_status import stamp_library_list_status
+
+    if not catalog or not status:
+        return
+
+    sync_running = global_lock_running("simkl.sync")
+    refs = fetch_library_refs(catalog, status=status, skip_persist=sync_running)
+    if refs and not sync_running:
+        _save_cached_refs(catalog, status, refs)
+    if refs:
+        stamp_library_list_status(catalog, status, sort_library_refs(refs, catalog))
+        movie_refs = [{"simkl_id": ref["simkl_id"]} for ref in refs if ref.get("catalog") == "movie"]
+        show_refs = [
+            {"simkl_id": ref["simkl_id"]}
+            for ref in refs
+            if ref.get("catalog") in ("tv", "anime")
+        ]
+        if movie_refs:
+            MetaEnrichmentQueue.schedule_run_plugin(movie_refs, "movie", reason="library", catalog="movie")
+        if show_refs:
+            MetaEnrichmentQueue.schedule_run_plugin(show_refs, "tvshow", reason="library", catalog=catalog)
+
+
 def load_library_list_refs(catalog: str, status: str) -> list[dict]:
     """
     Return list-builder refs for a My Library status list.
@@ -240,6 +286,12 @@ def load_library_list_refs(catalog: str, status: str) -> list[dict]:
             return refs
 
     if should_refresh_library_cache(catalog, status):
+        cached = _get_cached_refs(catalog, status)
+        if cached and meta_enrichment_background():
+            _schedule_library_refresh(catalog, status)
+            refs = sort_library_refs(cached, catalog)
+            stamp_library_list_status(catalog, status, refs)
+            return refs
         refs = fetch_library_refs(catalog, status=status, skip_persist=sync_running)
         if refs:
             stamp_library_list_status(catalog, status, refs)

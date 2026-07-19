@@ -1,3 +1,4 @@
+import json
 import threading
 from abc import ABCMeta
 from abc import abstractmethod
@@ -139,6 +140,23 @@ class RuntimeSettingsCache(SettingsCache):
     def _setting_key(self, setting_id):
         return f"{self._KODI_ADDON_ID}.{self._KODI_ADDON_VERSION}.{self._SETTINGS_PREFIX}.{setting_id}"
 
+    @staticmethod
+    def _encode_runtime_value(value):
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, separators=(",", ":"))
+        return str(value)
+
+    @staticmethod
+    def _decode_runtime_value(value, default_value=None):
+        if value is None or value == "":
+            return default_value if default_value is not None else None
+        if isinstance(value, str) and value[:1] in ("{", "["):
+            try:
+                return json.loads(value)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+        return value
+
     def set_setting(self, setting_id, value):
         """
         Set a runtime setting value
@@ -150,7 +168,10 @@ class RuntimeSettingsCache(SettingsCache):
         :param value: The value to store in settings
         :type value: str|float|int|bool
         """
-        self._KODI_HOME_WINDOW.setProperty(self._setting_key(setting_id), str(value))
+        self._KODI_HOME_WINDOW.setProperty(
+            self._setting_key(setting_id),
+            self._encode_runtime_value(value),
+        )
 
     def update_settings(self, dictionary):
         super().update_settings(dictionary)
@@ -161,10 +182,7 @@ class RuntimeSettingsCache(SettingsCache):
     def get_setting(self, setting_id, default_value=None):
         try:
             value = self._KODI_HOME_WINDOW.getProperty(self._setting_key(setting_id))
-            if value is None or value == "":
-                return default_value if default_value is not None else None
-            else:
-                return value
+            return self._decode_runtime_value(value, default_value)
         except (ValueError, TypeError):
             return None
 

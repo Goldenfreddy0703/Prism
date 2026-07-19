@@ -38,7 +38,21 @@ DISCOVER_ENDPOINTS: dict[str, dict[str, str]] = {
         "collected": "tv_top_simkl",
         "new": "tv_new",
     },
+    "anime": {
+        "trending": "anime_week",
+        "popular": "anime_popular",
+        "played": "anime_most_watched",
+        "watched": "anime_most_watched",
+        "anticipated": "anime_anticipated",
+        "collected": "anime_completed",
+        "new": "anime_new",
+        "popular_recent": "anime_new_year",
+        "trending_recent": "anime_week",
+    },
 }
+
+# Re-export for callers that already import from browse.
+from resources.lib.discover.legacy_actions import ANIME_LEGACY_DISCOVER_ACTIONS  # noqa: E402
 
 
 SIMKL_MOVIE_GENRE_SLUGS = (

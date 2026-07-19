@@ -552,6 +552,16 @@ def run_maintenance():
         g.log(f"Failed to update API keys: {e}", 'error')
 
     try:
+        from resources.lib.calendar.simkl_calendar import prefetch_all_calendars, prefetch_calendars_enabled
+
+        if prefetch_calendars_enabled():
+            warmed = prefetch_all_calendars()
+            if warmed:
+                g.log(f"Calendar prefetch warmed {warmed} weekly rows", "debug")
+    except Exception as e:
+        g.log(f"Failed to prefetch weekly calendars: {e}", "warning")
+
+    try:
         account_premium_status_checks()
     except Exception as e:
         g.log(f"Failed to check account status: {e}", 'error')
@@ -574,6 +584,12 @@ def run_maintenance():
             g.log(f"Failed to cleanup PM transfers: {e}", 'error')
 
     # clean_deprecated_settings()
+    from resources.lib.modules.page_prefetch import foreground_browse_busy
+
+    if foreground_browse_busy():
+        g.log("Skipping maintenance DB work while browse prefetch/enrich is active", "debug")
+        return
+
     cache.Cache().check_cleanup()
     try:
         from resources.lib.database.sync_meta_cache import SyncMetaCache
@@ -581,6 +597,14 @@ def run_maintenance():
         SyncMetaCache().prefetch()
     except Exception as e:
         g.log(f"Failed to prefetch sync meta cache: {e}", "warning")
+    try:
+        from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue
+
+        scheduled = MetaEnrichmentQueue.schedule_needs_update()
+        if scheduled:
+            g.log(f"Queued {scheduled} items for background meta enrichment", "debug")
+    except Exception as e:
+        g.log(f"Failed to queue meta enrichment: {e}", "warning")
     try:
         from resources.lib.modules.cache_maintenance import run_cache_maintenance
 

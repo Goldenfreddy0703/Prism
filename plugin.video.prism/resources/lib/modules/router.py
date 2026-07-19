@@ -1,6 +1,7 @@
 import xbmc
 import xbmcgui
 
+from resources.lib.discover.legacy_actions import ANIME_LEGACY_DISCOVER_ACTIONS
 from resources.lib.modules.exceptions import NoPlayableSourcesException
 from resources.lib.modules.globals import g
 
@@ -39,6 +40,8 @@ def dispatch(params):
     elif action == "genericEndpoint":
         if mediatype == "movies":
             from resources.lib.gui.movieMenus import Menus
+        elif mediatype == "anime":
+            from resources.lib.gui.animeMenus import Menus
         else:
             from resources.lib.gui.tvshowMenus import Menus
         Menus().generic_endpoint(endpoint)
@@ -323,101 +326,14 @@ def dispatch(params):
 
     # ANIME SECTION - Discover Anime (TV Shows + Movies)
     elif action == "discoverAnime":
-        from resources.lib.gui import animeMenus
+        from resources.lib.gui.animeMenus import Menus
 
-        animeMenus.Menus().discover_anime()
+        Menus.discover_anime()
 
-    # Anime TV Shows
-    elif action == "animeShowsPopular":
-        from resources.lib.gui import animeMenus
+    elif action in ANIME_LEGACY_DISCOVER_ACTIONS:
+        from resources.lib.gui.animeMenus import Menus
 
-        animeMenus.Menus().anime_shows_popular()
-
-    elif action == "animeShowsTrending":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_shows_trending()
-
-    elif action == "animeShowsPopularRecent":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_shows_popular_recent()
-
-    elif action == "animeShowsTrendingRecent":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_shows_trending_recent()
-
-    elif action == "animeShowsNew":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_shows_new()
-
-    elif action == "animeShowsPlayed":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_shows_played()
-
-    elif action == "animeShowsWatched":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_shows_watched()
-
-    elif action == "animeShowsCollected":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_shows_collected()
-
-    elif action == "animeShowsAnticipated":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_shows_anticipated()
-
-    # Anime Movies
-    elif action == "animeMoviesPopular":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_movies_popular()
-
-    elif action == "animeMoviesTrending":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_movies_trending()
-
-    elif action == "animeMoviesPopularRecent":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_movies_popular_recent()
-
-    elif action == "animeMoviesTrendingRecent":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_movies_trending_recent()
-
-    elif action == "animeMoviesNew":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_movies_new()
-
-    elif action == "animeMoviesPlayed":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_movies_played()
-
-    elif action == "animeMoviesWatched":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_movies_watched()
-
-    elif action == "animeMoviesCollected":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_movies_collected()
-
-    elif action == "animeMoviesAnticipated":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().anime_movies_anticipated()
+        Menus().generic_endpoint(ANIME_LEGACY_DISCOVER_ACTIONS[action])
 
     elif action == "myAnime":
         from resources.lib.gui import animeMenus
@@ -1030,6 +946,16 @@ def dispatch(params):
 
         Menus().movie_trending_recent()
 
+    elif action == "animePopularRecent":
+        from resources.lib.gui.animeMenus import Menus
+
+        Menus().anime_popular_recent()
+
+    elif action == "animeTrendingRecent":
+        from resources.lib.gui.animeMenus import Menus
+
+        Menus().anime_trending_recent()
+
     elif action == "downloadManagerView":
         from resources.lib.gui.windows.download_manager import DownloadManager
         from resources.lib.database.skinManager import SkinManager
@@ -1061,6 +987,29 @@ def dispatch(params):
         from resources.lib.common.maintenance import run_maintenance
 
         run_maintenance()
+
+    elif action == "prefetchCalendars":
+        from resources.lib.calendar.simkl_calendar import prefetch_all_calendars, prefetch_calendars_enabled
+
+        if prefetch_calendars_enabled():
+            prefetch_all_calendars()
+
+    elif action == "processMetaEnrichmentQueue":
+        from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue
+
+        try:
+            MetaEnrichmentQueue.process_request(action_args)
+        except Exception:
+            g.log_stacktrace()
+
+    elif action == "refreshLibraryCache":
+        from resources.lib.simkl.library_cache import refresh_library_cache_background
+
+        if isinstance(action_args, dict):
+            refresh_library_cache_background(
+                action_args.get("catalog"),
+                action_args.get("status"),
+            )
 
     elif action == "torrentCacheCleanup":
         from resources.lib.database import torrentCache

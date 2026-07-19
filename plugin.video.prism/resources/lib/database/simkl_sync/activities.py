@@ -94,6 +94,13 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
             self._update_all_shows_statisics()
             self._update_all_season_statistics()
 
+        try:
+            from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue
+
+            MetaEnrichmentQueue.schedule_needs_update()
+        except Exception:
+            g.log_stacktrace()
+
         return self.sync_errors
 
     def _finalize_process(self, update_time):

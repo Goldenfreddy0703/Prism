@@ -78,6 +78,52 @@ def persist_search_pagination(action_args: Any) -> None:
         g.REQUEST_PARAMS["action_args"] = {"query": str(action_args).strip()}
 
 
+SEARCH_RESULTS_ACTIONS = {
+    "movie": "moviesSearchResults",
+    "tv": "showsSearchResults",
+    "anime": "animeSearchResults",
+}
+
+_SEARCH_API = {
+    "movie": ("search/movie", "movies"),
+    "tv": ("search/show", "shows"),
+    "anime": ("search/anime", "shows"),
+}
+
+
+def render_search_results_list(catalog: str, query: str, page_limit: int, list_builder) -> None:
+    """Render a paginated Simkl title search with hybrid page-1 enrich + prefetch for next page."""
+    from resources.lib.discover.renderer import discover_list_kwargs
+    from resources.lib.simkl.menu_helpers import list_filter_kwargs
+    from resources.lib.simkl.media_ref import persist_search_results
+    from resources.lib.simkl.search import search_page
+
+    url, media_type = _SEARCH_API[catalog]
+    media_list = search_page(url, media_type, g.PAGE, page_limit, query)
+    filtered = filter_search_results(media_list)
+    if not filtered:
+        notify_empty_search(30766)
+        return
+
+    refs = persist_search_results(catalog, filtered)
+    has_next = len(filtered) >= page_limit
+    list_kwargs = {
+        **discover_list_kwargs(),
+        **list_filter_kwargs(hide_unaired=False, hide_watched=False),
+        "has_next_page": has_next,
+        "next_action": SEARCH_RESULTS_ACTIONS[catalog],
+        "next_args": {"query": query},
+        "enrichment_reason": "search",
+    }
+
+    if catalog == "movie":
+        list_builder.movie_discover_builder(refs, **list_kwargs)
+    elif catalog == "anime":
+        list_builder.anime_discover_builder(refs, **list_kwargs)
+    else:
+        list_builder.show_discover_builder(refs, **list_kwargs)
+
+
 
 
 

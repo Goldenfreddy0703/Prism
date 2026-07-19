@@ -64,6 +64,10 @@ class ListBuilder:
         :param params: Parameters to send to common_menu_builder method
         :return: List list_items if smart_play Kwarg is True else None
         """
+        from resources.lib.modules.show_metadata import ensure_show_metadata_async
+
+        ensure_show_metadata_async(show_id)
+        self._fast_list_defaults(params)
         return self._common_menu_builder(
             shows.SimklSyncDatabase().get_season_list(show_id, **self._apply_list_filters(params)),
             g.CONTENT_SEASON,
@@ -90,10 +94,14 @@ class ListBuilder:
                 from resources.lib.simkl.ids import resolve_season_filter
 
                 _, season = resolve_season_filter(show_id, season=simkl_season, season_row_id=simkl_season)
+        from resources.lib.modules.show_metadata import ensure_show_metadata_async
+
+        ensure_show_metadata_async(show_id)
         params["is_folder"] = False
         params["is_playable"] = True
         action = "getSources"
 
+        self._fast_list_defaults(params)
         return self._common_menu_builder(
             shows.SimklSyncDatabase().get_episode_list(
                 show_id,
@@ -119,8 +127,6 @@ class ListBuilder:
         action = "getSources"
 
         self._fast_list_defaults(params)
-        # Episode lists still need provider metadata on first load (cached in sync DB after).
-        params["skip_update"] = False
         return self._common_menu_builder(
             shows.SimklSyncDatabase().get_mixed_episode_list(media_list, **self._apply_list_filters(params)),
             g.CONTENT_EPISODE,
@@ -128,12 +134,65 @@ class ListBuilder:
             **params,
         )
 
+    @staticmethod
+    def _schedule_next_page_prefetch(page_params: dict | None) -> None:
+        if not page_params:
+            return
+        from resources.lib.modules.page_prefetch import PagePrefetch
+
+        PagePrefetch.schedule(page_params)
+
+    @staticmethod
+    def _build_next_page_params(
+        *,
+        no_paging: bool,
+        has_next_page: bool,
+        list_items: list,
+        page_limit: int,
+        next_action: str | None,
+        next_args,
+        catalog_hint: str | None = None,
+        list_id: str | None = None,
+    ) -> dict | None:
+        if (
+            g.FROM_WIDGET
+            and g.get_bool_setting("general.widget.hide_next")
+        ) or no_paging:
+            return None
+        if not (has_next_page or len(list_items) >= page_limit):
+            return None
+        page_params = dict(g.REQUEST_PARAMS)
+        page_params["page"] = g.PAGE + 1
+        if next_args:
+            page_params["action_args"] = next_args
+        elif page_params.get("action_args") is not None:
+            page_params["action_args"] = page_params.get("action_args")
+        page_params["special_sort"] = "bottom"
+        if next_action:
+            page_params["action"] = next_action
+        if catalog_hint in ("movie", "tv", "anime"):
+            page_params["catalog"] = catalog_hint
+        if list_id:
+            page_params["list_id"] = list_id
+        return page_params
+
     def _fast_list_defaults(self, params: dict) -> None:
-        """When Fast menus is on, gap-fill provider meta from cache then fetch any missing pieces."""
+        """Fast menus: page 1 blocks for full metadata; later pages use prefetch + local merge."""
         if not g.get_bool_setting("general.fastMenus", True):
             return
-        params.setdefault("skip_update", True)
+        from resources.lib.modules.meta_enrichment_queue import hybrid_foreground_first_page
+
         params.setdefault("skip_mill", True)
+        if not hybrid_foreground_first_page():
+            params.setdefault("skip_update", True)
+
+    @staticmethod
+    def _schedule_background_enrichment(refs: list[dict] | None, media_type: str | None, *, reason: str = "list_open", catalog: str | None = None) -> None:
+        if not refs or not media_type:
+            return
+        from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue
+
+        MetaEnrichmentQueue.schedule_run_plugin(refs, media_type, reason=reason, catalog=catalog)
 
     def show_list_builder(self, media_list, **params):
         """
@@ -151,10 +210,15 @@ class ListBuilder:
             action = "forceResumeShow"
 
         self._fast_list_defaults(params)
+        show_db = shows.SimklSyncDatabase()
+        media_rows = show_db.get_show_list(media_list, **self._apply_list_filters(params))
+        enrichment_refs, enrichment_media_type = show_db.consume_list_enrichment_refs()
         self._common_menu_builder(
-            shows.SimklSyncDatabase().get_show_list(media_list, **self._apply_list_filters(params)),
+            media_rows,
             content_type,
             action,
+            enrichment_refs=enrichment_refs,
+            enrichment_media_type=enrichment_media_type,
             **params,
         )
 
@@ -170,10 +234,15 @@ class ListBuilder:
         action = "getSources"
 
         self._fast_list_defaults(params)
+        movie_db = movies.SimklSyncDatabase()
+        media_rows = movie_db.get_movie_list(media_list, **self._apply_list_filters(params))
+        enrichment_refs, enrichment_media_type = movie_db.consume_list_enrichment_refs()
         self._common_menu_builder(
-            movies.SimklSyncDatabase().get_movie_list(media_list, **self._apply_list_filters(params)),
+            media_rows,
             g.CONTENT_MOVIE,
             action,
+            enrichment_refs=enrichment_refs,
+            enrichment_media_type=enrichment_media_type,
             **params,
         )
 
@@ -257,8 +326,8 @@ class ListBuilder:
         *,
         skip_mill=True,
         skip_update=False,
-    ) -> tuple[dict[int, dict], dict[int, dict]]:
-        """Run sync DB update (Simkl meta + TMDB/TVDB/fanart) and return menu rows by simkl_id."""
+    ) -> tuple[dict[int, dict], dict[int, dict], list[tuple[list[dict], str]]]:
+        """Run sync DB local merge and return menu rows plus pending enrichment batches."""
         filter_params = {
             "hide_unaired": False,
             "hide_watched": False,
@@ -278,15 +347,24 @@ class ListBuilder:
 
         movie_rows: dict[int, dict] = {}
         show_rows: dict[int, dict] = {}
+        enrichment_batches: list[tuple[list[dict], str]] = []
         if movie_refs:
-            for row in movies.SimklSyncDatabase().get_movie_list(movie_refs, **filter_params) or []:
+            movie_db = movies.SimklSyncDatabase()
+            for row in movie_db.get_movie_list(movie_refs, **filter_params) or []:
                 if isinstance(row, dict) and row.get("simkl_id") is not None and isinstance(row.get("info"), dict):
                     movie_rows[int(row["simkl_id"])] = row
+            refs, media_type = movie_db.consume_list_enrichment_refs()
+            if refs and media_type:
+                enrichment_batches.append((refs, media_type))
         if show_refs:
-            for row in shows.SimklSyncDatabase().get_show_list(show_refs, **filter_params) or []:
+            show_db = shows.SimklSyncDatabase()
+            for row in show_db.get_show_list(show_refs, **filter_params) or []:
                 if isinstance(row, dict) and row.get("simkl_id") is not None and isinstance(row.get("info"), dict):
                     show_rows[int(row["simkl_id"])] = row
-        return movie_rows, show_rows
+            refs, media_type = show_db.consume_list_enrichment_refs()
+            if refs and media_type:
+                enrichment_batches.append((refs, media_type))
+        return movie_rows, show_rows, enrichment_batches
 
     def _mixed_media_from_sync_dicts(
         self,
@@ -309,18 +387,25 @@ class ListBuilder:
         prepend_date = params.pop("prepend_date", False)
         next_args = params.pop("next_args", None)
         has_next_page = params.pop("has_next_page", False)
+        list_id = params.pop("list_id", None)
         skip_mill = params.pop("skip_mill", True)
         skip_update = params.pop("skip_update", None)
         if skip_update is None:
-            skip_update = g.get_bool_setting("general.fastMenus", True)
+            from resources.lib.modules.meta_enrichment_queue import meta_enrichment_background, hybrid_foreground_first_page
+
+            skip_update = meta_enrichment_background() and not hybrid_foreground_first_page()
         display_rating_priority = params.pop("display_rating_priority", None)
         menu_cache = params.pop("menu_cache", None)
+        enrichment_reason = params.pop("enrichment_reason", "discover")
         params.pop("hide_unaired", None)
         params.pop("hide_watched", None)
         params.pop("hide_specials", None)
         params.pop("ignore_cache", None)
 
-        movie_rows, show_rows = self._load_milled_menu_rows(
+        import time
+
+        paint_start = time.time()
+        movie_rows, show_rows, enrichment_batches = self._load_milled_menu_rows(
             media_list,
             skip_mill=skip_mill,
             skip_update=skip_update,
@@ -400,29 +485,40 @@ class ListBuilder:
             raise
         finally:
             if not smart_play:
-                if (
-                    not (g.FROM_WIDGET and g.get_bool_setting("general.widget.hide_next"))
-                    and not no_paging
-                    and (has_next_page or len(list_items) >= self.page_limit)
-                ):
-                    page_params = dict(g.REQUEST_PARAMS)
-                    page_params["page"] = g.PAGE + 1
-                    if next_args:
-                        page_params["action_args"] = next_args
-                    elif page_params.get("action_args") is not None:
-                        page_params["action_args"] = page_params.get("action_args")
-                    page_params.update({"special_sort": "bottom"})
-                    if next_action:
-                        page_params["action"] = next_action
-                    if catalog_hint in ("movie", "tv", "anime"):
-                        page_params["catalog"] = catalog_hint
+                page_params = self._build_next_page_params(
+                    no_paging=no_paging,
+                    has_next_page=has_next_page,
+                    list_items=list_items,
+                    page_limit=self.page_limit,
+                    next_action=next_action,
+                    next_args=next_args,
+                    catalog_hint=catalog_hint,
+                    list_id=list_id,
+                )
+                if page_params:
                     g.add_directory_item(
                         g.get_language_string(33078, addon=False),
                         menu_item=g.create_icon_dict("next", base_path=g.ICONS_PATH),
                         **page_params,
                     )
+                    self._schedule_next_page_prefetch(page_params)
                 content_type = self._mixed_media_content_type(catalog_hint, movie_count, show_count)
-                g.close_directory(content_type, sort=sort, cache=menu_cache)
+                pending_enrich = any(refs for refs, _ in enrichment_batches)
+                use_cache = menu_cache if menu_cache is not None else True
+                if pending_enrich:
+                    use_cache = False
+                g.close_directory(content_type, sort=sort, cache=use_cache)
+                g.log(
+                    f"list_paint_ms={(time.time() - paint_start) * 1000:.0f} items={len(list_items)}",
+                    "debug",
+                )
+                for refs, media_type in enrichment_batches:
+                    self._schedule_background_enrichment(
+                        refs,
+                        media_type,
+                        reason=enrichment_reason,
+                        catalog=catalog_hint,
+                    )
 
     def show_discover_builder(self, media_list, **params):
         """Discover TV browse lists — mill TMDB/TVDB metadata like anime discover."""
@@ -577,6 +673,8 @@ class ListBuilder:
         library_status = params.pop("library_status", None)
         display_rating_priority = params.pop("display_rating_priority", None)
         menu_cache = params.pop("menu_cache", None)
+        enrichment_refs = params.pop("enrichment_refs", None)
+        enrichment_media_type = params.pop("enrichment_media_type", None)
 
         params.pop("hide_unaired", None)
         params.pop("hide_watched", None)
@@ -585,6 +683,9 @@ class ListBuilder:
         params.pop("skip_update", None)
         params.pop("ignore_cache", None)
 
+        import time
+
+        paint_start = time.time()
         try:
             params["bulk_add"] = True
             list_items = self._build_directory_items(
@@ -609,26 +710,30 @@ class ListBuilder:
 
         finally:
             if not smart_play:
-                if (
-                    not (g.FROM_WIDGET and g.get_bool_setting("general.widget.hide_next"))
-                    and not no_paging
-                    and (has_next_page or len(list_items) >= self.page_limit)
-                ):
-                    page_params = dict(g.REQUEST_PARAMS)
-                    page_params["page"] = g.PAGE + 1
-                    if next_args:
-                        page_params["action_args"] = next_args
-                    elif page_params.get("action_args") is not None:
-                        page_params["action_args"] = page_params.get("action_args")
-                    page_params.update({"special_sort": "bottom"})
-                    if next_action:
-                        page_params["action"] = next_action
+                page_params = self._build_next_page_params(
+                    no_paging=no_paging,
+                    has_next_page=has_next_page,
+                    list_items=list_items,
+                    page_limit=self.page_limit,
+                    next_action=next_action,
+                    next_args=next_args,
+                )
+                if page_params:
                     g.add_directory_item(
                         g.get_language_string(33078, addon=False),
                         menu_item=g.create_icon_dict("next", base_path=g.ICONS_PATH),
                         **page_params,
                     )
-                g.close_directory(content_type, sort=sort, cache=menu_cache)
+                    self._schedule_next_page_prefetch(page_params)
+                use_cache = menu_cache if menu_cache is not None else True
+                if enrichment_refs:
+                    use_cache = False
+                g.close_directory(content_type, sort=sort, cache=use_cache)
+                g.log(
+                    f"list_paint_ms={(time.time() - paint_start) * 1000:.0f} items={len(list_items)}",
+                    "debug",
+                )
+                self._schedule_background_enrichment(enrichment_refs, enrichment_media_type)
 
     def is_aired(self, item):
         """

@@ -17,6 +17,25 @@ from resources.lib.modules.global_lock import GlobalLock
 from resources.lib.modules.globals import g
 
 
+def _tvdb_error_message(response):
+    """Resolve a log-safe message from a non-success TVDB v4 HTTP response."""
+    message = TVDBAPI.http_codes.get(response.status_code, f"HTTP {response.status_code}")
+    try:
+        body = response.json()
+    except (ValueError, AttributeError, TypeError):
+        return message
+    if not isinstance(body, dict):
+        return message
+    if body.get("message"):
+        return body["message"]
+    if body.get("status") == "error":
+        return body.get("message") or message
+    # TVDB v3 legacy envelope (defensive).
+    if body.get("Error"):
+        return body["Error"]
+    return message
+
+
 def tvdb_guard_response(func):
     @wraps(func)
     def wrapper(*args, **kwarg):
@@ -35,9 +54,7 @@ def tvdb_guard_response(func):
                 if method_class.jwToken is not None:
                     return func(*args, **kwarg)
 
-            error_message = (
-                TVDBAPI.http_codes[response.status_code] if response.status_code != 404 else response.json()['Error']
-            )
+            error_message = _tvdb_error_message(response)
 
             g.log(
                 f"TVDB returned a {response.status_code} ({error_message}): while requesting {response.url}",

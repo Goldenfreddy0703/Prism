@@ -299,7 +299,8 @@ class SQLiteConnection(_connection):
                 return connection
             except sqlite3.OperationalError as error:
                 if "database is locked" in str(error) or "unable to open database" in str(error):
-                    g.log(f"Database is locked; retrying ({retries + 1}/50)", "warning")
+                    level = "debug" if retries < 49 else "warning"
+                    g.log(f"Database is locked; retrying ({retries + 1}/50)", level)
                     g.wait_for_abort(delay)
                     delay = min(delay * 2, 5)  # Exponential backoff, capped at 5 seconds
                 else:
@@ -319,7 +320,7 @@ class SQLiteConnection(_connection):
         ):
             g.log(
                 f"database is locked waiting: {self.path}",
-                "warning",
+                "debug",
             )
             g.wait_for_abort(0.1)
         else:
@@ -337,11 +338,12 @@ class SQLiteConnection(_connection):
         }
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA page_size = 32768")  # no-translate
+        # Match POV/Fenom: OFF journal avoids WAL side-files and SMB edge cases.
         connection.execute("PRAGMA journal_mode = OFF")
         connection.execute("PRAGMA synchronous = OFF")
         connection.execute("PRAGMA temp_store = memory")
         connection.execute("PRAGMA mmap_size = 268435456")
-        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute("PRAGMA busy_timeout = 15000")
 
     def _create_db_path(self):
         if not xbmcvfs.exists(os.path.dirname(self.path)):

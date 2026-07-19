@@ -17,76 +17,54 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         if not skip_update:
             self._update_movies(media_list)
 
-        simkl_ids = [int(i.get("simkl_id")) for i in media_list if i.get("simkl_id") is not None]
         from resources.lib.database.sync_meta_cache import SyncMetaCache
+        from resources.lib.modules.meta_enrichment_queue import meta_enrichment_background
 
         meta_cache = SyncMetaCache()
-        cached_meta, missing_ids = meta_cache.partition_complete("movie", simkl_ids)
 
-        if skip_update and simkl_ids and not missing_ids:
-            query = f"""
-                SELECT m.simkl_id,
-                       m.args,
-                       m.last_updated,
-                       b.resume_time,
-                       b.percent_played,
-                       m.watched AS play_count,
-                       m.user_rating
-                FROM movies AS m
-                         LEFT JOIN bookmarks AS b
-                                   ON m.simkl_id = b.simkl_id
-                WHERE m.simkl_id IN ({",".join(str(i) for i in simkl_ids)})
-                """
-            if params.get("hide_unaired", self.hide_unaired):
-                query += (
-                    f" AND (m.air_date IS NULL OR Datetime(m.air_date) < Datetime('{self._get_aired_cutoff()}'))"
-                )
-            if params.get("hide_watched", self.hide_watched):
-                query += " AND watched = 0"
-            rows = self.fetchall(query)
-            for row in rows or []:
-                sid = int(row["simkl_id"])
-                if sid in cached_meta:
-                    row.update(
-                        {
-                            k: cached_meta[sid][k]
-                            for k in ("info", "art", "cast", "tmdb_id", "tvdb_id", "imdb_id")
-                            if cached_meta[sid].get(k) is not None
-                        }
-                    )
-        else:
-            query = f"""
-                SELECT m.simkl_id,
-                       m.info,
-                       m.art,
-                       m.[cast],
-                       m.args,
-                       m.last_updated,
-                       b.resume_time,
-                       b.percent_played,
-                       m.watched AS play_count,
-                       m.user_rating
-                FROM movies AS m
-                         LEFT JOIN bookmarks AS b
-                                   ON m.simkl_id = b.simkl_id
-                WHERE m.simkl_id IN ({','.join(str(i.get('simkl_id')) for i in media_list)})
-                """
+        query = f"""
+            SELECT m.simkl_id,
+                   m.info,
+                   m.art,
+                   m.[cast],
+                   m.args,
+                   m.last_updated,
+                   m.tmdb_id,
+                   m.tvdb_id,
+                   m.imdb_id,
+                   b.resume_time,
+                   b.percent_played,
+                   m.watched AS play_count,
+                   m.user_rating
+            FROM movies AS m
+                     LEFT JOIN bookmarks AS b
+                               ON m.simkl_id = b.simkl_id
+            WHERE m.simkl_id IN ({','.join(str(i.get('simkl_id')) for i in media_list)})
+            """
 
-            if params.get("hide_unaired", self.hide_unaired):
-                query += (
-                    f" AND (m.air_date IS NULL OR Datetime(m.air_date) < Datetime('{self._get_aired_cutoff()}'))"
-                )
-            if params.get("hide_watched", self.hide_watched):
-                query += " AND watched = 0"
+        if params.pop("hide_unaired", self.hide_unaired):
+            query += (
+                f" AND (m.air_date IS NULL OR Datetime(m.air_date) < Datetime('{self._get_aired_cutoff()}'))"
+            )
+        if params.pop("hide_watched", self.hide_watched):
+            query += " AND watched = 0"
 
-            rows = self.fetchall(query)
-            meta_cache.set_many_rows("movie", rows or [])
+        rows = self.fetchall(query)
+        meta_cache.set_many_rows("movie", rows or [])
 
         if skip_update:
-            rows = self.metadataHandler.gapfill_list_meta(rows, "movie", db=self, persist=True)
-        from resources.lib.simkl.enrich import gapfill_anime_title_rows
+            from resources.lib.modules.meta_enrichment_queue import hybrid_apply_list_meta, hybrid_foreground_first_page
 
-        rows = gapfill_anime_title_rows(rows)
+            if hybrid_foreground_first_page():
+                rows = self.metadataHandler.gapfill_list_meta(rows, "movie", db=self, persist=True)
+                from resources.lib.simkl.enrich import gapfill_anime_title_rows
+
+                rows = gapfill_anime_title_rows(rows)
+                self.set_list_enrichment_refs([], "movie")
+            else:
+                rows = hybrid_apply_list_meta(rows, "movie", self)
+        else:
+            self.set_list_enrichment_refs([], "movie")
         return MetadataHandler.sort_list_items(rows, media_list)
 
     @guard_against_none(list)
