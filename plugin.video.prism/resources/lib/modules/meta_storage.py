@@ -128,15 +128,14 @@ def _user_region_code() -> str:
 
 
 def _art_limits(media_type: str | None) -> dict[str, int]:
-    from resources.lib.modules.globals import g
-    from resources.lib.modules.metadata_providers import art_option_enabled
+    from resources.lib.modules.metadata_providers import art_limit, art_option_enabled
 
     if media_type == "movie":
         return {
-            "poster": g.get_int_setting("movies.poster_limit", 1),
-            "fanart": g.get_int_setting("movies.fanart_limit", 1),
-            "characterart": g.get_int_setting("movies.characterart_limit", 1),
-            "keyart": g.get_int_setting("movies.keyart_limit", 1),
+            "poster": art_limit("movies.poster_limit", "movie"),
+            "fanart": art_limit("movies.fanart_limit", "movie"),
+            "characterart": art_limit("movies.characterart_limit", "movie"),
+            "keyart": art_limit("movies.keyart_limit", "movie"),
             "thumb": 1,
             "icon": 1,
             "clearlogo": 1 if art_option_enabled("movies.clearlogo", "movie") else 0,
@@ -145,11 +144,38 @@ def _art_limits(media_type: str | None) -> dict[str, int]:
             "clearart": 1 if art_option_enabled("movies.clearart", "movie") else 0,
             "discart": 1 if art_option_enabled("movies.discart", "movie") else 0,
         }
+    if media_type == "anime_movie":
+        return {
+            "poster": art_limit("anime.poster_limit", "anime"),
+            "fanart": art_limit("anime.fanart_limit", "anime"),
+            "characterart": art_limit("anime.characterart_limit", "anime"),
+            "keyart": art_limit("anime.keyart_limit", "anime"),
+            "thumb": 1,
+            "icon": 1,
+            "clearlogo": 1 if art_option_enabled("anime.clearlogo", "anime_movie") else 0,
+            "banner": 1 if art_option_enabled("anime.banner", "anime_movie") else 0,
+            "landscape": 1 if art_option_enabled("anime.landscape", "anime_movie") else 0,
+            "clearart": 1 if art_option_enabled("anime.clearart", "anime_movie") else 0,
+            "discart": 1 if art_option_enabled("anime.discart", "anime_movie") else 0,
+        }
+    if media_type == "anime_series":
+        return {
+            "poster": art_limit("anime.poster_limit", "anime"),
+            "fanart": art_limit("anime.fanart_limit", "anime"),
+            "characterart": art_limit("anime.characterart_limit", "anime"),
+            "keyart": art_limit("anime.keyart_limit", "anime"),
+            "thumb": 1,
+            "icon": 1,
+            "clearlogo": 1 if art_option_enabled("anime.clearlogo", "anime_series") else 0,
+            "banner": 1 if art_option_enabled("anime.banner", "anime_series") else 0,
+            "landscape": 1 if art_option_enabled("anime.landscape", "anime_series") else 0,
+            "clearart": 1 if art_option_enabled("anime.clearart", "anime_series") else 0,
+        }
     return {
-        "poster": g.get_int_setting("tvshows.poster_limit", 1),
-        "fanart": g.get_int_setting("tvshows.fanart_limit", 1),
-        "characterart": g.get_int_setting("tvshows.characterart_limit", 1),
-        "keyart": g.get_int_setting("tvshows.keyart_limit", 1),
+        "poster": art_limit("tvshows.poster_limit", "tvshow"),
+        "fanart": art_limit("tvshows.fanart_limit", "tvshow"),
+        "characterart": art_limit("tvshows.characterart_limit", "tvshow"),
+        "keyart": art_limit("tvshows.keyart_limit", "tvshow"),
         "thumb": 1,
         "icon": 1,
         "clearlogo": 1 if art_option_enabled("tvshows.clearlogo", "tvshow") else 0,
@@ -226,11 +252,13 @@ def slim_art_dict(art: dict[str, Any] | None, media_type: str | None = None) -> 
                 out[key] = value
             continue
         limit = limits.get(base_key, limits.get(key, 1))
+        if limit <= 0:
+            continue
         if isinstance(value, str):
             out[key] = value
             continue
         if isinstance(value, list):
-            trimmed = [_slim_art_entry(item) for item in value[: max(limit, 1)] if item]
+            trimmed = [_slim_art_entry(item) for item in value[:limit] if item]
             if trimmed:
                 out[key] = trimmed
             continue
@@ -296,10 +324,14 @@ def slim_formatted_item(item: dict[str, Any]) -> dict[str, Any]:
     info = item.get("info")
     if not isinstance(info, dict):
         return item
-    mediatype = info.get("mediatype")
+    from resources.lib.modules.artwork_profile import art_limits_media_type, artwork_profile_for_row
+
+    limits_type = art_limits_media_type(
+        artwork_profile_for_row({"info": info, "simkl_id": item.get("simkl_id")}, info.get("mediatype") or "tvshow")
+    )
     slimmed = copy.copy(item)
     slimmed["info"] = slim_info_dict(info, simkl=True)
-    slimmed["art"] = slim_art_dict(item.get("art"), mediatype)
+    slimmed["art"] = slim_art_dict(item.get("art"), limits_type)
     if item.get("cast"):
         slimmed["cast"] = slim_cast_list(item.get("cast"))
     return slimmed
@@ -314,8 +346,14 @@ def slim_db_row(row: dict[str, Any]) -> dict[str, Any]:
     if isinstance(info, dict):
         out["info"] = slim_info_dict(info, simkl=True)
     if isinstance(row.get("art"), dict):
-        mediatype = (info or {}).get("mediatype") if isinstance(info, dict) else None
-        out["art"] = slim_art_dict(row.get("art"), mediatype)
+        from resources.lib.modules.artwork_profile import art_limits_media_type, artwork_profile_for_row
+
+        info_dict = out.get("info") if isinstance(out.get("info"), dict) else info
+        default = (info_dict or {}).get("mediatype") or "tvshow"
+        limits_type = art_limits_media_type(
+            artwork_profile_for_row({"info": info_dict, "simkl_id": row.get("simkl_id")}, default)
+        )
+        out["art"] = slim_art_dict(row.get("art"), limits_type)
     if row.get("cast"):
         out["cast"] = slim_cast_list(row.get("cast"))
     return out

@@ -23,33 +23,6 @@ class MetadataHandler:
         self.lang_region_code = self.lang_full_code.split("-")[-1]
         self.lang_based_movie_releases = g.get_bool_setting("movies.language_based_releases", True)
         self.allowed_artwork_languages = {None, "en", self.lang_code}
-        self.movies_poster_limit = g.get_int_setting("movies.poster_limit", 1)
-        self.movies_fanart_limit = g.get_int_setting("movies.fanart_limit", 1)
-        self.movies_keyart_limit = g.get_int_setting("movies.keyart_limit", 1)
-        self.movies_characterart_limit = g.get_int_setting("movies.characterart_limit", 1)
-        from resources.lib.modules.metadata_providers import art_option_enabled
-
-        self.movies_banner = art_option_enabled("movies.banner", "movie")
-        self.movies_clearlogo = art_option_enabled("movies.clearlogo", "movie")
-        self.movies_landscape = art_option_enabled("movies.landscape", "movie")
-        self.movies_clearart = art_option_enabled("movies.clearart", "movie")
-        self.movies_discart = art_option_enabled("movies.discart", "movie")
-
-        self.tvshows_poster_limit = g.get_int_setting("tvshows.poster_limit", 1)
-        self.tvshows_fanart_limit = g.get_int_setting("tvshows.fanart_limit", 1)
-        self.tvshows_keyart_limit = g.get_int_setting("tvshows.keyart_limit", 1)
-        self.tvshows_characterart_limit = g.get_int_setting("tvshows.characterart_limit", 1)
-        self.tvshows_banner = art_option_enabled("tvshows.banner", "tvshow")
-        self.tvshows_clearlogo = art_option_enabled("tvshows.clearlogo", "tvshow")
-        self.tvshows_landscape = art_option_enabled("tvshows.landscape", "tvshow")
-        self.tvshows_clearart = art_option_enabled("tvshows.clearart", "tvshow")
-        self.season_poster = g.get_bool_setting("season.poster", "true")
-        self.season_banner = g.get_bool_setting("season.banner", "true")
-        self.season_landscape = g.get_bool_setting("season.landscape", "true")
-        self.season_fanart = g.get_bool_setting("season.fanart", "true")
-        self.episode_fanart = g.get_bool_setting("episode.fanart", "true")
-        self.tvshows_preferred_art_source = g.get_int_setting("tvshows.preferedsource", 1)
-        self.movies_preferred_art_source = g.get_int_setting("movies.preferedsource", 1)
         self.preferred_artwork_size = g.get_int_setting("artwork.preferredsize", 0)
 
         self.genres = {
@@ -94,38 +67,56 @@ class MetadataHandler:
             "western": g.get_language_string(30527),
         }
 
-    @cached_property
+    @property
     def meta_hash(self):
+        from resources.lib.modules.metadata_providers import art_limit, art_option_enabled
+
         return tools.md5_hash(
             [
                 self.lang_code,
-                self.movies_poster_limit,
-                self.movies_fanart_limit,
-                self.movies_keyart_limit,
-                self.movies_characterart_limit,
-                self.movies_banner,
-                self.movies_clearlogo,
-                self.movies_landscape,
-                self.movies_clearart,
-                self.movies_discart,
-                self.tvshows_poster_limit,
-                self.tvshows_fanart_limit,
-                self.tvshows_keyart_limit,
-                self.tvshows_characterart_limit,
-                self.tvshows_banner,
-                self.tvshows_clearlogo,
-                self.tvshows_landscape,
-                self.tvshows_clearart,
-                self.season_poster,
-                self.season_banner,
-                self.season_landscape,
-                self.season_fanart,
-                self.episode_fanart,
-                self.tvshows_preferred_art_source,
-                self.movies_preferred_art_source,
+                art_limit("movies.poster_limit", "movie"),
+                art_limit("movies.fanart_limit", "movie"),
+                art_limit("movies.keyart_limit", "movie"),
+                art_limit("movies.characterart_limit", "movie"),
+                art_option_enabled("movies.banner", "movie"),
+                art_option_enabled("movies.clearlogo", "movie"),
+                art_option_enabled("movies.landscape", "movie"),
+                art_option_enabled("movies.clearart", "movie"),
+                art_option_enabled("movies.discart", "movie"),
+                art_limit("anime.poster_limit", "anime"),
+                art_limit("anime.fanart_limit", "anime"),
+                art_limit("anime.keyart_limit", "anime"),
+                art_limit("anime.characterart_limit", "anime"),
+                art_option_enabled("anime.banner", "anime_series"),
+                art_option_enabled("anime.clearlogo", "anime_series"),
+                art_option_enabled("anime.landscape", "anime_series"),
+                art_option_enabled("anime.clearart", "anime_series"),
+                art_option_enabled("anime.discart", "anime_movie"),
+                art_option_enabled("anime.season.poster", "anime_series"),
+                art_option_enabled("anime.season.banner", "anime_series"),
+                art_option_enabled("anime.season.landscape", "anime_series"),
+                art_option_enabled("anime.season.fanart", "anime_series"),
+                art_option_enabled("anime.episode.fanart", "anime_series"),
+                art_limit("tvshows.poster_limit", "tvshow"),
+                art_limit("tvshows.fanart_limit", "tvshow"),
+                art_limit("tvshows.keyart_limit", "tvshow"),
+                art_limit("tvshows.characterart_limit", "tvshow"),
+                art_option_enabled("tvshows.banner", "tvshow"),
+                art_option_enabled("tvshows.clearlogo", "tvshow"),
+                art_option_enabled("tvshows.landscape", "tvshow"),
+                art_option_enabled("tvshows.clearart", "tvshow"),
+                g.get_bool_setting("season.poster", True),
+                g.get_bool_setting("season.banner", True),
+                g.get_bool_setting("season.landscape", True),
+                g.get_bool_setting("season.fanart", True),
+                g.get_bool_setting("episode.fanart", True),
+                g.get_int_setting("tvshows.preferedsource", 1),
+                g.get_int_setting("movies.preferedsource", 1),
+                g.get_int_setting("anime.preferedsource", 1),
                 self._effective_preferred_art_source("movie"),
                 self._effective_preferred_art_source("tvshow"),
-                self.preferred_artwork_size,
+                self._effective_preferred_art_source("tvshow", "anime_series"),
+                g.get_int_setting("artwork.preferredsize", 0),
                 self.tmdb_api.meta_hash,
                 self.tvdb_api.meta_hash,
                 self.simkl_api.meta_hash,
@@ -180,7 +171,24 @@ class MetadataHandler:
 
         result = {"info": {}, "art": {}, "cast": []}
 
-        result.update(self._apply_best_fit_meta_data(simkl_data, tmdb_object, tvdb_object, fanart_object))
+        from resources.lib.modules.artwork_profile import artwork_profile_for_row
+
+        simkl_info = tools.safe_dict_get(simkl_data, "info") or {}
+        default_media = simkl_info.get("mediatype") or "tvshow"
+        profile_info = dict(simkl_info)
+        for parent in (show_info, season_info):
+            if isinstance(parent, dict) and parent.get("catalog") and not profile_info.get("catalog"):
+                profile_info["catalog"] = parent["catalog"]
+        art_profile = db_object.get("_art_profile") or artwork_profile_for_row(
+            {"info": profile_info, "simkl_id": db_object.get("simkl_id")},
+            default_media,
+        )
+
+        result.update(
+            self._apply_best_fit_meta_data(
+                simkl_data, tmdb_object, tvdb_object, fanart_object, art_profile=art_profile
+            )
+        )
 
         self._show_season_art_fallback(result, season_art, show_art)
         self._add_season_show_info(result, season_info, show_info)
@@ -396,20 +404,27 @@ class MetadataHandler:
         }
         return coalesced
 
-    def _apply_best_fit_meta_data(self, simkl_data, tmdb_data, tvdb_data, fanart_object):
+    def _apply_best_fit_meta_data(self, simkl_data, tmdb_data, tvdb_data, fanart_object, art_profile=None):
         simkl_data = simkl_data or {}
         simkl_info = tools.safe_dict_get(simkl_data, "info") or {}
         media_type = simkl_info.get("mediatype") or "episode"
+        if art_profile is None:
+            from resources.lib.modules.artwork_profile import artwork_profile_for_row
+
+            art_profile = artwork_profile_for_row(
+                {"info": simkl_info, "simkl_id": simkl_info.get("simkl_id")},
+                media_type if media_type in ("movie", "tvshow") else "tvshow",
+            )
         result = {}
 
         self._apply_best_fit_info(result, simkl_data, tmdb_data, tvdb_data)
         self._apply_best_fit_cast(result, tmdb_data, tvdb_data)
         result["art"] = dict(tools.safe_dict_get(simkl_data, "art") or {})
-        self._apply_best_fit_art(result, tmdb_data, tvdb_data, fanart_object, media_type)
+        self._apply_best_fit_art(result, tmdb_data, tvdb_data, fanart_object, media_type, art_profile=art_profile)
 
         return result
 
-    def _apply_best_fit_art(self, result, tmdb_object, tvdb_object, fanart_object, media_type):
+    def _apply_best_fit_art(self, result, tmdb_object, tvdb_object, fanart_object, media_type, art_profile=None):
         """Simkl art is seeded on result before this runs; external sources gap-fill only."""
         if tmdb_object:
             result["art"] = tools.smart_merge_dictionary(
@@ -425,11 +440,11 @@ class MetadataHandler:
             result["art"] = tools.smart_merge_dictionary(
                 result.get("art", {}),
                 fanart_object.get("art", {}),
-                keep_original=not self._is_fanart_artwork_selected(media_type),
+                keep_original=not self._is_fanart_artwork_selected(media_type, art_profile=art_profile),
                 extend_array=False,
             )
 
-        result["art"] = self._handle_art(media_type, result.get("art", {}))
+        result["art"] = self._handle_art(media_type, result.get("art", {}), art_profile=art_profile)
 
     def _apply_best_fit_info(
         self,
@@ -567,32 +582,34 @@ class MetadataHandler:
         elif tvdb_data is not None and tvdb_data.get("cast", []):
             result["cast"] = tvdb_data.get("cast", [])
 
-    def _effective_preferred_art_source(self, media_type: str) -> int:
+    def _effective_preferred_art_source(self, media_type: str, art_profile: str | None = None) -> int:
+        from resources.lib.modules.artwork_profile import PROFILE_ANIME_MOVIE, PROFILE_ANIME_SERIES
         from resources.lib.modules.metadata_providers import effective_preferred_art_source
 
-        raw = (
-            self.movies_preferred_art_source
-            if media_type == "movie"
-            else self.tvshows_preferred_art_source
-        )
+        if art_profile in (PROFILE_ANIME_MOVIE, PROFILE_ANIME_SERIES):
+            raw = g.get_int_setting("anime.preferedsource", 1)
+        elif media_type == "movie":
+            raw = g.get_int_setting("movies.preferedsource", 1)
+        else:
+            raw = g.get_int_setting("tvshows.preferedsource", 1)
         return effective_preferred_art_source(raw)
 
-    def _is_fanart_artwork_selected(self, media_type):
+    def _is_fanart_artwork_selected(self, media_type, art_profile=None):
         from resources.lib.modules.metadata_providers import ART_FANART
 
-        return self._effective_preferred_art_source(media_type) == ART_FANART
+        return self._effective_preferred_art_source(media_type, art_profile=art_profile) == ART_FANART
 
-    def _is_tmdb_artwork_selected(self, media_type):
+    def _is_tmdb_artwork_selected(self, media_type, art_profile=None):
         from resources.lib.modules.metadata_providers import ART_TMDB
 
-        return self._effective_preferred_art_source(media_type) == ART_TMDB
+        return self._effective_preferred_art_source(media_type, art_profile=art_profile) == ART_TMDB
 
-    def _is_tvdb_artwork_selected(self, media_type):
+    def _is_tvdb_artwork_selected(self, media_type, art_profile=None):
         from resources.lib.modules.metadata_providers import ART_TVDB
 
-        return self._effective_preferred_art_source(media_type) == ART_TVDB
+        return self._effective_preferred_art_source(media_type, art_profile=art_profile) == ART_TVDB
 
-    def _handle_art(self, media_type, art_data):
+    def _handle_art(self, media_type, art_data, art_profile=None):
         if art_data is None:
             return {}
         [
@@ -603,14 +620,21 @@ class MetadataHandler:
 
         self._fallback_art_before_handling(art_data)
 
+        from resources.lib.modules.artwork_profile import PROFILE_ANIME_MOVIE, PROFILE_ANIME_SERIES
+
+        profile = art_profile or media_type
+        if profile == PROFILE_ANIME_MOVIE:
+            return self._handle_anime_movie_art(art_data)
+        if profile == PROFILE_ANIME_SERIES:
+            return self._handle_anime_series_art(art_data)
         if media_type == "movie":
             return self._handle_movie_art(art_data)
         elif media_type == "tvshow":
             return self._handle_show_art(art_data)
         elif media_type == "season":
-            return self._handle_season_art(art_data)
+            return self._handle_season_art(art_data, art_profile=art_profile)
         elif media_type == "episode":
-            return self._handle_episode_art(art_data)
+            return self._handle_episode_art(art_data, art_profile=art_profile)
 
     @staticmethod
     def _sort_art(art):
@@ -633,84 +657,150 @@ class MetadataHandler:
 
     @staticmethod
     def _handle_artwork_multis(limit, art_type, art_data):
+        if limit <= 0:
+            return {}
         data = {}
+        raw = art_data.get(art_type)
+        if raw is None:
+            return data
+        if isinstance(raw, list):
+            images = raw
+        elif isinstance(raw, dict):
+            images = [raw]
+        elif isinstance(raw, str):
+            images = [raw]
+        else:
+            return data
         for idx in range(limit):
             name = art_type if idx == 0 else f"{art_type}{idx}"
-            try:
-                image = art_data[art_type][idx] if isinstance(art_data[art_type], list) else art_data[art_type]
-
-            except (KeyError, IndexError):
+            if idx >= len(images):
                 break
+            image = images[idx]
             if isinstance(image, dict):
                 data[name] = image["url"]
             else:
                 data[name] = image
-                break
         return data
 
     def _handle_show_art(self, data):
+        from resources.lib.modules.metadata_providers import art_limit, art_option_enabled
+
         result = {}
 
-        result.update(self._handle_artwork_multis(self.tvshows_poster_limit, "poster", data))
-        result.update(self._handle_artwork_multis(self.tvshows_fanart_limit, "fanart", data))
-        result.update(self._handle_artwork_multis(self.tvshows_characterart_limit, "characterart", data))
-        result.update(self._handle_artwork_multis(self.tvshows_keyart_limit, "keyart", data))
-        if self.tvshows_clearlogo:
+        result.update(self._handle_artwork_multis(art_limit("tvshows.poster_limit", "tvshow"), "poster", data))
+        result.update(self._handle_artwork_multis(art_limit("tvshows.fanart_limit", "tvshow"), "fanart", data))
+        result.update(self._handle_artwork_multis(art_limit("tvshows.characterart_limit", "tvshow"), "characterart", data))
+        result.update(self._handle_artwork_multis(art_limit("tvshows.keyart_limit", "tvshow"), "keyart", data))
+        if art_option_enabled("tvshows.clearlogo", "tvshow"):
             result.update(self._handle_artwork_multis(1, "clearlogo", data))
         result.update(self._handle_artwork_multis(1, "thumb", data))
         result.update(self._handle_artwork_multis(1, "icon", data))
 
-        if self.tvshows_banner:
+        if art_option_enabled("tvshows.banner", "tvshow"):
             result.update(self._handle_artwork_multis(1, "banner", data))
-        if self.tvshows_landscape:
+        if art_option_enabled("tvshows.landscape", "tvshow"):
             result.update(self._handle_artwork_multis(1, "landscape", data))
-        if self.tvshows_clearart:
+        if art_option_enabled("tvshows.clearart", "tvshow"):
             result.update(self._handle_artwork_multis(1, "clearart", data))
 
         return result
 
     def _handle_movie_art(self, data):
+        from resources.lib.modules.metadata_providers import art_limit, art_option_enabled
+
         result = {}
 
-        result.update(self._handle_artwork_multis(self.movies_poster_limit, "poster", data))
-        result.update(self._handle_artwork_multis(self.movies_fanart_limit, "fanart", data))
-        result.update(self._handle_artwork_multis(self.movies_characterart_limit, "characterart", data))
-        result.update(self._handle_artwork_multis(self.movies_keyart_limit, "keyart", data))
-        if self.movies_clearlogo:
+        result.update(self._handle_artwork_multis(art_limit("movies.poster_limit", "movie"), "poster", data))
+        result.update(self._handle_artwork_multis(art_limit("movies.fanart_limit", "movie"), "fanart", data))
+        result.update(self._handle_artwork_multis(art_limit("movies.characterart_limit", "movie"), "characterart", data))
+        result.update(self._handle_artwork_multis(art_limit("movies.keyart_limit", "movie"), "keyart", data))
+        if art_option_enabled("movies.clearlogo", "movie"):
             result.update(self._handle_artwork_multis(1, "clearlogo", data))
         result.update(self._handle_artwork_multis(1, "thumb", data))
         result.update(self._handle_artwork_multis(1, "icon", data))
 
-        if self.movies_banner:
+        if art_option_enabled("movies.banner", "movie"):
             result.update(self._handle_artwork_multis(1, "banner", data))
-        if self.movies_landscape:
+        if art_option_enabled("movies.landscape", "movie"):
             result.update(self._handle_artwork_multis(1, "landscape", data))
-        if self.movies_discart:
+        if art_option_enabled("movies.discart", "movie"):
             result.update(self._handle_artwork_multis(1, "discart", data))
-        if self.movies_clearart:
+        if art_option_enabled("movies.clearart", "movie"):
             result.update(self._handle_artwork_multis(1, "clearart", data))
 
         return result
 
-    def _handle_season_art(self, data):
+    def _handle_anime_series_art(self, data):
+        from resources.lib.modules.metadata_providers import art_limit, art_option_enabled
+
+        result = {}
+
+        result.update(self._handle_artwork_multis(art_limit("anime.poster_limit", "anime"), "poster", data))
+        result.update(self._handle_artwork_multis(art_limit("anime.fanart_limit", "anime"), "fanart", data))
+        result.update(self._handle_artwork_multis(art_limit("anime.characterart_limit", "anime"), "characterart", data))
+        result.update(self._handle_artwork_multis(art_limit("anime.keyart_limit", "anime"), "keyart", data))
+        if art_option_enabled("anime.clearlogo", "anime_series"):
+            result.update(self._handle_artwork_multis(1, "clearlogo", data))
+        result.update(self._handle_artwork_multis(1, "thumb", data))
+        result.update(self._handle_artwork_multis(1, "icon", data))
+
+        if art_option_enabled("anime.banner", "anime_series"):
+            result.update(self._handle_artwork_multis(1, "banner", data))
+        if art_option_enabled("anime.landscape", "anime_series"):
+            result.update(self._handle_artwork_multis(1, "landscape", data))
+        if art_option_enabled("anime.clearart", "anime_series"):
+            result.update(self._handle_artwork_multis(1, "clearart", data))
+
+        return result
+
+    def _handle_anime_movie_art(self, data):
+        from resources.lib.modules.metadata_providers import art_option_enabled
+
+        result = self._handle_anime_series_art(data)
+        if art_option_enabled("anime.discart", "anime_movie"):
+            result.update(self._handle_artwork_multis(1, "discart", data))
+        return result
+
+    def _handle_season_art(self, data, art_profile=None):
+        from resources.lib.modules.artwork_profile import PROFILE_ANIME_MOVIE, PROFILE_ANIME_SERIES
+        from resources.lib.modules.metadata_providers import art_limit, art_option_enabled
+
+        is_anime = art_profile in (PROFILE_ANIME_SERIES, PROFILE_ANIME_MOVIE)
         result = {}
         result.update(self._handle_artwork_multis(1, "thumb", data))
         result.update(self._handle_artwork_multis(1, "icon", data))
-        if self.season_poster:
-            result.update(self._handle_artwork_multis(self.tvshows_poster_limit, "poster", data))
-        if self.season_fanart:
-            result.update(self._handle_artwork_multis(self.tvshows_fanart_limit, "fanart", data))
-        if self.season_banner:
-            result.update(self._handle_artwork_multis(1, "banner", data))
-        if self.season_landscape:
-            result.update(self._handle_artwork_multis(1, "landscape", data))
+        if is_anime:
+            if art_option_enabled("anime.season.poster", "anime_series"):
+                result.update(self._handle_artwork_multis(art_limit("anime.poster_limit", "anime"), "poster", data))
+            if art_option_enabled("anime.season.fanart", "anime_series"):
+                result.update(self._handle_artwork_multis(art_limit("anime.fanart_limit", "anime"), "fanart", data))
+            if art_option_enabled("anime.season.banner", "anime_series"):
+                result.update(self._handle_artwork_multis(1, "banner", data))
+            if art_option_enabled("anime.season.landscape", "anime_series"):
+                result.update(self._handle_artwork_multis(1, "landscape", data))
+        else:
+            if g.get_bool_setting("season.poster", True):
+                result.update(self._handle_artwork_multis(art_limit("tvshows.poster_limit", "tvshow"), "poster", data))
+            if g.get_bool_setting("season.fanart", True):
+                result.update(self._handle_artwork_multis(art_limit("tvshows.fanart_limit", "tvshow"), "fanart", data))
+            if g.get_bool_setting("season.banner", True):
+                result.update(self._handle_artwork_multis(1, "banner", data))
+            if g.get_bool_setting("season.landscape", True):
+                result.update(self._handle_artwork_multis(1, "landscape", data))
         return result
 
-    def _handle_episode_art(self, data):
+    def _handle_episode_art(self, data, art_profile=None):
+        from resources.lib.modules.artwork_profile import PROFILE_ANIME_MOVIE, PROFILE_ANIME_SERIES
+        from resources.lib.modules.metadata_providers import art_limit, art_option_enabled
+
+        is_anime = art_profile in (PROFILE_ANIME_SERIES, PROFILE_ANIME_MOVIE)
         result = {}
         result.update(self._handle_artwork_multis(1, "thumb", data))
-        if self.episode_fanart:
-            result.update(self._handle_artwork_multis(self.tvshows_fanart_limit, "fanart", data))
+        if is_anime:
+            if art_option_enabled("anime.episode.fanart", "anime_series"):
+                result.update(self._handle_artwork_multis(art_limit("anime.fanart_limit", "anime"), "fanart", data))
+        elif g.get_bool_setting("episode.fanart", True):
+            result.update(self._handle_artwork_multis(art_limit("tvshows.fanart_limit", "tvshow"), "fanart", data))
         return result
 
     # endregion
@@ -943,7 +1033,7 @@ class MetadataHandler:
             self._provider_enabled("tmdb")
             and self._tmdb_show_id_valid(db_object)
             and not self._tmdb_art_meta_up_to_par("season", db_object)
-            and self.tvshows_preferred_art_source != ART_TMDB
+            and g.get_int_setting("tvshows.preferedsource", 1) != ART_TMDB
         ):
             self._merge_season_external(
                 db_object,
@@ -953,7 +1043,7 @@ class MetadataHandler:
             self._provider_enabled("tvdb")
             and self._tvdb_show_id_valid(db_object)
             and not self._tvdb_art_meta_up_to_par("season", db_object)
-            and self.tvshows_preferred_art_source != ART_TVDB
+            and g.get_int_setting("tvshows.preferedsource", 1) != ART_TVDB
         ):
             self._merge_season_external(
                 db_object,
@@ -1024,7 +1114,7 @@ class MetadataHandler:
             self._provider_enabled("tmdb")
             and self._tmdb_show_id_valid(db_object)
             and not self._tmdb_art_meta_up_to_par("episode", db_object)
-            and self.tvshows_preferred_art_source != ART_TMDB
+            and g.get_int_setting("tvshows.preferedsource", 1) != ART_TMDB
         ):
             self._merge_episode_external(
                 db_object,
@@ -1034,7 +1124,7 @@ class MetadataHandler:
             self._provider_enabled("tvdb")
             and self._tvdb_show_id_valid(db_object)
             and not self._tvdb_art_meta_up_to_par("episode", db_object)
-            and self.tvshows_preferred_art_source != ART_TVDB
+            and g.get_int_setting("tvshows.preferedsource", 1) != ART_TVDB
         ):
             self._merge_episode_external(
                 db_object,
@@ -1108,8 +1198,10 @@ class MetadataHandler:
 
     def _db_object_for_row(self, row: dict, media_type: str) -> dict:
         from resources.lib.modules.metadata_providers import external_ids_from_row
+        from resources.lib.simkl.ids import canonicalize_info_identity
 
         info = dict(row.get("info") or {})
+        canonicalize_info_identity(info)
         ids = external_ids_from_row(row)
         for key, value in ids.items():
             if value is not None and info.get(key) is None:
@@ -1167,12 +1259,22 @@ class MetadataHandler:
         normalized = "movie" if media_type == "movie" else "show"
         return row_needs_refresh(normalized, row)
 
-    def _row_meta_gaps(self, row: dict, media_type: str) -> list[str]:
-        from resources.lib.modules.metadata_providers import art_gapfill_available, cast_gapfill_available
+    def _row_meta_gaps(self, row: dict, media_type: str, art_profile: str | None = None) -> list[str]:
+        from resources.lib.modules.artwork_profile import (
+            PROFILE_ANIME_MOVIE,
+            PROFILE_ANIME_SERIES,
+            PROFILE_MOVIE,
+            artwork_profile_for_row,
+        )
+        from resources.lib.modules.metadata_providers import art_gapfill_available, art_option_enabled, cast_gapfill_available
+
+        if art_profile is None:
+            art_profile = artwork_profile_for_row(row, default_media_type=media_type)
+        provider_type = "movie" if art_profile in (PROFILE_ANIME_MOVIE, PROFILE_MOVIE) else "tvshow"
 
         gaps: list[str] = []
         cast = row.get("cast")
-        if cast_gapfill_available(row, media_type) and (
+        if cast_gapfill_available(row, provider_type) and (
             not cast
             or not isinstance(cast, list)
             or len(cast) == 0
@@ -1180,40 +1282,69 @@ class MetadataHandler:
         ):
             gaps.append("cast")
         art = row.get("art") if isinstance(row.get("art"), dict) else {}
-        # Provider-only / advanced artwork — Simkl does not supply these.
         online_art_keys = []
-        if media_type == "movie":
-            if self.movies_clearlogo:
+        if art_profile == PROFILE_ANIME_MOVIE:
+            if art_option_enabled("anime.clearlogo", "anime_movie"):
                 online_art_keys.append("clearlogo")
-            if self.movies_clearart:
+            if art_option_enabled("anime.clearart", "anime_movie"):
                 online_art_keys.append("clearart")
-            if self.movies_discart:
+            if art_option_enabled("anime.discart", "anime_movie"):
                 online_art_keys.append("discart")
-            if self.movies_banner:
+            if art_option_enabled("anime.banner", "anime_movie"):
                 online_art_keys.append("banner")
-            if self.movies_landscape:
+            if art_option_enabled("anime.landscape", "anime_movie"):
+                online_art_keys.append("landscape")
+        elif art_profile == PROFILE_ANIME_SERIES:
+            if art_option_enabled("anime.clearlogo", "anime_series"):
+                online_art_keys.append("clearlogo")
+            if art_option_enabled("anime.clearart", "anime_series"):
+                online_art_keys.append("clearart")
+            if art_option_enabled("anime.banner", "anime_series"):
+                online_art_keys.append("banner")
+            if art_option_enabled("anime.landscape", "anime_series"):
+                online_art_keys.append("landscape")
+        elif media_type == "movie":
+            if art_option_enabled("movies.clearlogo", "movie"):
+                online_art_keys.append("clearlogo")
+            if art_option_enabled("movies.clearart", "movie"):
+                online_art_keys.append("clearart")
+            if art_option_enabled("movies.discart", "movie"):
+                online_art_keys.append("discart")
+            if art_option_enabled("movies.banner", "movie"):
+                online_art_keys.append("banner")
+            if art_option_enabled("movies.landscape", "movie"):
                 online_art_keys.append("landscape")
         elif media_type in ("tvshow", "show"):
-            if self.tvshows_clearlogo:
+            if art_option_enabled("tvshows.clearlogo", "tvshow"):
                 online_art_keys.append("clearlogo")
-            if self.tvshows_clearart:
+            if art_option_enabled("tvshows.clearart", "tvshow"):
                 online_art_keys.append("clearart")
-            if self.tvshows_banner:
+            if art_option_enabled("tvshows.banner", "tvshow"):
                 online_art_keys.append("banner")
-            if self.tvshows_landscape:
+            if art_option_enabled("tvshows.landscape", "tvshow"):
                 online_art_keys.append("landscape")
         for art_key in online_art_keys:
             if art_gapfill_available(row) and not self._art_key_present(art, art_key):
                 gaps.append(art_key)
         return gaps
 
-    def merge_row_from_cache(self, row: dict, media_type: str, *, db=None) -> dict:
+    def merge_row_from_cache(self, row: dict, media_type: str, *, db=None, art_profile: str | None = None) -> dict:
         """Merge full art, cast, and info from cached provider meta — no API calls."""
         if not isinstance(row, dict):
             return row
 
+        from resources.lib.modules.artwork_profile import artwork_profile_for_row, provider_media_type
+        from resources.lib.simkl.ids import canonicalize_info_identity, entity_simkl_id
+
         info = row.get("info") or {}
-        simkl_id = row.get("simkl_id") or info.get("simkl_id")
+        if isinstance(info, dict):
+            canonicalize_info_identity(info)
+
+        if art_profile is None:
+            art_profile = artwork_profile_for_row(row, default_media_type=media_type)
+        provider_type = provider_media_type(art_profile)
+
+        simkl_id = entity_simkl_id({"info": info, "simkl_id": row.get("simkl_id")}) or row.get("simkl_id") or info.get("simkl_id")
         if not simkl_id:
             return row
 
@@ -1222,8 +1353,9 @@ class MetadataHandler:
 
             db = SimklSyncDatabase()
 
-        table = "movies" if media_type == "movie" else "shows"
-        db_object = self._db_object_for_row(row, media_type)
+        table = "movies" if provider_type == "movie" else "shows"
+        db_object = self._db_object_for_row(row, provider_type)
+        db_object["_art_profile"] = art_profile
         db_object.update(db.load_cached_provider_meta(table, int(simkl_id), info))
         if not any(
             db_object.get(f"{provider}_object")
@@ -1352,18 +1484,25 @@ class MetadataHandler:
         merged: list = []
         need_online_refs: list[dict] = []
         from resources.lib.database.sync_meta_cache import SyncMetaCache
+        from resources.lib.modules.artwork_profile import artwork_profile_for_row, provider_media_type
+        from resources.lib.simkl.ids import canonicalize_info_identity, entity_simkl_id
 
         meta_cache = SyncMetaCache()
-        cache_media_type = "movie" if media_type == "movie" else "show"
 
         for row in rows:
             if not isinstance(row, dict):
                 merged.append(row)
                 continue
-            updated = self.merge_row_from_cache(row, media_type, db=db)
-            gaps = self._row_meta_gaps(updated, media_type)
-            stale = self._row_needs_refresh(updated, media_type)
-            simkl_id = updated.get("simkl_id")
+            info = row.get("info")
+            if isinstance(info, dict):
+                canonicalize_info_identity(info)
+            profile = artwork_profile_for_row(row, default_media_type=media_type)
+            provider_type = provider_media_type(profile)
+            cache_media_type = "movie" if provider_type == "movie" else "show"
+            updated = self.merge_row_from_cache(row, provider_type, db=db, art_profile=profile)
+            gaps = self._row_meta_gaps(updated, provider_type, art_profile=profile)
+            stale = self._row_needs_refresh(updated, provider_type)
+            simkl_id = entity_simkl_id(updated) or updated.get("simkl_id")
             if simkl_id is not None and stale:
                 meta_cache.delete_row(cache_media_type, int(simkl_id))
             actionable_gaps = [
@@ -1374,13 +1513,39 @@ class MetadataHandler:
             if (actionable_gaps or stale) and self._can_fetch_provider_meta(updated):
                 if simkl_id is not None:
                     need_online_refs.append(
-                        {"simkl_id": int(simkl_id), "needs_update": True, "_gapfill_gaps": tuple(actionable_gaps)}
+                        {
+                            "simkl_id": int(simkl_id),
+                            "needs_update": True,
+                            "_gapfill_gaps": tuple(actionable_gaps),
+                            "_provider_type": provider_type,
+                        }
                     )
             merged.append(updated)
 
-        online_ids = self._online_update_refs(need_online_refs, media_type, db)
+        online_ids: set[int] = set()
+        movie_refs = [ref for ref in need_online_refs if ref.get("_provider_type") == "movie"]
+        tvshow_refs = [ref for ref in need_online_refs if ref.get("_provider_type") != "movie"]
+        if movie_refs:
+            online_ids |= self._online_update_refs(movie_refs, "movie", db)
+        if tvshow_refs:
+            online_ids |= self._online_update_refs(tvshow_refs, "tvshow", db)
+
         if online_ids:
-            refreshed = self._reload_rows_by_id(db, media_type, online_ids)
+            movie_ids = {
+                int(ref["simkl_id"])
+                for ref in movie_refs
+                if ref.get("simkl_id") is not None and int(ref["simkl_id"]) in online_ids
+            }
+            tvshow_ids = {
+                int(ref["simkl_id"])
+                for ref in tvshow_refs
+                if ref.get("simkl_id") is not None and int(ref["simkl_id"]) in online_ids
+            }
+            refreshed: dict[int, dict] = {}
+            if movie_ids:
+                refreshed.update(self._reload_rows_by_id(db, "movie", movie_ids))
+            if tvshow_ids:
+                refreshed.update(self._reload_rows_by_id(db, "tvshow", tvshow_ids))
             for index, row in enumerate(merged):
                 if not isinstance(row, dict):
                     continue
@@ -1388,6 +1553,11 @@ class MetadataHandler:
                 if simkl_id is not None and int(simkl_id) in refreshed:
                     merged[index] = refreshed[int(simkl_id)]
 
+        ref_by_id = {
+            int(ref["simkl_id"]): ref
+            for ref in need_online_refs
+            if ref.get("simkl_id") is not None
+        }
         for row in merged:
             if not isinstance(row, dict):
                 continue
@@ -1395,9 +1565,13 @@ class MetadataHandler:
             if simkl_id is None:
                 continue
             sid = int(simkl_id)
-            if sid not in {int(ref["simkl_id"]) for ref in need_online_refs if ref.get("simkl_id") is not None}:
+            ref = ref_by_id.get(sid)
+            if not ref:
                 continue
-            remaining_gaps = self._row_meta_gaps(row, media_type)
+            provider_type = ref.get("_provider_type") or media_type
+            cache_media_type = "movie" if provider_type == "movie" else "show"
+            profile = artwork_profile_for_row(row, default_media_type=provider_type)
+            remaining_gaps = self._row_meta_gaps(row, provider_type, art_profile=profile)
             if remaining_gaps and self._can_fetch_provider_meta(row):
                 for gap in remaining_gaps:
                     meta_cache.mark_gap_miss(cache_media_type, sid, gap)
@@ -1405,7 +1579,20 @@ class MetadataHandler:
                 meta_cache.clear_provider_miss(cache_media_type, sid)
 
         if persist:
-            self._persist_list_rows(merged, media_type, db=db, skip_ids=online_ids)
+            movie_rows = [
+                row
+                for row in merged
+                if isinstance(row, dict) and provider_media_type(artwork_profile_for_row(row, media_type)) == "movie"
+            ]
+            tvshow_rows = [
+                row
+                for row in merged
+                if isinstance(row, dict) and provider_media_type(artwork_profile_for_row(row, media_type)) != "movie"
+            ]
+            if movie_rows:
+                self._persist_list_rows(movie_rows, "movie", db=db, skip_ids=online_ids)
+            if tvshow_rows:
+                self._persist_list_rows(tvshow_rows, "tvshow", db=db, skip_ids=online_ids)
 
         return merged
 

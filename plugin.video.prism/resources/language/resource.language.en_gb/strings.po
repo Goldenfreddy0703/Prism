@@ -5115,3 +5115,18 @@ msgstr "Widget load delay (milliseconds)"
 msgctxt "#30970"
 msgid "Pause between widget loads to reduce Simkl and database contention. 1000 ms = 1 second."
 msgstr "Pause between widget loads to reduce Simkl and database contention. 1000 ms = 1 second."
+
+#: /resources/settings.xml
+msgctxt "#30971"
+msgid "Anime Artwork"
+msgstr "Anime Artwork"
+
+#: /resources/settings.xml
+msgctxt "#30972"
+msgid "When the chosen provider is disabled, Prism uses the next available source, then Simkl artwork."
+msgstr "When the chosen provider is disabled, Prism uses the next available source, then Simkl artwork."
+
+#: /resources/settings.xml
+msgctxt "#30973"
+msgid "Show Advanced Anime Artwork Settings"
+msgstr "Show Advanced Anime Artwork Settings"

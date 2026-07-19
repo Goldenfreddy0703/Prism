@@ -99,17 +99,44 @@ def art_gapfill_available(row: dict) -> bool:
 def advanced_artwork_enabled(media_type: str) -> bool:
     from resources.lib.modules.globals import g
 
-    setting_id = "movie.artwork.advanced" if media_type == "movie" else "tv.artwork.advanced"
+    if media_type in ("anime", "anime_movie", "anime_series"):
+        setting_id = "anime.artwork.advanced"
+    elif media_type == "movie":
+        setting_id = "movie.artwork.advanced"
+    else:
+        setting_id = "tv.artwork.advanced"
     return g.get_bool_setting(setting_id, False)
 
 
 def art_option_enabled(setting_id: str, media_type: str, default: bool = True) -> bool:
     """Advanced artwork toggles default on when the advanced panel is hidden."""
-    if not advanced_artwork_enabled(media_type):
+    scope = media_type
+    if media_type in ("anime_movie", "anime_series"):
+        scope = "anime"
+    if not advanced_artwork_enabled(scope):
         return default
     from resources.lib.modules.globals import g
 
     return g.get_bool_setting(setting_id, default)
+
+
+_ART_LIMIT_DEFAULTS = {
+    "poster_limit": 1,
+    "fanart_limit": 1,
+    "keyart_limit": 0,
+    "characterart_limit": 0,
+}
+
+
+def art_limit(setting_id: str, scope: str) -> int:
+    """Read a poster/fanart/keyart/characterart limit; use defaults when advanced panel is hidden."""
+    from resources.lib.modules.globals import g
+
+    fallback_key = setting_id.rsplit(".", 1)[-1]
+    default = _ART_LIMIT_DEFAULTS.get(fallback_key, 1)
+    if not advanced_artwork_enabled(scope):
+        return default
+    return g.get_int_setting(setting_id, default)
 
 
 def mdblist_runtime_enabled() -> bool:
