@@ -77,10 +77,14 @@ class SimklAPI:
     @cached_property
     def session(self):
         import requests
+        from requests.adapters import HTTPAdapter
 
         g.ensure_addon()
         session = requests.Session()
         session.headers.update({"User-Agent": f"{g.ADDON_ID}/{g.ADDON.getAddonInfo('version')}"})
+        adapter = HTTPAdapter(pool_maxsize=50, pool_connections=10)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
         return session
 
     @cached_property

@@ -319,9 +319,19 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         rows = self.fetchall(statement)
         meta_cache.set_many_rows("show", rows or [])
         if skip_update:
-            from resources.lib.modules.meta_enrichment_queue import hybrid_apply_list_meta, hybrid_foreground_first_page
+            from resources.lib.modules.meta_enrichment_queue import (
+                hybrid_apply_list_meta,
+                hybrid_foreground_first_page,
+                hybrid_widget_local_meta,
+            )
 
-            if hybrid_foreground_first_page():
+            if hybrid_widget_local_meta():
+                rows, enrichment_refs = self.metadataHandler.merge_list_meta_local(rows, "tvshow", db=self)
+                from resources.lib.simkl.enrich import gapfill_anime_title_rows
+
+                rows = gapfill_anime_title_rows(rows)
+                self.set_list_enrichment_refs(enrichment_refs, "tvshow")
+            elif hybrid_foreground_first_page():
                 rows = self.metadataHandler.gapfill_list_meta(rows, "tvshow", db=self, persist=True)
                 from resources.lib.simkl.enrich import gapfill_anime_title_rows
 

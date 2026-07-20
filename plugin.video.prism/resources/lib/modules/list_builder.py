@@ -180,10 +180,12 @@ class ListBuilder:
         """Fast menus: page 1 blocks for full metadata; later pages use prefetch + local merge."""
         if not g.get_bool_setting("general.fastMenus", True):
             return
-        from resources.lib.modules.meta_enrichment_queue import hybrid_foreground_first_page
+        from resources.lib.modules.meta_enrichment_queue import hybrid_foreground_first_page, hybrid_widget_local_meta
 
         params.setdefault("skip_mill", True)
-        if not hybrid_foreground_first_page():
+        if hybrid_widget_local_meta():
+            params.setdefault("skip_update", True)
+        elif not hybrid_foreground_first_page():
             params.setdefault("skip_update", True)
 
     @staticmethod

@@ -56,6 +56,13 @@ try:
 
     while not monitor.abortRequested():
         if _service_db_idle():
+            try:
+                from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue
+
+                MetaEnrichmentQueue.process_idle()
+            except Exception:
+                pass
+        if _service_db_idle():
             xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=runMaintenance")')
         if not g.wait_for_abort(15):  # Sleep to make sure tokens refreshed during maintenance
             if _service_db_idle():

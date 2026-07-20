@@ -28,15 +28,9 @@ class SimklCDN:
 
     @use_cache(cache_hours=1)
     def fetch_json(self, path: str):
-        import requests
-
         url = self.build_url(path)
         try:
-            response = requests.get(
-                url,
-                headers={"User-Agent": f"{g.ADDON_ID}/{g.ADDON.getAddonInfo('version')}"},
-                timeout=60,
-            )
+            response = self._simkl.session.get(url, timeout=60)
             if response.status_code != 200:
                 g.log(f"Simkl CDN HTTP {response.status_code}: {path}", "warning")
                 return None

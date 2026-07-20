@@ -6,13 +6,56 @@ import sqlite3
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from email.message import Message
 from typing import Any
 
 MDBLIST_BASE = "https://api.mdblist.com"
-DEFAULT_BATCH_SIZE = 200
+DEFAULT_BATCH_SIZE = 200  # MDBList Media Info Batch max per request
 DEFAULT_SLEEP = 0.75
 USER_AGENT = "plugin.video.prism/simkl-discover-builder"
+
+
+@dataclass(frozen=True)
+class MdblistRateLimitState:
+    limit: int | None = None
+    remaining: int | None = None
+    reset: int | None = None
+    retry_after: int | None = None
+
+
+@dataclass(frozen=True)
+class MdblistBatchResponse:
+    items: list[dict[str, Any]]
+    rate_limit: MdblistRateLimitState
+
+
+class MdblistRateLimitError(Exception):
+    """Daily MDBList API quota exceeded (HTTP 429)."""
+
+    def __init__(self, message: str, *, state: MdblistRateLimitState | None = None) -> None:
+        super().__init__(message)
+        self.state = state or MdblistRateLimitState()
+
+
+def _header_int(headers: Message | Any, name: str) -> int | None:
+    raw = headers.get(name) if headers is not None else None
+    if raw is None:
+        return None
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_rate_limit_headers(headers: Message | Any) -> MdblistRateLimitState:
+    return MdblistRateLimitState(
+        limit=_header_int(headers, "X-RateLimit-Limit"),
+        remaining=_header_int(headers, "X-RateLimit-Remaining"),
+        reset=_header_int(headers, "X-RateLimit-Reset"),
+        retry_after=_header_int(headers, "Retry-After"),
+    )
 
 
 def resolve_mdblist_api_key(explicit: str | None = None) -> str:
@@ -89,7 +132,7 @@ def lookup_target(catalog: str, ids: dict[str, Any]) -> tuple[str, str, str | in
             ("tmdb", "movie", _parse_int_id(ids.get("tmdb"))),
             ("imdb", "movie", _imdb_id(ids.get("imdb"))),
             ("tvdb", "movie", _parse_int_id(ids.get("tvdb"))),
-            ("simkl", "movie", _parse_int_id(ids.get("simkl"))),
+            ("simkl", "movie", _parse_int_id(ids.get("simkl") or ids.get("simkl_id"))),
             ("mdblist", "movie", _mdblist_id(ids.get("mdblist"))),
         ]
     elif catalog == "tv":
@@ -97,7 +140,7 @@ def lookup_target(catalog: str, ids: dict[str, Any]) -> tuple[str, str, str | in
             ("tmdb", "show", _parse_int_id(ids.get("tmdb"))),
             ("tvdb", "show", _parse_int_id(ids.get("tvdb"))),
             ("imdb", "show", _imdb_id(ids.get("imdb"))),
-            ("simkl", "show", _parse_int_id(ids.get("simkl"))),
+            ("simkl", "show", _parse_int_id(ids.get("simkl") or ids.get("simkl_id"))),
             ("mdblist", "show", _mdblist_id(ids.get("mdblist"))),
         ]
     elif catalog == "anime":
@@ -106,7 +149,7 @@ def lookup_target(catalog: str, ids: dict[str, Any]) -> tuple[str, str, str | in
             ("tmdb", "show", _parse_int_id(ids.get("tmdb"))),
             ("tvdb", "show", _parse_int_id(ids.get("tvdb"))),
             ("imdb", "show", _imdb_id(ids.get("imdb"))),
-            ("simkl", "show", _parse_int_id(ids.get("simkl"))),
+            ("simkl", "show", _parse_int_id(ids.get("simkl") or ids.get("simkl_id"))),
             ("mdblist", "any", _mdblist_id(ids.get("mdblist"))),
         ]
     else:
@@ -286,8 +329,28 @@ def mdblist_batch(
     timeout: float = 120.0,
     retries: int = 3,
 ) -> list[dict[str, Any]]:
+    return mdblist_batch_response(
+        api_key,
+        provider,
+        media_type,
+        ids,
+        timeout=timeout,
+        retries=retries,
+    ).items
+
+
+def mdblist_batch_response(
+    api_key: str,
+    provider: str,
+    media_type: str,
+    ids: list[str | int],
+    *,
+    timeout: float = 120.0,
+    retries: int = 3,
+) -> MdblistBatchResponse:
+    """POST Media Info Batch — one API request for up to 200 ids (see mdblist.apib)."""
     if not ids or not api_key:
-        return []
+        return MdblistBatchResponse(items=[], rate_limit=MdblistRateLimitState())
     url = f"{MDBLIST_BASE}/{provider}/{media_type}/?apikey={api_key}"
     body = json.dumps({"ids": ids}).encode("utf-8")
     last_err: Exception | None = None
@@ -300,25 +363,38 @@ def mdblist_batch(
         )
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
+                rate_limit = _parse_rate_limit_headers(resp.headers)
                 data = json.loads(resp.read().decode("utf-8"))
-            if isinstance(data, list):
-                return [x for x in data if isinstance(x, dict)]
-            return []
-        except urllib.error.HTTPError as e:
-            last_err = e
-            if e.code in (429, 403, 502, 503) and attempt + 1 < retries:
+            items = [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
+            return MdblistBatchResponse(items=items, rate_limit=rate_limit)
+        except urllib.error.HTTPError as exc:
+            last_err = exc
+            state = _parse_rate_limit_headers(exc.headers)
+            if exc.code == 429:
+                detail = ""
+                try:
+                    payload = json.loads(exc.read().decode("utf-8"))
+                    if isinstance(payload, dict):
+                        detail = str(payload.get("error") or payload.get("detail") or "").strip()
+                except Exception:
+                    detail = ""
+                message = detail or "Daily MDBList API limit exceeded"
+                if state.retry_after:
+                    message = f"{message} (retry after {state.retry_after}s)"
+                raise MdblistRateLimitError(message, state=state) from exc
+            if exc.code in (502, 503) and attempt + 1 < retries:
                 time.sleep(2.0 * (attempt + 1))
                 continue
             raise
-        except urllib.error.URLError as e:
-            last_err = e
+        except urllib.error.URLError as exc:
+            last_err = exc
             if attempt + 1 < retries:
                 time.sleep(2.0 * (attempt + 1))
                 continue
             raise
     if last_err:
         raise last_err
-    return []
+    return MdblistBatchResponse(items=[], rate_limit=MdblistRateLimitState())
 
 
 def build_batch_plan(rows: list[tuple[int, str, str | None]]) -> dict[str, list[tuple[int, str, str | int]]]:
@@ -438,7 +514,10 @@ def enrich_simkl_database(
     stats["rows_skipped_no_id"] = len(rows) - eligible
 
     enriched_at = _now_iso()
+    rate_limited = False
     for bucket_key, bucket_rows in buckets.items():
+        if rate_limited:
+            break
         provider, media_type = bucket_key.split("|", 1)
         seen_ids: list[str | int] = []
         id_to_rows: dict[str, list[tuple[int, str]]] = {}
@@ -453,7 +532,14 @@ def enrich_simkl_database(
             chunk = seen_ids[i : i + batch_size]
             if log:
                 log(f"MDBList batch {provider}/{media_type} ({len(chunk)} ids)")
-            items = mdblist_batch(api_key, provider, media_type, chunk)
+            try:
+                response = mdblist_batch_response(api_key, provider, media_type, chunk)
+            except MdblistRateLimitError as exc:
+                if log:
+                    log(f"MDBList daily limit reached: {exc}")
+                rate_limited = True
+                break
+            items = response.items
             stats["batch_requests"] += 1
 
             returned_keys: set[str] = set()

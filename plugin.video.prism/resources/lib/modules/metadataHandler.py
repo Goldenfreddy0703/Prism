@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 from collections import OrderedDict
+from concurrent.futures import as_completed
 from functools import cached_property
 
 from resources.lib.common import tools
@@ -806,6 +807,34 @@ class MetadataHandler:
     # endregion
 
     # region update meta
+    def _parallel_provider_patches(self, fetchers: list) -> list:
+        """Run independent provider fetches concurrently; return non-empty patches."""
+        tasks = [fetcher for fetcher in fetchers if callable(fetcher)]
+        if not tasks:
+            return []
+        if len(tasks) == 1:
+            patch = tasks[0]()
+            return [patch] if patch else []
+
+        from resources.lib.common.thread_pool import get_provider_executor
+
+        executor = get_provider_executor()
+        futures = [executor.submit(fetcher) for fetcher in tasks]
+        patches = []
+        for future in as_completed(futures):
+            exc = future.exception()
+            if exc:
+                raise exc
+            patch = future.result()
+            if patch:
+                patches.append(patch)
+        return patches
+
+    def _merge_provider_patches(self, db_object, patches: list) -> None:
+        for patch in patches:
+            if patch:
+                tools.smart_merge_dictionary(db_object, patch)
+
     def update(self, db_object):
         """Checks and updates the requested db_object with the full set of meta data.
 
@@ -842,9 +871,43 @@ class MetadataHandler:
     # region movie
     def _update_movie(self, db_object):
         self._update_movie_simkl(db_object)
-        self._update_movie_tmdb(db_object)
-        self._update_movie_tvdb(db_object)
-        self._update_movie_fanart(db_object)
+
+        def _fetch_tmdb():
+            g.ensure_addon()
+            if not self._provider_enabled("tmdb"):
+                return None
+            if not self._tmdb_id_valid(db_object):
+                return None
+            if not (self._tmdb_needs_update(db_object) or self._force_update(db_object)):
+                return None
+            return self.tmdb_api.get_movie(db_object["tmdb_id"])
+
+        def _fetch_tvdb():
+            g.ensure_addon()
+            if not self._provider_enabled("tvdb"):
+                return None
+            if not self._tvdb_id_valid(db_object):
+                return None
+            if not (self._tvdb_needs_update(db_object) or self._force_update(db_object)):
+                return None
+            return self.tvdb_api.get_movie(db_object["tvdb_id"])
+
+        def _fetch_fanart():
+            g.ensure_addon()
+            if not self._provider_enabled("fanart"):
+                return None
+            if not self.fanarttv_api.fanart_support:
+                return None
+            if not (self._fanart_needs_update(db_object) or self._force_update(db_object)):
+                return None
+            patch = {}
+            if self._tmdb_id_valid(db_object):
+                tools.smart_merge_dictionary(patch, self.fanarttv_api.get_movie(db_object.get("tmdb_id")))
+            if self._imdb_id_valid(db_object) and self._fanart_needs_update(db_object):
+                tools.smart_merge_dictionary(patch, self.fanarttv_api.get_movie(db_object.get("imdb_id")))
+            return patch or None
+
+        self._merge_provider_patches(db_object, self._parallel_provider_patches([_fetch_tmdb, _fetch_tvdb, _fetch_fanart]))
         self._update_movie_fallback(db_object)
         self._update_movie_ratings(db_object)
         self._update_movie_cast(db_object)
@@ -898,9 +961,40 @@ class MetadataHandler:
     # region tvshow
     def _update_tvshow(self, db_object):
         self._update_tvshow_simkl(db_object)
-        self._update_tvshow_tmdb(db_object)
-        self._update_tvshow_tvdb(db_object)
-        self._update_tvshow_fanart(db_object)
+
+        def _fetch_tmdb():
+            g.ensure_addon()
+            if not self._provider_enabled("tmdb"):
+                return None
+            if not self._tmdb_id_valid(db_object):
+                return None
+            if not (self._tmdb_needs_update(db_object) or self._force_update(db_object)):
+                return None
+            return self.tmdb_api.get_show(db_object["tmdb_id"])
+
+        def _fetch_tvdb():
+            g.ensure_addon()
+            if not self._provider_enabled("tvdb"):
+                return None
+            if not self._tvdb_id_valid(db_object):
+                return None
+            if not (self._tvdb_needs_update(db_object) or self._force_update(db_object)):
+                return None
+            return self.tvdb_api.get_show(db_object["tvdb_id"])
+
+        def _fetch_fanart():
+            g.ensure_addon()
+            if not self._provider_enabled("fanart"):
+                return None
+            if not self.fanarttv_api.fanart_support:
+                return None
+            if not (self._fanart_needs_update(db_object) or self._force_update(db_object)):
+                return None
+            if not self._tvdb_id_valid(db_object):
+                return None
+            return self.fanarttv_api.get_show(db_object.get("tvdb_id"))
+
+        self._merge_provider_patches(db_object, self._parallel_provider_patches([_fetch_tmdb, _fetch_tvdb, _fetch_fanart]))
         self._update_tvshow_fallback(db_object)
         # self._update_tvshow_rating(db_object)  # Commenting for now to reduce tvdb calls
         self._update_tvshow_cast(db_object)
@@ -974,9 +1068,56 @@ class MetadataHandler:
 
     def _update_season(self, db_object):
         """Simkl owns season metadata — external APIs only supply artwork."""
-        self._update_season_tmdb(db_object)
-        self._update_season_tvdb(db_object)
-        self._update_season_fanart(db_object)
+
+        def _fetch_tmdb():
+            g.ensure_addon()
+            if not self._provider_enabled("tmdb"):
+                return None
+            if not self._tmdb_show_id_valid(db_object):
+                return None
+            season_num = self._simkl_season_lookup(db_object)
+            if season_num is None:
+                return None
+            needs_refresh = self._tmdb_needs_update(db_object) or self._force_update(db_object)
+            if needs_refresh or not self._tmdb_art_meta_up_to_par("season", db_object):
+                return self.tmdb_api.get_season_art(db_object["tmdb_show_id"], season_num)
+            return None
+
+        def _fetch_tvdb():
+            g.ensure_addon()
+            if not self._provider_enabled("tvdb"):
+                return None
+            if not self._tvdb_show_id_valid(db_object):
+                return None
+            season_num = self._simkl_season_lookup(db_object)
+            if season_num is None:
+                return None
+            needs_refresh = self._tvdb_needs_update(db_object) or self._force_update(db_object)
+            if needs_refresh or not self._tvdb_art_meta_up_to_par("season", db_object):
+                return self.tvdb_api.get_season_art(db_object["tvdb_show_id"], season_num)
+            return None
+
+        def _fetch_fanart():
+            g.ensure_addon()
+            if not self._provider_enabled("fanart"):
+                return None
+            if not self.fanarttv_api.fanart_support:
+                return None
+            if not (self._fanart_needs_update(db_object) or self._force_update(db_object)):
+                return None
+            if not self._tvdb_show_id_valid(db_object):
+                return None
+            season_num = self._simkl_season_lookup(db_object)
+            if season_num is None:
+                return None
+            return self.fanarttv_api.get_season(
+                db_object.get("tvdb_show_id"),
+                season_num,
+            )
+
+        for patch in self._parallel_provider_patches([_fetch_tmdb, _fetch_tvdb, _fetch_fanart]):
+            if patch:
+                self._merge_season_external(db_object, patch)
         self._update_season_fallback(db_object)
 
     def _update_season_tmdb(self, db_object):
@@ -1266,7 +1407,7 @@ class MetadataHandler:
             PROFILE_MOVIE,
             artwork_profile_for_row,
         )
-        from resources.lib.modules.metadata_providers import art_gapfill_available, art_option_enabled, cast_gapfill_available
+        from resources.lib.modules.metadata_providers import art_gapfill_available, art_option_enabled, cast_gapfill_available, fanart_art_usable
 
         if art_profile is None:
             art_profile = artwork_profile_for_row(row, default_media_type=media_type)
@@ -1326,6 +1467,8 @@ class MetadataHandler:
         for art_key in online_art_keys:
             if art_gapfill_available(row) and not self._art_key_present(art, art_key):
                 gaps.append(art_key)
+        if fanart_art_usable() and art_gapfill_available(row) and not self._art_key_present(art, "fanart"):
+            gaps.append("fanart")
         return gaps
 
     def merge_row_from_cache(

@@ -41,6 +41,8 @@ def discover_list_kwargs() -> dict:
 _POST_FILTER_QUERIES = frozenset(
     {"top_simkl", "top_imdb", "top_mal", "hidden_gems", "completed", "quick_watch"}
 )
+_POST_FILTER_CACHE: dict[tuple[str, str], tuple[float, list]] = {}
+_POST_FILTER_CACHE_TTL = 300.0
 
 # Icon filenames use the "shows" prefix for the tv catalog.
 _ICON_PREFIX = {"movie": "movies", "tv": "shows", "anime": "anime"}
@@ -293,11 +295,20 @@ class DiscoverRenderer:
         if not discover_list.db_query:
             return []
 
+        import time
+
         page_num = g.PAGE if page is None else int(page)
         query_name = discover_list.db_query
         catalog_rows = rows_for_catalog(catalog)
         if not catalog_rows:
             return []
+
+        if query_name in _POST_FILTER_QUERIES:
+            cache_key = (catalog, query_name)
+            now = time.time()
+            cached = _POST_FILTER_CACHE.get(cache_key)
+            if cached and now - cached[0] < _POST_FILTER_CACHE_TTL:
+                return list(cached[1])
 
         offset = 0 if query_name in _POST_FILTER_QUERIES else (page_num - 1) * self.page_size
         rows = query_rows(
@@ -308,7 +319,10 @@ class DiscoverRenderer:
             offset=offset,
         )
         rows = self._post_filter(query_name, rows, catalog)
-        return normalize_discover_db_rows(rows, catalog)
+        normalized = normalize_discover_db_rows(rows, catalog)
+        if query_name in _POST_FILTER_QUERIES:
+            _POST_FILTER_CACHE[cache_key] = (now, normalized)
+        return normalized
 
     def _post_filter(self, query_name: str, rows: list[dict], catalog: str) -> list[dict]:
         if query_name == "top_simkl":

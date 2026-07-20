@@ -1,6 +1,7 @@
 """Background metadata enrichment after Kodi menu paint (Seren/POV-style)."""
 from __future__ import annotations
 
+import threading
 import time
 
 from resources.lib.modules.globals import g
@@ -8,7 +9,9 @@ from resources.lib.modules.globals import g
 _PENDING_KEY = "meta_enrich.pending"
 _IN_FLIGHT_KEY = "meta_enrich.in_flight"
 _DEFER_KEY = "meta_enrich.defer_until"
-_DEFER_MS = 500
+_DEFER_MS = 250
+_worker_thread = None
+_worker_lock = threading.Lock()
 
 
 def meta_enrichment_background() -> bool:
@@ -31,6 +34,11 @@ def hybrid_enrich_on_insert() -> bool:
     if g.FROM_WIDGET:
         return False
     return not meta_enrichment_background() or hybrid_foreground_first_page()
+
+
+def hybrid_widget_local_meta() -> bool:
+    """Widgets: merge cached provider meta only on first paint (no blocking HTTP)."""
+    return g.FROM_WIDGET and meta_enrichment_background()
 
 
 def hybrid_apply_list_meta(rows, media_type: str, db, *, catalog: str | None = None) -> list:
@@ -98,6 +106,11 @@ class MetaEnrichmentQueue:
     ) -> None:
         if not simkl_ids:
             return
+        from resources.lib.modules.enrich_registry import filter_pending
+
+        simkl_ids = filter_pending(media_type, simkl_ids)
+        if not simkl_ids:
+            return
         pending = cls._load_pending()
         batch = pending["batches"].setdefault(
             media_type,
@@ -148,13 +161,49 @@ class MetaEnrichmentQueue:
         cls._save_pending(pending)
 
     @classmethod
+    def _enrich_lock_name(cls, media_type: str) -> str:
+        return f"meta.enrich.{media_type}"
+
+    @classmethod
     def _kick_worker(cls) -> None:
         if g.get_bool_runtime_setting(_IN_FLIGHT_KEY):
             return
+        if not cls._has_work():
+            return
+
+        # In-process worker when not building a directory (service / maintenance / queue action).
+        if g.PLUGIN_HANDLE <= 0:
+            cls._start_worker_thread()
+            return
+
         import xbmc
 
         url = g.create_url(g.BASE_URL, {"action": "processMetaEnrichmentQueue"})
         xbmc.executebuiltin(f'RunPlugin("{url}")')
+
+    @classmethod
+    def _start_worker_thread(cls) -> None:
+        global _worker_thread
+        with _worker_lock:
+            if _worker_thread is not None and _worker_thread.is_alive():
+                return
+
+            def _run() -> None:
+                try:
+                    cls.process_request(None)
+                except Exception:
+                    g.log_stacktrace()
+
+            _worker_thread = threading.Thread(target=_run, daemon=True, name="prism-meta-enrich")
+            _worker_thread.start()
+
+    @classmethod
+    def process_idle(cls) -> bool:
+        """Service hook: drain pending enrichment when browse/prefetch is idle."""
+        if g.get_bool_runtime_setting(_IN_FLIGHT_KEY) or not cls._has_work():
+            return False
+        cls._start_worker_thread()
+        return True
 
     @classmethod
     def enrich_simkl_ids_blocking(
@@ -166,12 +215,18 @@ class MetaEnrichmentQueue:
         catalog: str | None = None,
     ) -> int:
         """Run list enrichment synchronously (used by next-page prefetch)."""
+        from resources.lib.modules.enrich_registry import filter_pending, mark_enriched
+
+        simkl_ids = filter_pending(media_type, simkl_ids)
         if not simkl_ids:
             return 0
         from resources.lib.modules.global_lock import GlobalLock
 
-        with GlobalLock("meta.enrich"):
-            return cls._process_entity_batch(simkl_ids, media_type, reason=reason, catalog=catalog)
+        with GlobalLock(cls._enrich_lock_name(media_type)):
+            processed = cls._process_entity_batch(simkl_ids, media_type, reason=reason, catalog=catalog)
+        if processed:
+            mark_enriched(media_type, simkl_ids, reason=reason)
+        return processed
 
     @classmethod
     def schedule_run_plugin(
@@ -185,7 +240,10 @@ class MetaEnrichmentQueue:
         if not meta_enrichment_background() or not refs:
             return
 
+        from resources.lib.modules.enrich_registry import filter_pending
+
         simkl_ids = sorted({int(ref["simkl_id"]) for ref in refs if ref.get("simkl_id") is not None})
+        simkl_ids = filter_pending(media_type, simkl_ids)
         if not simkl_ids:
             return
 
@@ -234,30 +292,34 @@ class MetaEnrichmentQueue:
                 if not cls._has_work(pending):
                     break
 
+                child_jobs = list(pending.get("child_jobs") or [])
+                batches = {
+                    media_type: dict(batch)
+                    for media_type, batch in (pending.get("batches") or {}).items()
+                }
+                cls._save_pending(_empty_pending())
+
+                from resources.lib.modules.enrich_registry import mark_enriched
                 from resources.lib.modules.global_lock import GlobalLock
 
-                with GlobalLock("meta.enrich"):
-                    child_jobs = list(pending.get("child_jobs") or [])
-                    batches = {
-                        media_type: dict(batch)
-                        for media_type, batch in (pending.get("batches") or {}).items()
-                    }
-                    cls._save_pending(_empty_pending())
-
-                    if child_jobs:
-                        enriched_count += cls._process_child_jobs(child_jobs)
-                    for media_type, batch in batches.items():
-                        simkl_ids = batch.get("simkl_ids") or []
-                        if not simkl_ids:
-                            continue
-                        reason = (batch.get("reasons") or ["list_open"])[0]
-                        catalog = batch.get("catalog")
+                for media_type, batch in batches.items():
+                    simkl_ids = batch.get("simkl_ids") or []
+                    if not simkl_ids:
+                        continue
+                    reason = (batch.get("reasons") or ["list_open"])[0]
+                    catalog = batch.get("catalog")
+                    with GlobalLock(cls._enrich_lock_name(media_type)):
                         enriched_count += cls._process_entity_batch(
                             simkl_ids,
                             media_type,
                             reason=reason,
                             catalog=catalog,
                         )
+                    mark_enriched(media_type, simkl_ids, reason=reason)
+
+                if child_jobs:
+                    with GlobalLock(cls._enrich_lock_name("tvshow")):
+                        enriched_count += cls._process_child_jobs(child_jobs)
 
                 if not cls._has_work():
                     break

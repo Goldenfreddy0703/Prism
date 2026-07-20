@@ -12,6 +12,8 @@ from resources.lib.modules.globals import g
 _DONE_KEY = "page_prefetch.done_keys"
 _IN_FLIGHT_KEY = "page_prefetch.in_flight"
 _MAX_DONE_KEYS = 256
+_prefetch_events: dict[str, threading.Event] = {}
+_prefetch_events_lock = threading.Lock()
 
 
 def prefetch_next_page_enabled() -> bool:
@@ -138,16 +140,35 @@ def current_page_prefetch_params() -> dict[str, Any] | None:
     return page_params
 
 
+def _prefetch_event(key: str) -> threading.Event:
+    with _prefetch_events_lock:
+        event = _prefetch_events.get(key)
+        if event is None:
+            event = threading.Event()
+            _prefetch_events[key] = event
+        return event
+
+
+def _signal_prefetch_done(key: str) -> None:
+    event = _prefetch_event(key)
+    event.set()
+    with _prefetch_events_lock:
+        if len(_prefetch_events) > _MAX_DONE_KEYS:
+            for stale_key in list(_prefetch_events.keys())[:-_MAX_DONE_KEYS]:
+                _prefetch_events.pop(stale_key, None)
+
+
 def wait_for_page_prefetch(page_params: dict[str, Any], timeout_sec: float = 20.0) -> bool:
     """Block until a prefetch thread for this page finishes (or timeout)."""
     if not prefetch_next_page_enabled() or not isinstance(page_params, dict):
         return True
     key = _prefetch_key(page_params)
-    deadline = time.time() + max(timeout_sec, 0.0)
-    while key in _in_flight_keys() and time.time() < deadline:
-        if g.wait_for_abort(0.05):
-            break
-    return key not in _in_flight_keys()
+    if key in _done_keys():
+        return True
+    if key not in _in_flight_keys():
+        return True
+    event = _prefetch_event(key)
+    return event.wait(timeout=max(timeout_sec, 0.0))
 
 
 def wait_for_current_page_prefetch(timeout_sec: float = 20.0) -> bool:
@@ -558,6 +579,8 @@ class PagePrefetch:
             return
 
         def _run() -> None:
+            event = _prefetch_event(key)
+            event.clear()
             _set_in_flight(key, True)
             try:
                 run_page_prefetch(page_params)
@@ -566,5 +589,6 @@ class PagePrefetch:
                 g.log_stacktrace()
             finally:
                 _set_in_flight(key, False)
+                _signal_prefetch_done(key)
 
         threading.Thread(target=_run, daemon=True, name=f"prism-prefetch-{key[:8]}").start()

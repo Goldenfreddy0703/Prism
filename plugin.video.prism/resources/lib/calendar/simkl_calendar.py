@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import time
 from typing import Any
 
 import xbmcgui
@@ -11,8 +12,10 @@ import xbmcgui
 from resources.lib.common import tools
 from resources.lib.database.simkl_discover.mdblist_enrich import (
     DEFAULT_BATCH_SIZE,
+    DEFAULT_SLEEP,
+    MdblistRateLimitError,
     lookup_target,
-    mdblist_batch,
+    mdblist_batch_response,
     mdblist_ratings_to_map,
     resolve_mdblist_api_key,
     response_lookup_id,
@@ -24,8 +27,10 @@ from resources.lib.simkl.images import simkl_image_url
 
 CACHE_SECONDS = 86400
 BUNDLE_CACHE_VERSION = 2
-WEEKLY_CACHE_VERSION = 3
+WEEKLY_CACHE_VERSION = 4
 DEFAULT_WINDOW_DAYS = 7  # Sunday–Saturday calendar week containing today.
+CALENDAR_MDBLIST_BATCH_SIZE = DEFAULT_BATCH_SIZE  # MDBList allows up to 200 ids per POST
+CALENDAR_MDBLIST_SLEEP = DEFAULT_SLEEP
 
 
 def merge_v2_calendar_rows(
@@ -659,40 +664,89 @@ def _merge_enrichment(
     return merged
 
 
-def _build_metadata_cache(catalog: str, rows: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+def _mdblist_item_to_enrichment(item: dict[str, Any]) -> dict[str, Any]:
+    overview = item.get("overview") or item.get("description") or item.get("plot")
+    score = item.get("score_average") or item.get("score")
+    return {
+        "title": item.get("title"),
+        "poster": item.get("poster"),
+        "overview": overview,
+        "plot": overview,
+        "description": item.get("description") or overview,
+        "genres": item.get("genres"),
+        "ratings": item.get("ratings"),
+        "score_average": score,
+        "score": score,
+    }
+
+
+def _metadata_cache_has_mdblist_data(metadata_cache: dict[int, dict[str, Any]]) -> int:
+    return sum(
+        1
+        for item in metadata_cache.values()
+        if isinstance(item, dict) and (item.get("ratings") or item.get("score_average"))
+    )
+
+
+def _should_save_weekly_cache(
+    metadata_cache: dict[int, dict[str, Any]],
+    *,
+    mdblist_targets: int,
+) -> bool:
+    api_key = resolve_mdblist_api_key()
+    if not api_key or mdblist_targets <= 0:
+        return True
+    enriched = _metadata_cache_has_mdblist_data(metadata_cache)
+    if enriched > 0:
+        return True
+    g.log(
+        "Simkl calendar: skipping weekly cache save — MDBList returned no ratings "
+        f"for {mdblist_targets} lookup targets (likely rate limited)",
+        "warning",
+    )
+    return False
+
+
+def _build_metadata_cache(
+    catalog: str,
+    rows: list[dict[str, Any]],
+) -> tuple[dict[int, dict[str, Any]], int]:
     """Gap-fill overview and MDBList ratings (v2 CDN supplies titles, art, and Simkl ratings)."""
     discover_rows = _fetch_discover_db_rows(catalog, rows)
-    mdblist_map = _fetch_mdblist_by_simkl_id(catalog, rows)
+    mdblist_map, mdblist_targets = _fetch_mdblist_by_simkl_id(catalog, rows)
+    row_by_id: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        simkl_id = _simkl_ids_for_row(row)
+        if simkl_id is not None:
+            row_by_id[simkl_id] = row
+
     cache: dict[int, dict[str, Any]] = {}
 
     for simkl_id in _simkl_ids_from_rows(rows):
         item: dict[str, Any] = {}
+        row = row_by_id.get(simkl_id)
+        if row:
+            row_ratings = row.get("ratings")
+            if isinstance(row_ratings, dict) and row_ratings:
+                item["ratings"] = _ratings_dict_to_list(row_ratings)
         if simkl_id in discover_rows:
-            overview = discover_rows[simkl_id].get("overview")
-            if isinstance(overview, str) and overview.strip():
-                item["overview"] = overview.strip()
+            item = _merge_enrichment(item, _discover_row_to_enrichment(discover_rows[simkl_id]))
         if simkl_id in mdblist_map:
-            mdb = mdblist_map[simkl_id]
-            for key in ("overview", "plot", "description"):
-                val = mdb.get(key)
-                if isinstance(val, str) and val.strip():
-                    item[key] = val.strip()
-                    break
-            if mdb.get("score_average") or mdb.get("score"):
-                item["score_average"] = mdb.get("score_average") or mdb.get("score")
-            ratings = mdb.get("ratings")
-            if isinstance(ratings, list) and ratings:
-                item["ratings"] = ratings
+            item = _merge_enrichment(item, _mdblist_item_to_enrichment(mdblist_map[simkl_id]))
         cache[simkl_id] = item
 
     filled = sum(1 for sid in cache if _enrichment_has_plot(cache.get(sid)))
-    rated = sum(1 for sid in cache if isinstance(cache.get(sid), dict) and cache[sid].get("ratings"))
+    rated = sum(
+        1
+        for sid in cache
+        if isinstance(cache.get(sid), dict) and (cache[sid].get("ratings") or cache[sid].get("score_average"))
+    )
     g.log(
         f"Simkl calendar: overview for {filled}/{len(cache)} titles; "
-        f"MDBList ratings for {rated}/{len(cache)} (discover DB / MDBList gap-fill)",
+        f"ratings for {rated}/{len(cache)} (CDN / discover DB / MDBList gap-fill)",
         "info",
     )
-    return cache
+    return cache, mdblist_targets
 
 
 def _simkl_ids_for_row(row: dict[str, Any]) -> int | None:
@@ -704,13 +758,16 @@ def _simkl_ids_for_row(row: dict[str, Any]) -> int | None:
         return None
 
 
-def _fetch_mdblist_by_simkl_id(catalog: str, rows: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+def _fetch_mdblist_by_simkl_id(
+    catalog: str,
+    rows: list[dict[str, Any]],
+) -> tuple[dict[int, dict[str, Any]], int]:
     api_key = resolve_mdblist_api_key()
     if not api_key:
         g.log("Simkl calendar: MDBList API key not set — using discover DB / Simkl CDN only", "info")
-        return {}
+        return {}, 0
     if not rows:
-        return {}
+        return {}, 0
 
     lookup_to_simkl: dict[tuple[str, str, str], list[int]] = {}
     lookup_ids: dict[tuple[str, str, str], str | int] = {}
@@ -731,6 +788,10 @@ def _fetch_mdblist_by_simkl_id(catalog: str, rows: list[dict[str, Any]]) -> dict
         lookup_to_simkl.setdefault(bucket_key, []).append(simkl_id)
         lookup_ids[bucket_key] = lookup_id
 
+    mdblist_targets = len(lookup_to_simkl)
+    if mdblist_targets <= 0:
+        return {}, 0
+
     buckets: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
     for (provider, media_type, lookup), simkl_ids in lookup_to_simkl.items():
         bucket_key = (provider, media_type)
@@ -739,17 +800,56 @@ def _fetch_mdblist_by_simkl_id(catalog: str, rows: list[dict[str, Any]]) -> dict
             "simkl_ids": simkl_ids,
         }
 
+    total_batches = sum(
+        (len(id_map) + CALENDAR_MDBLIST_BATCH_SIZE - 1) // CALENDAR_MDBLIST_BATCH_SIZE
+        for id_map in buckets.values()
+    )
+    g.log(
+        f"Simkl calendar: MDBList plan — {mdblist_targets} titles in {total_batches} batch "
+        f"request(s) (POST /{{provider}}/{{type}}, up to {CALENDAR_MDBLIST_BATCH_SIZE} ids each)",
+        "info",
+    )
+
     out: dict[int, dict[str, Any]] = {}
+    rate_limited = False
     for (provider, media_type), id_map in buckets.items():
+        if rate_limited:
+            break
         id_list = [entry["lookup_id"] for entry in id_map.values()]
-        for i in range(0, len(id_list), DEFAULT_BATCH_SIZE):
-            chunk = id_list[i : i + DEFAULT_BATCH_SIZE]
+        for i in range(0, len(id_list), CALENDAR_MDBLIST_BATCH_SIZE):
+            chunk = id_list[i : i + CALENDAR_MDBLIST_BATCH_SIZE]
+            batch_no = (i // CALENDAR_MDBLIST_BATCH_SIZE) + 1
+            batch_total = (len(id_list) + CALENDAR_MDBLIST_BATCH_SIZE - 1) // CALENDAR_MDBLIST_BATCH_SIZE
             try:
-                results = mdblist_batch(api_key, provider, media_type, chunk)
-            except Exception:
-                g.log(f"MDBList calendar batch failed for {provider}/{media_type}", "warning")
-                g.log_stacktrace()
-                continue
+                response = mdblist_batch_response(api_key, provider, media_type, chunk)
+            except MdblistRateLimitError as exc:
+                state = exc.state
+                g.log(f"Simkl calendar: {exc}", "warning")
+                if state.remaining is not None:
+                    g.log(f"Simkl calendar: MDBList requests remaining today: {state.remaining}", "warning")
+                if state.retry_after:
+                    g.log(
+                        f"Simkl calendar: MDBList quota resets in {state.retry_after}s "
+                        "(see X-RateLimit-Reset / Retry-After headers)",
+                        "warning",
+                    )
+                rate_limited = True
+                break
+
+            results = response.items
+            if response.rate_limit.remaining is not None:
+                g.log(
+                    f"Simkl calendar: MDBList batch {batch_no}/{batch_total} "
+                    f"({provider}/{media_type}, {len(chunk)} ids) — "
+                    f"{response.rate_limit.remaining} API requests remaining today",
+                    "debug",
+                )
+            else:
+                g.log(
+                    f"Simkl calendar: MDBList batch {batch_no}/{batch_total} "
+                    f"({provider}/{media_type}, {len(chunk)} ids, {len(results)} matched)",
+                    "debug",
+                )
 
             by_lookup: dict[str, dict[str, Any]] = {}
             for item in results:
@@ -767,8 +867,11 @@ def _fetch_mdblist_by_simkl_id(catalog: str, rows: list[dict[str, Any]]) -> dict
                 for simkl_id in entry["simkl_ids"]:
                     out[int(simkl_id)] = item
 
-    g.log(f"Simkl calendar: MDBList matched {len(out)} titles", "info")
-    return out
+            if i + CALENDAR_MDBLIST_BATCH_SIZE < len(id_list):
+                time.sleep(CALENDAR_MDBLIST_SLEEP)
+
+    g.log(f"Simkl calendar: MDBList matched {len(out)}/{mdblist_targets} titles", "info")
+    return out, mdblist_targets
 
 
 def _resolve_poster(
@@ -948,11 +1051,15 @@ def format_for_calendar(
     return formatted
 
 
-def _build_weekly_calendar(catalog: str, *, window_days: int = DEFAULT_WINDOW_DAYS) -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]]]:
+def _build_weekly_calendar(
+    catalog: str,
+    *,
+    window_days: int = DEFAULT_WINDOW_DAYS,
+) -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]], int]:
     rows = fetch_calendar_rows(catalog)
     filtered = filter_calendar_rows(rows, catalog=catalog, window_days=window_days)
-    metadata_cache = _build_metadata_cache(catalog, filtered)
-    return filtered, metadata_cache
+    metadata_cache, mdblist_targets = _build_metadata_cache(catalog, filtered)
+    return filtered, metadata_cache, mdblist_targets
 
 
 def prefetch_calendar(catalog: str, *, force_refresh: bool = False) -> int:
@@ -969,8 +1076,9 @@ def prefetch_calendar(catalog: str, *, force_refresh: bool = False) -> int:
             )
             return len(cached[0])
 
-    filtered, metadata_cache = _build_weekly_calendar(catalog)
-    _save_weekly_cache(catalog, filtered, metadata_cache)
+    filtered, metadata_cache, mdblist_targets = _build_weekly_calendar(catalog)
+    if _should_save_weekly_cache(metadata_cache, mdblist_targets=mdblist_targets):
+        _save_weekly_cache(catalog, filtered, metadata_cache)
     g.log(f"Simkl calendar prefetch: built {catalog} weekly cache ({len(filtered)} rows)", "info")
     return len(filtered)
 
@@ -1021,8 +1129,11 @@ def get_calendar_items(catalog: str, *, window_days: int = DEFAULT_WINDOW_DAYS) 
             g.log(f"Simkl calendar: using prefetched {catalog} weekly cache ({len(items)} items)", "info")
             return items, week_label
 
-    filtered, metadata_cache = _build_weekly_calendar(catalog, window_days=window_days)
-    if window_days == DEFAULT_WINDOW_DAYS:
+    filtered, metadata_cache, mdblist_targets = _build_weekly_calendar(catalog, window_days=window_days)
+    if window_days == DEFAULT_WINDOW_DAYS and _should_save_weekly_cache(
+        metadata_cache,
+        mdblist_targets=mdblist_targets,
+    ):
         _save_weekly_cache(catalog, filtered, metadata_cache)
     return format_for_calendar(filtered, catalog, metadata_cache), week_label
 

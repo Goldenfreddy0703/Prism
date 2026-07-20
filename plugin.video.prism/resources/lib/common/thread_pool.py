@@ -1,8 +1,18 @@
+from __future__ import annotations
+
 import concurrent.futures
+import threading
 from functools import reduce
 
 from resources.lib.common import tools
 from resources.lib.modules.globals import g
+
+_shared_executor = None
+_provider_executor = None
+_shared_executor_lock = threading.Lock()
+
+# Default, Low, Medium, High, Extreme
+_SCALED_WORKERS = [20, 10, 20, 40, 80]
 
 
 class ThreadPoolExecutor(concurrent.futures.ThreadPoolExecutor):
@@ -46,22 +56,55 @@ class ThreadPoolExecutor(concurrent.futures.ThreadPoolExecutor):
                 t.join()
 
 
+def _max_pool_workers() -> int:
+    limiter = g.get_bool_runtime_setting("threadpool.limiter")
+    workers = _SCALED_WORKERS[g.get_int_setting("general.threadpoolScale", -1) + 1]
+    return 1 if limiter else workers
+
+
+def get_shared_executor() -> ThreadPoolExecutor:
+    """Process-wide executor for flat parallel work (e.g. Simkl detail enrich)."""
+    global _shared_executor
+    with _shared_executor_lock:
+        if _shared_executor is None or getattr(_shared_executor, "_shutdown", False):
+            _shared_executor = ThreadPoolExecutor(max_workers=_max_pool_workers())
+        return _shared_executor
+
+
+def get_provider_executor() -> ThreadPoolExecutor:
+    """Separate pool for nested TMDB/TVDB/Fanart fetches inside milling workers.
+
+    Must not share the list-milling executor — workers that block waiting for
+    sub-tasks on the same pool will deadlock when the pool is saturated.
+    """
+    global _provider_executor
+    with _shared_executor_lock:
+        if _provider_executor is None or getattr(_provider_executor, "_shutdown", False):
+            workers = max(6, min(24, _max_pool_workers() * 2))
+            _provider_executor = ThreadPoolExecutor(max_workers=workers)
+        return _provider_executor
+
+
 class ThreadPool:
     """
     Helper class to simplify raising worker_pool
     """
 
-    # Default, Low, Medium, High, Extreme
-    scaled_workers = [20, 10, 20, 40, 80]
+    scaled_workers = _SCALED_WORKERS
 
-    def __init__(self):
-        self.limiter = g.get_bool_runtime_setting("threadpool.limiter")
-        self.workers = self.scaled_workers[g.get_int_setting("general.threadpoolScale", -1) + 1]
-        self.max_workers = 1 if self.limiter else self.workers
-        self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
+    def __init__(self, *, shared: bool = False):
+        self._shared = shared
+        if shared:
+            self.executor = get_shared_executor()
+            self.max_workers = self.executor._max_workers
+        else:
+            self.max_workers = _max_pool_workers()
+            self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
         self.tasks = []
 
     def __del__(self):
+        if self._shared:
+            return
         # __init__ may have raised before self.executor was assigned (e.g. a
         # subclass whose construction failed mid-way). Guard so GC of the
         # half-built object doesn't emit a noisy secondary AttributeError.
@@ -117,7 +160,8 @@ class ThreadPool:
         try:
             for task in concurrent.futures.as_completed(self.tasks):
                 if exception := task.exception():
-                    self.executor.shutdown(wait=False, cancel_futures=True)
+                    if not self._shared:
+                        self.executor.shutdown(wait=False, cancel_futures=True)
                     raise exception
 
             results = self._handle_results(task.result() for task in self.tasks if task)
@@ -125,7 +169,8 @@ class ThreadPool:
             return results
         except Exception:
             g.log_stacktrace()
-            self.executor.shutdown(wait=False, cancel_futures=True)
+            if not self._shared:
+                self.executor.shutdown(wait=False, cancel_futures=True)
             raise
 
     def map_results(self, func, args_iterable=None, kwargs_iterable=None):
@@ -145,6 +190,7 @@ class ThreadPool:
                 else self.executor.map(lambda args: func(*args), args_iterable)
             )
         except Exception:
-            self.executor.shutdown(wait=False, cancel_futures=True)
+            if not self._shared:
+                self.executor.shutdown(wait=False, cancel_futures=True)
             g.log_stacktrace()
             raise

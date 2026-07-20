@@ -310,13 +310,9 @@ def enrich_sync_items(
     if not use_parallel or len(rows) == 1:
         enriched = [_enrich_row(row) for row in rows]
     else:
-        from resources.lib.common.thread_pool import ThreadPool
+        from resources.lib.common.thread_pool import get_shared_executor
 
-        pool = ThreadPool()
-        try:
-            enriched = list(pool.executor.map(_enrich_row, rows))
-        finally:
-            pool.executor.shutdown(wait=True)
+        enriched = list(get_shared_executor().map(_enrich_row, rows))
 
     enriched = [row for row in enriched if isinstance(row, dict)]
     if enriched:
