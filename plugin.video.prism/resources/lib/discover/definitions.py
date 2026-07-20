@@ -48,7 +48,7 @@ MOVIE_LISTS: tuple[DiscoverList, ...] = (
     DiscoverList("movies_low_drop", "Easy to Finish", "movie", "db", db_query="low_drop"),
     DiscoverList("movies_ongoing", "In Theaters", "movie", "db", db_query="ongoing_movies"),
     DiscoverList("movies_ended", "Ended Movies", "movie", "db", db_query="ended"),
-    DiscoverList("movies_tba", "Coming Soon", "movie", "cdn", cdn_path="/calendar/movie_release.json"),
+    DiscoverList("movies_tba", "Coming Soon", "movie", "cdn", cdn_path="/calendar/v2/movie_release.json"),
 )
 
 TV_LISTS: tuple[DiscoverList, ...] = (
@@ -70,7 +70,7 @@ TV_LISTS: tuple[DiscoverList, ...] = (
     DiscoverList("tv_low_drop", "Easy to Finish", "tv", "db", db_query="low_drop"),
     DiscoverList("tv_ongoing", "Ongoing Series", "tv", "db", db_query="ongoing"),
     DiscoverList("tv_ended", "Ended Series", "tv", "db", db_query="ended"),
-    DiscoverList("tv_tba", "Coming Soon", "tv", "cdn", cdn_path="/calendar/tv.json"),
+    DiscoverList("tv_tba", "Coming Soon", "tv", "cdn", cdn_path="/calendar/v2/tv.json"),
 )
 
 ANIME_LISTS: tuple[DiscoverList, ...] = (
@@ -92,7 +92,7 @@ ANIME_LISTS: tuple[DiscoverList, ...] = (
     DiscoverList("anime_short", "Short Series", "anime", "db", db_query="short"),
     DiscoverList("anime_ongoing", "Ongoing Anime", "anime", "db", db_query="ongoing"),
     DiscoverList("anime_ended", "Completed Anime", "anime", "db", db_query="ended"),
-    DiscoverList("anime_tba", "Coming Soon", "anime", "cdn", cdn_path="/calendar/anime.json"),
+    DiscoverList("anime_tba", "Coming Soon", "anime", "cdn", cdn_path="/calendar/v2/anime.json"),
 )
 
 CATALOG_LISTS = {

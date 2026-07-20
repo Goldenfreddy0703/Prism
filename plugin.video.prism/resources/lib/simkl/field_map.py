@@ -12,6 +12,61 @@ def _unescape(value):
     return html.unescape(value) if isinstance(value, str) else value
 
 
+def resolve_anime_titles_from_source(source: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Map Simkl CDN/API anime fields to (english, romaji) storage slots.
+
+    CDN trending/discover JSON uses ``title`` for the English name and ``title_romaji``
+    for the Romaji name (``null`` when both are the same, e.g. One Piece).
+    """
+    if not source:
+        return None, None
+
+    base_title = _unescape(source.get("title"))
+    english = _unescape(source.get("en_title") or source.get("title_en"))
+    if not english and base_title:
+        english = base_title
+
+    romaji_raw = source.get("title_romaji")
+    if romaji_raw is not None and str(romaji_raw).strip():
+        romaji = _unescape(romaji_raw)
+    elif base_title:
+        romaji = base_title
+    elif english:
+        romaji = english
+    else:
+        romaji = None
+
+    return english, romaji
+
+
+def pick_anime_display_title(info: dict[str, Any], *, prefer_romaji: bool = False) -> str | None:
+    """Choose the menu/calendar display title from stored anime title slots."""
+    if not info:
+        return None
+    en_title = info.get("title_en") or info.get("title")
+    romaji_title = info.get("title_romaji") or info.get("title")
+    if not en_title and not romaji_title:
+        return None
+    chosen = (romaji_title or en_title) if prefer_romaji else (en_title or romaji_title)
+    return _unescape(chosen) if chosen else None
+
+
+def ensure_anime_title_slots(info: dict[str, Any]) -> bool:
+    """Populate title_en/title_romaji locally. Null CDN title_romaji uses the English title."""
+    if not info:
+        return False
+    english, romaji = resolve_anime_titles_from_source(info)
+    if english and not info.get("title_en"):
+        info["title_en"] = english
+    if romaji and not info.get("title_romaji"):
+        info["title_romaji"] = romaji
+    if not info.get("title") and english:
+        info["title"] = english
+    english = info.get("title_en") or info.get("title")
+    romaji = info.get("title_romaji") or info.get("title")
+    return bool(english and romaji)
+
+
 def _normalize_imdb_id(value) -> str | None:
     if value is None:
         return None
@@ -255,8 +310,7 @@ def enrich_info_from_simkl(
 
     # Capture anime English / Romaji titles so the title-language preference can pick at render time.
     if catalog == "anime" or source.get("anime_type") or info.get("mal_id"):
-        en_title = _unescape(source.get("en_title") or source.get("title_en"))
-        romaji_title = _unescape(source.get("title_romaji")) or title
+        en_title, romaji_title = resolve_anime_titles_from_source(source)
         if en_title and not info.get("title_en"):
             info["title_en"] = en_title
         if romaji_title and not info.get("title_romaji"):

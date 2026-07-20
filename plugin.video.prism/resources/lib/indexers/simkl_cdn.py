@@ -67,15 +67,34 @@ class SimklCDN:
         path = f"/discover/trending/{window}_{size}.json"
         return self.fetch_json(path)
 
-    def calendar_list(self, catalog: str) -> list:
-        """Rolling Simkl calendar JSON (movie | tv | anime)."""
+    def calendar_bundle(self, catalog: str) -> dict:
+        """Simkl calendar v2: {calendar: [...], metadata: {simkl_id: {...}}}."""
         paths = {
-            "movie": "/calendar/movie_release.json",
-            "tv": "/calendar/tv.json",
-            "anime": "/calendar/anime.json",
+            "movie": "/calendar/v2/movie_release.json",
+            "tv": "/calendar/v2/tv.json",
+            "anime": "/calendar/v2/anime.json",
         }
         path = paths.get(catalog)
         if not path:
-            return []
+            return {"calendar": [], "metadata": {}}
         data = self.fetch_json(path)
-        return data if isinstance(data, list) else []
+        if isinstance(data, dict) and isinstance(data.get("calendar"), list):
+            metadata = data.get("metadata")
+            return {
+                "calendar": data["calendar"],
+                "metadata": metadata if isinstance(metadata, dict) else {},
+            }
+        if isinstance(data, list):
+            return {"calendar": data, "metadata": {}}
+        return {"calendar": [], "metadata": {}}
+
+    def calendar_list(self, catalog: str) -> list:
+        """Flatten v2 calendar bundle into legacy row dicts (calendar entry + show metadata)."""
+        from resources.lib.calendar.simkl_calendar import merge_v2_calendar_rows
+
+        bundle = self.calendar_bundle(catalog)
+        return merge_v2_calendar_rows(
+            bundle.get("calendar") or [],
+            bundle.get("metadata") or {},
+            catalog,
+        )

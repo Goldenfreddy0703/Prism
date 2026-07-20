@@ -129,41 +129,19 @@ def _is_anime_info(info: dict) -> bool:
     return isinstance(ids, dict) and ids.get("mal") is not None
 
 
-def _anime_title_fields_missing(info: dict) -> bool:
-    """True when we still need Simkl detail to populate English / Romaji title slots."""
-    if not _is_anime_info(info):
-        return False
-    romaji = info.get("title_romaji") or info.get("title")
-    english = info.get("title_en")
-    return not english or not romaji
-
-
 def gapfill_anime_title_rows(rows: list) -> list:
-    """Fetch Simkl anime detail for rows missing title_en/title_romaji (CDN JSON is often Romaji-only)."""
+    """Fill anime title_en/title_romaji from stored title fields — never calls Simkl API."""
     if not rows:
         return rows
 
-    from resources.lib.simkl.field_map import enrich_info_from_simkl
+    from resources.lib.simkl.field_map import ensure_anime_title_slots
 
     for row in rows:
         if not isinstance(row, dict):
             continue
         info = row.get("info")
-        if not isinstance(info, dict) or not _anime_title_fields_missing(info):
-            continue
-        simkl_id = row.get("simkl_id") or info.get("simkl_id")
-        if simkl_id is None:
-            continue
-        detail = _simkl_detail_sync_dict(int(simkl_id), "anime")
-        if not detail:
-            continue
-        source_info = (detail.get("simkl_object") or {}).get("info") or {}
-        enrich_info_from_simkl(
-            info,
-            source_info,
-            catalog=info.get("catalog") or "anime",
-            mediatype=info.get("mediatype"),
-        )
+        if isinstance(info, dict):
+            ensure_anime_title_slots(info)
     return rows
 
 
@@ -267,7 +245,11 @@ def _enrich_sync_item(
     working = _merge_discover_db_gaps(working)
 
     blob_info = (working.get("simkl_object") or {}).get("info") or {}
-    if _sync_row_display_ready(working) and not _anime_title_fields_missing(blob_info):
+    if _is_anime_info(blob_info):
+        from resources.lib.simkl.field_map import ensure_anime_title_slots
+
+        ensure_anime_title_slots(blob_info)
+    if _sync_row_display_ready(working):
         if cached:
             g.log(f"Simkl enrich skipped API (sync cache): {sid}", "debug")
         return _apply_overlay_fields(item, working)

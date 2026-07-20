@@ -1511,16 +1511,15 @@ class GlobalVariables:
                 ids = info.get("ids") if isinstance(info.get("ids"), dict) else {}
                 is_anime = info.get("catalog") == "anime" or info.get("mal_id") or ids.get("mal")
                 if is_anime:
-                    en_title = info.get("title_en")
-                    romaji_title = info.get("title_romaji")
-                    if en_title or romaji_title:
-                        prefer_romaji = self.get_int_setting("general.anime.titlelanguage") == 1
-                        preferred = (romaji_title or en_title) if prefer_romaji else (en_title or romaji_title)
-                        if preferred:
-                            display = html.unescape(preferred)
-                            info["title"] = display
-                            if info.get("mediatype") == "tvshow":
-                                info["tvshowtitle"] = display
+                    from resources.lib.simkl.field_map import pick_anime_display_title
+
+                    prefer_romaji = self.get_int_setting("general.anime.titlelanguage") == 1
+                    preferred = pick_anime_display_title(info, prefer_romaji=prefer_romaji)
+                    if preferred:
+                        display = preferred
+                        info["title"] = display
+                        if info.get("mediatype") == "tvshow":
+                            info["tvshowtitle"] = display
         except Exception:
             pass
 

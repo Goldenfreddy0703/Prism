@@ -271,12 +271,22 @@ class DiscoverRenderer:
         if not discover_list.cdn_path:
             return []
         data = self.cdn.fetch_json(discover_list.cdn_path)
+        if discover_list.cdn_path.startswith("/calendar/"):
+            from resources.lib.calendar.simkl_calendar import filter_coming_soon_rows, merge_v2_calendar_rows
+
+            if isinstance(data, dict) and isinstance(data.get("calendar"), list):
+                rows = merge_v2_calendar_rows(
+                    data.get("calendar") or [],
+                    data.get("metadata") or {},
+                    catalog,
+                )
+            elif isinstance(data, list):
+                rows = data
+            else:
+                rows = []
+            return filter_coming_soon_rows(rows, catalog=catalog)
         if not isinstance(data, list):
             return []
-        if discover_list.cdn_path.startswith("/calendar/"):
-            from resources.lib.calendar.simkl_calendar import filter_coming_soon_rows
-
-            return filter_coming_soon_rows(data, catalog=catalog)
         return data
 
     def _fetch_db(self, discover_list: DiscoverList, catalog: Catalog, *, page: int | None = None) -> list[dict]:

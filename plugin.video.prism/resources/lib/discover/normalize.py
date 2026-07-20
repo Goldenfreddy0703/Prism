@@ -298,6 +298,7 @@ def db_row_to_sync_dict(row: dict[str, Any], catalog: str) -> dict[str, Any] | N
 
     item = {
         "title": row.get("title"),
+        "title_romaji": row.get("title_romaji"),
         "overview": row.get("overview"),
         "release_date": row.get("release_date"),
         "poster": row.get("poster"),

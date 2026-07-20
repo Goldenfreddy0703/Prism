@@ -4462,8 +4462,8 @@ msgid "Anime title language"
 msgstr "Anime title language"
 
 msgctxt "#30830"
-msgid "Display language for anime titles in menus (watchlist, discover, search). English uses the localized title (e.g. Attack on Titan); Romaji uses the original (e.g. Shingeki no Kyojin)."
-msgstr "Display language for anime titles in menus (watchlist, discover, search). English uses the localized title (e.g. Attack on Titan); Romaji uses the original (e.g. Shingeki no Kyojin)."
+msgid "Display language for anime titles in menus (watchlist, discover, search, calendar). English uses the localized title (e.g. Attack on Titan); Romaji uses the original (e.g. Shingeki no Kyojin). When Romaji is unavailable, the English title is used."
+msgstr "Display language for anime titles in menus (watchlist, discover, search, calendar). English uses the localized title (e.g. Attack on Titan); Romaji uses the original (e.g. Shingeki no Kyojin). When Romaji is unavailable, the English title is used."
 
 msgctxt "#30831"
 msgid "English (Attack on Titan)"
