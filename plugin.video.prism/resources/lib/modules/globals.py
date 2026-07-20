@@ -784,7 +784,7 @@ class GlobalVariables:
                 from resources.lib.simkl.ids import normalize_action_args
 
                 self.REQUEST_PARAMS["action_args"] = normalize_action_args(self.REQUEST_PARAMS["action_args"])
-        self.FROM_WIDGET = not self.is_addon_visible()
+        self.FROM_WIDGET = not self.is_addon_visible() and self.PLUGIN_HANDLE > 0
         self.PAGE = int(g.REQUEST_PARAMS.get("page", 1))
 
     @staticmethod

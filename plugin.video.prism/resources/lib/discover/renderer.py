@@ -232,7 +232,8 @@ class DiscoverRenderer:
         from resources.lib.modules.meta_enrichment_queue import hybrid_enrich_on_insert
 
         blocking_enrich = hybrid_enrich_on_insert()
-        if blocking_enrich:
+        show_busy = blocking_enrich and not g.FROM_WIDGET
+        if show_busy:
             g.show_busy_dialog()
         try:
             refs = enrich_and_persist(
@@ -263,7 +264,7 @@ class DiscoverRenderer:
             else:
                 builder.show_discover_builder(refs, **builder_kwargs)
         finally:
-            if blocking_enrich:
+            if show_busy:
                 g.close_busy_dialog()
 
     def _fetch_cdn(self, discover_list: DiscoverList, catalog: Catalog) -> list:

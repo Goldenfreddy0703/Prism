@@ -28,6 +28,8 @@ def hybrid_foreground_first_page() -> bool:
 
 def hybrid_enrich_on_insert() -> bool:
     """Whether Simkl detail + provider merge should block before the first list page opens."""
+    if g.FROM_WIDGET:
+        return False
     return not meta_enrichment_background() or hybrid_foreground_first_page()
 
 

@@ -2536,7 +2536,7 @@ msgctxt "#30451"
 msgid "Hide Watched Items"
 msgstr "Hide Watched Items"
 
-#: /resources/settings.xml:47
+#: /resources/settings.xml
 msgctxt "#30452"
 msgid "Hide Next Item in Widgets"
 msgstr "Hide Next Item in Widgets"
@@ -5105,8 +5105,8 @@ msgid "Stagger widget loads"
 msgstr "Stagger widget loads"
 
 msgctxt "#30968"
-msgid "Load skin widgets one at a time instead of all at once. Recommended for faster home screen startup."
-msgstr "Load skin widgets one at a time instead of all at once. Recommended for faster home screen startup."
+msgid "Delay when each skin widget starts loading to reduce database and API contention. Widgets still load in parallel; this only spaces out their start times. Leave off unless you see database lock warnings."
+msgstr "Delay when each skin widget starts loading to reduce database and API contention. Widgets still load in parallel; this only spaces out their start times. Leave off unless you see database lock warnings."
 
 msgctxt "#30969"
 msgid "Widget load delay (milliseconds)"
@@ -5150,3 +5150,8 @@ msgstr "Prefetch weekly calendars"
 msgctxt "#30981"
 msgid "Build movie, TV, and anime weekly airing calendars in the background so they open quickly from Discover."
 msgstr "Build movie, TV, and anime weekly airing calendars in the background so they open quickly from Discover."
+
+#: /resources/settings.xml
+msgctxt "#30982"
+msgid "Hide the Next page row in skin widgets and skip prefetching page 2. Recommended for faster home screen widget loads."
+msgstr "Hide the Next page row in skin widgets and skip prefetching page 2. Recommended for faster home screen widget loads."

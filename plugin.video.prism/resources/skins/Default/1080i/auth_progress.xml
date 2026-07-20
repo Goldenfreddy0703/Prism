@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <window type="dialog">
-    <defaultcontrol>4001</defaultcontrol>
+    <defaultcontrol always="true">4001</defaultcontrol>
     <controls>
         <control type="image">
             <texture colordiffuse="aa000000">$INFO[Window.Property(texture.white)]</texture>

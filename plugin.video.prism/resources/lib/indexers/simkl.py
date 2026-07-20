@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from functools import cached_property, wraps
 from typing import Any
 from urllib import parse
@@ -193,7 +192,7 @@ class SimklAPI:
             xbmcgui.Dialog().ok(g.ADDON_NAME, "Simkl client_id missing from context.prism/info.db")
             return False
 
-        from resources.lib.modules.qr_auth import auth_progress_percent, open_auth_dialog
+        from resources.lib.modules.qr_auth import auth_progress_percent, open_auth_dialog, wait_auth_interval
 
         params = self._cdn_query()
         response = self.get("/oauth/pin", authorized=False, **params)
@@ -242,13 +241,15 @@ class SimklAPI:
                     **params,
                 )
                 if pin_response is None:
-                    time.sleep(interval)
+                    if not wait_auth_interval(interval, progress):
+                        return False
                     continue
 
                 try:
                     pin_data = pin_response.json()
                 except json.JSONDecodeError:
-                    time.sleep(interval)
+                    if not wait_auth_interval(interval, progress):
+                        return False
                     continue
 
                 if pin_data.get("result") == "OK" and pin_data.get("access_token"):
@@ -265,7 +266,8 @@ class SimklAPI:
                     self._save_settings(save)
                     xbmcgui.Dialog().notification(g.ADDON_NAME, g.get_language_string(30273))
                     return True
-                time.sleep(interval)
+                if not wait_auth_interval(interval, progress):
+                    return False
         finally:
             progress.close()
 

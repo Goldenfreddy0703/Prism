@@ -79,6 +79,8 @@ def _should_skip_backup_path(relative_path: str) -> bool:
     basename = os.path.basename(relative_path.replace("\\", "/"))
     if basename in SKIP_BACKUP_FILENAMES:
         return True
+    if basename.startswith("qr_auth_") and basename.endswith(".png"):
+        return True
     lowered = relative_path.replace("\\", "/").lower()
     return lowered.endswith(SKIP_BACKUP_SUFFIXES)
 

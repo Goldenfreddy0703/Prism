@@ -76,32 +76,10 @@
 					<default>false</default>
 					<control type="toggle"/>
 				</setting>
-				<setting id="general.widget.hide_next" type="boolean" label="30452" help="">
+				<setting id="general.widget.hide_next" type="boolean" label="30452" help="30982">
 					<level>0</level>
-					<default>false</default>
+					<default>true</default>
 					<control type="toggle"/>
-				</setting>
-				<setting id="general.widget.stagger" type="boolean" label="30967" help="30968">
-					<level>0</level>
-					<default>false</default>
-					<control type="toggle"/>
-				</setting>
-				<setting id="general.widget.delay" type="integer" label="30969" help="30970">
-					<level>0</level>
-					<default>1000</default>
-					<constraints>
-						<minimum>0</minimum>
-						<maximum>5000</maximum>
-						<step>250</step>
-					</constraints>
-					<dependencies>
-						<dependency type="visible">
-							<condition operator="is" setting="general.widget.stagger">true</condition>
-						</dependency>
-					</dependencies>
-					<control type="slider" format="integer">
-						<popup>false</popup>
-					</control>
 				</setting>
 			</group>
 			<group id="2" label="30592">
@@ -3120,6 +3098,28 @@
 					<level>0</level>
 					<default>false</default>
 					<control type="toggle"/>
+				</setting>
+				<setting id="general.widget.stagger" type="boolean" label="30967" help="30968">
+					<level>0</level>
+					<default>false</default>
+					<control type="toggle"/>
+				</setting>
+				<setting id="general.widget.delay" type="integer" label="30969" help="30970">
+					<level>0</level>
+					<default>1000</default>
+					<constraints>
+						<minimum>0</minimum>
+						<maximum>5000</maximum>
+						<step>250</step>
+					</constraints>
+					<dependencies>
+						<dependency type="visible">
+							<condition operator="is" setting="general.widget.stagger">true</condition>
+						</dependency>
+					</dependencies>
+					<control type="slider" format="integer">
+						<popup>false</popup>
+					</control>
 				</setting>
 				<setting id="general.force.widget.refresh.playback" type="boolean" label="30477" help="">
 					<level>0</level>
