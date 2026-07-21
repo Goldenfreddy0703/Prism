@@ -112,7 +112,10 @@ class PrismPlayer(xbmc.Player):
         if self.item_information.get("resume", "false") == "true":
             self._try_get_bookmark()
 
-        self._handle_bookmark()
+        from resources.lib.common import tools
+
+        tools.run_threaded(g.clear_kodi_bookmarks)
+        self._handle_bookmark(clear_kodi=False)
         self._add_support_for_external_simkl_scrobbling()
 
         self.playing_next_time = max(self.playing_next_time, self.item_information["info"].get("duration", 0) * (1 - (g.get_int_setting("playingnext.percent") / 100)))
@@ -734,20 +737,24 @@ class PrismPlayer(xbmc.Player):
         if resume_time is not None:
             self.offset = float(resume_time)
 
-    def _handle_bookmark(self):
-        try:
-            g.clear_kodi_bookmarks()
-        except Exception:
-            g.log_stacktrace()
+    def _handle_bookmark(self, clear_kodi=True):
+        if clear_kodi:
+            try:
+                g.clear_kodi_bookmarks()
+            except Exception:
+                g.log_stacktrace()
         if self.current_time == 0 or self.total_time == 0:
             return
 
         if self.watched_percentage < self.playCountMinimumPercent and self.current_time >= self.ignoreSecondsAtStart:
+            info = self.item_information.get("info") or {}
+            catalog = info.get("catalog") or ("movie" if self.mediatype == "movie" else "tv")
             self.bookmark_sync.set_bookmark(
                 self.simkl_id,
                 int(self.current_time),
                 self.mediatype,
                 self.watched_percentage,
+                catalog=catalog,
             )
         else:
             self.bookmark_sync.remove_bookmark(self.simkl_id)

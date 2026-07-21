@@ -443,48 +443,11 @@ def _prefetch_db_show_page(
     _blocking_enrich_simkl_ids(simkl_ids, "tvshow", catalog=catalog, reason=reason)
 
 
-def _prefetch_on_deck_movies(page_params: dict[str, Any]) -> None:
-    page = int(page_params.get("page") or 1)
-    page_limit = g.get_int_setting("item.limit", 25)
-    page_start = (page - 1) * page_limit
-    page_end = page * page_limit
-    from resources.lib.database.simkl_sync.bookmark import SimklSyncDatabase as BookmarkDatabase
-    from resources.lib.database.simkl_sync.hidden import SimklSyncDatabase as HiddenDatabase
+def _prefetch_continue_watching(page_params: dict[str, Any]) -> None:
+    from resources.lib.simkl.playback import prefetch_continue_watching
 
-    hidden = HiddenDatabase().get_hidden_items("progress_watched", "movies")
-    items = [
-        item
-        for item in BookmarkDatabase().get_all_bookmark_items("movie")
-        if item.get("simkl_id") not in hidden
-    ][page_start:page_end]
-    simkl_ids = sorted({int(item["simkl_id"]) for item in items if item.get("simkl_id") is not None})
-    _blocking_enrich_simkl_ids(simkl_ids, "movie", catalog="movie", reason="prefetch_ondeck")
-
-
-def _prefetch_on_deck_episodes(page_params: dict[str, Any]) -> None:
-    page = int(page_params.get("page") or 1)
-    page_limit = g.get_int_setting("item.limit", 25)
-    page_start = (page - 1) * page_limit
-    page_end = page * page_limit
     catalog = page_params.get("catalog") or "tv"
-    from resources.lib.database.simkl_sync.bookmark import SimklSyncDatabase as BookmarkDatabase
-    from resources.lib.database.simkl_sync.hidden import SimklSyncDatabase as HiddenDatabase
-    from resources.lib.database.simkl_sync.shows import SimklSyncDatabase
-    from resources.lib.simkl.ids import show_id_from_item
-
-    hidden = HiddenDatabase().get_hidden_items("progress_watched", "tvshow")
-    show_db = SimklSyncDatabase()
-    items = []
-    for item in BookmarkDatabase().get_all_bookmark_items("episode"):
-        show_id = show_id_from_item(item)
-        if not show_id or show_id in hidden:
-            continue
-        if show_db.show_catalog(show_id) != catalog:
-            continue
-        items.append(item)
-    page_items = items[page_start:page_end]
-    show_ids = sorted({int(show_id_from_item(item)) for item in page_items if show_id_from_item(item) is not None})
-    _blocking_enrich_simkl_ids(show_ids, "tvshow", catalog=catalog, reason="prefetch_ondeck")
+    prefetch_continue_watching(catalog, page_params)
 
 
 def _prefetch_watched_episodes(page_params: dict[str, Any]) -> None:
@@ -496,6 +459,55 @@ def _prefetch_watched_episodes(page_params: dict[str, Any]) -> None:
     items = SimklSyncDatabase().get_watched_episodes(page, catalog=catalog) or []
     show_ids = sorted({int(show_id_from_item(item)) for item in items if show_id_from_item(item) is not None})
     _blocking_enrich_simkl_ids(show_ids, "tvshow", catalog=catalog, reason="prefetch_watched")
+
+
+def _library_prefetch_handler(route: str, catalog: str):
+    if route == "on_deck":
+        return lambda p, cat=catalog: _prefetch_continue_watching({**p, "catalog": cat})
+    if route in ("watched_movies", "recently_watched") and catalog == "movie":
+        return lambda p: _prefetch_db_movie_page(p, method="get_watched_movies", reason="prefetch_watched")
+    if route == "watched_episodes":
+        return lambda p, cat=catalog: _prefetch_watched_episodes({**p, "catalog": cat})
+    if route == "recently_watched":
+        return lambda p, cat=catalog: _prefetch_db_show_page(
+            p, method="get_recently_watched_shows", reason="prefetch_watched", catalog=cat
+        )
+    return None
+
+
+def _build_library_prefetch_handlers() -> dict[str, Callable[[dict[str, Any]], None]]:
+    from resources.lib.simkl.library_routes import _CANONICAL_ROUTES, _LEGACY_LIBRARY_ACTIONS
+
+    handlers: dict[str, Callable[[dict[str, Any]], None]] = {}
+    for action, (route, catalog) in _LEGACY_LIBRARY_ACTIONS.items():
+        handler = _library_prefetch_handler(route, catalog)
+        if handler is not None:
+            handlers[action] = handler
+
+    for action, route in _CANONICAL_ROUTES.items():
+
+        def _canonical(route_name: str = route):
+            def _handler(page_params: dict[str, Any]) -> None:
+                catalog = page_params.get("catalog") or ("movie" if route_name == "watched_movies" else "tv")
+                bound = _library_prefetch_handler(route_name, catalog)
+                if bound is not None:
+                    bound(page_params)
+
+            return _handler
+
+        handlers[action] = _canonical()
+    return handlers
+
+
+def _prefetch_legacy_watchlist(page_params: dict[str, Any], *, catalog: str) -> None:
+    _prefetch_library(
+        {
+            **page_params,
+            "action": "simklLibraryList",
+            "catalog": catalog,
+            "status": str(page_params.get("status") or "plantowatch"),
+        }
+    )
 
 
 _PREFETCH_HANDLERS: dict[str, Callable[[dict[str, Any]], None]] = {
@@ -511,26 +523,17 @@ _PREFETCH_HANDLERS: dict[str, Callable[[dict[str, Any]], None]] = {
     "animeGenresMultiGet": _prefetch_multi_genre,
     "simklLibraryList": _prefetch_library,
     "simklList": _prefetch_library,
+    "moviesMyWatchlist": lambda p: _prefetch_legacy_watchlist(p, catalog="movie"),
+    "showsMyWatchlist": lambda p: _prefetch_legacy_watchlist(p, catalog="tv"),
     "actorCredits": _prefetch_actor,
     "movieYearsMovies": _prefetch_year,
     "showYears": _prefetch_year,
-    "myWatchedMovies": lambda p: _prefetch_db_movie_page(p, method="get_watched_movies", reason="prefetch_watched"),
     "moviesMyCollection": lambda p: _prefetch_db_movie_page(p, method="get_collected_movies", reason="prefetch_collection"),
     "showsMyCollection": lambda p: _prefetch_db_show_page(p, method="get_collected_shows", reason="prefetch_collection"),
     "showsMyProgress": lambda p: _prefetch_db_show_page(
         p, method="get_unfinished_collected_shows", reason="prefetch_collection"
     ),
-    "showsRecentlyWatched": lambda p: _prefetch_db_show_page(
-        p, method="get_recently_watched_shows", reason="prefetch_watched", catalog="tv"
-    ),
-    "animeRecentlyWatched": lambda p: _prefetch_db_show_page(
-        p, method="get_recently_watched_shows", reason="prefetch_watched", catalog="anime"
-    ),
-    "onDeckMovies": _prefetch_on_deck_movies,
-    "onDeckShows": _prefetch_on_deck_episodes,
-    "onDeckAnime": lambda p: _prefetch_on_deck_episodes({**p, "catalog": "anime"}),
-    "myWatchedEpisodes": lambda p: _prefetch_watched_episodes({**p, "catalog": "tv"}),
-    "animeWatchedEpisodes": lambda p: _prefetch_watched_episodes({**p, "catalog": "anime"}),
+    **_build_library_prefetch_handlers(),
 }
 
 
@@ -540,10 +543,21 @@ def prefetch_threads_active() -> bool:
 
 
 def foreground_browse_busy() -> bool:
-    """True while prefetch or meta-enrich is active (shared across Kodi Python processes)."""
+    """True while prefetch, meta-enrich, or playback pipeline is active."""
     if prefetch_threads_active():
         return True
-    return g.get_bool_runtime_setting("meta_enrich.in_flight")
+    if g.get_bool_runtime_setting("meta_enrich.in_flight"):
+        return True
+    if g.get_bool_runtime_setting("playback.pipeline_busy"):
+        return True
+    try:
+        import xbmc
+
+        if xbmc.Player().isPlayingVideo():
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def run_page_prefetch(page_params: dict[str, Any]) -> None:

@@ -33,11 +33,17 @@ class ResolverWindow(SingleItemWindow):
     def _resolve_source(self):
         stream_link = None
         release_title = None
+        total = len(self.sources)
 
-        for source in self.sources:
+        for index, source in enumerate(self.sources, start=1):
             if self.canceled:
                 return None, None
             self._update_window_properties(source)
+            provider = source.get("debrid_provider") or source.get("provider") or "source"
+            self.setProperty(
+                "notification_text",
+                f"{g.get_language_string(30603)} {index}/{total} — {provider}",
+            )
             try:
                 stream_link, release_title = self.resolver.resolve_single_source(
                     source, self.item_information, self.pack_select
@@ -48,7 +54,7 @@ class ResolverWindow(SingleItemWindow):
                 g.log_stacktrace()
                 continue
         if stream_link is None:
-            self.return_data = "none", "none"
+            self.return_data = None, None
         else:
             self.return_data = stream_link, release_title
 

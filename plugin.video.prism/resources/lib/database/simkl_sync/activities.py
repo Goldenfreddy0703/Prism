@@ -11,7 +11,7 @@ from resources.lib.modules.exceptions import ActivitySyncFailure
 from resources.lib.modules.global_lock import GlobalLock
 from resources.lib.modules.globals import g
 from resources.lib.modules.timeLogger import stopwatch
-from resources.lib.simkl.library import _SIMKL_SINGULAR, _unwrap_sync_items, simkl_entry_to_sync_dict
+from resources.lib.simkl.library import _unwrap_sync_items, simkl_entry_to_sync_dict, sync_entry_media_blob
 
 
 class SimklSyncDatabase(shows.SimklSyncDatabase):
@@ -200,13 +200,17 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
 
     def _sync_movie_bookmarks(self):
         try:
-            self._sync_bookmarks("movies")
+            from resources.lib.simkl.playback import sync_movie_playbacks
+
+            sync_movie_playbacks(self)
         except Exception as exc:
             raise ActivitySyncFailure(exc) from exc
 
     def _sync_show_bookmarks(self):
         try:
-            self._sync_bookmarks("episodes")
+            from resources.lib.simkl.playback import sync_episode_playbacks
+
+            sync_episode_playbacks(self)
         except Exception as exc:
             raise ActivitySyncFailure(exc) from exc
 
@@ -233,7 +237,13 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
         self.current_dialog_text = "Syncing Simkl library"
         self._update_progress(10, self.current_dialog_text)
 
-        params = {"extended": "full", "episode_watched_at": "yes"}
+        params = {
+            "extended": "full",
+            "episode_watched_at": "yes",
+            "include_all_episodes": "original",
+            "episode_tvdb_id": "yes",
+            "next_watch_info": "yes",
+        }
         payload = self.simkl_api.get_all_items(date_from=date_from, **params)
         if payload:
             self._process_all_items_payload(payload)
@@ -241,6 +251,9 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
         anime_params = {
             "extended": "full_anime_seasons",
             "episode_watched_at": "yes",
+            "include_all_episodes": "original",
+            "episode_tvdb_id": "yes",
+            "next_watch_info": "yes",
         }
         anime_payload = self.simkl_api.get_all_items("anime", date_from=date_from, **anime_params)
         if anime_payload:
@@ -249,10 +262,14 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
             for entry in anime_entries:
                 normalized = simkl_entry_to_sync_dict(entry, "anime")
                 if normalized:
+                    normalized["simkl_object"]["info"]["catalog"] = "anime"
+                    if entry.get("status"):
+                        normalized["simkl_object"]["info"]["simkl_status"] = entry.get("status")
                     anime_shows.append(normalized)
             if anime_shows:
                 self.insert_simkl_shows(anime_shows)
-                self._mill_if_needed(anime_shows, self._queue_with_progress)
+                self.apply_sync_episode_stubs_from_entries(anime_entries, anime_shows, "anime")
+                self.apply_next_watch_stubs_from_entries(anime_entries, anime_shows, "anime")
                 self.apply_watched_episodes_from_entries(anime_entries, anime_shows)
 
         if self._removed_from_list_changed(remote_activities):
@@ -278,16 +295,16 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
         for entry in _unwrap_sync_items(payload, "movies"):
             if not isinstance(entry, dict):
                 continue
-            blob = entry.get("movie") or entry
+            blob = sync_entry_media_blob(entry, "movies")
             simkl_id = (blob.get("ids") or {}).get("simkl")
             if simkl_id:
                 active_movie_ids.add(int(simkl_id))
         active_show_ids = set()
-        for media_key, catalog in (("shows", "tv"), ("anime", "anime")):
+        for media_key in ("shows", "anime"):
             for entry in _unwrap_sync_items(payload, media_key):
                 if not isinstance(entry, dict):
                     continue
-                blob = entry.get(_SIMKL_SINGULAR.get(media_key, "show")) or entry
+                blob = sync_entry_media_blob(entry, media_key)
                 simkl_id = (blob.get("ids") or {}).get("simkl")
                 if simkl_id:
                     active_show_ids.add(int(simkl_id))
@@ -360,6 +377,7 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
             if not normalized:
                 continue
             info = normalized["simkl_object"]["info"]
+            info["catalog"] = catalog
             if entry.get("status"):
                 info["simkl_status"] = entry.get("status")
             if entry.get("last_watched_at"):
@@ -374,7 +392,8 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
             return
 
         self.insert_simkl_shows(shows)
-        self._mill_if_needed(shows, self._queue_with_progress)
+        self.apply_sync_episode_stubs_from_entries(entries, shows, catalog)
+        self.apply_next_watch_stubs_from_entries(entries, shows, catalog)
         self.apply_watched_episodes_from_entries(entries, shows)
 
     def _resolve_episode_simkl_id(self, show, episode):
@@ -430,24 +449,12 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
                 WHERE simkl_show_id = ? AND season = ? AND number = ?
                 LIMIT 1
                 """,
-                (int(show_id), int(anime_menu_season(episode)), int(tvdb_number)),
+                (int(show_id), int(tvdb_season), int(tvdb_number)),
             )
             if row:
                 return int(row["simkl_id"])
 
         return None
-
-    @staticmethod
-    def _unwrap_playback_payload(payload, bookmark_type: str):
-        if payload is None:
-            return None
-        if isinstance(payload, list):
-            return payload
-        if isinstance(payload, dict):
-            if bookmark_type == "movies":
-                return payload.get("movies") or []
-            return payload.get("episodes") or payload.get("anime") or []
-        return []
 
     def _episode_duration_seconds(self, simkl_id, episode, show):
         row = self.fetchone("SELECT info FROM episodes WHERE simkl_id=?", (simkl_id,))
@@ -488,108 +495,6 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
             return int(float(runtime) * 60)
         except (TypeError, ValueError):
             return 90 * 60
-
-    def _sync_bookmarks(self, bookmark_type: str):
-        api_type = "movies" if bookmark_type == "movies" else "episodes"
-        raw_payload = self.simkl_api.get_playback(api_type)
-        payload = self._unwrap_playback_payload(raw_payload, bookmark_type)
-        if payload is None:
-            g.log(f"Simkl playback fetch failed for {api_type}, keeping existing bookmarks", "warning")
-            return
-        if not isinstance(payload, list):
-            payload = []
-
-        self.execute_sql("DELETE FROM bookmarks WHERE type=?", (bookmark_type[:-1],))
-        base_sql = "INSERT INTO bookmarks VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING"
-
-        if bookmark_type == "movies":
-            movie_rows = []
-            for entry in payload:
-                movie = entry.get("movie") or entry
-                simkl_id = (movie.get("ids") or {}).get("simkl")
-                progress = entry.get("progress")
-                if not simkl_id or progress is None or progress <= 0 or progress >= 100:
-                    continue
-                duration = self._movie_duration_seconds(int(simkl_id), movie)
-                movie_rows.append(
-                    (
-                        int(simkl_id),
-                        int(float(progress) / 100 * duration),
-                        float(progress),
-                        "movie",
-                        entry.get("paused_at") or entry.get("updated_at"),
-                    )
-                )
-            if movie_rows:
-                self.execute_sql(base_sql, movie_rows)
-            movies_to_insert = []
-            for entry in payload:
-                movie = entry.get("movie") or entry
-                if not isinstance(movie, dict):
-                    continue
-                simkl_id = (movie.get("ids") or {}).get("simkl") or movie.get("simkl_id")
-                if simkl_id:
-                    movies_to_insert.append(movie)
-            if movies_to_insert:
-                self.insert_simkl_movies(movies_to_insert)
-            g.log(f"Simkl bookmark sync: {len(movie_rows)} movie playback(s)", "debug")
-            return
-
-        pending_entries = []
-        show_items_by_key = {}
-        for entry in payload:
-            show = entry.get("show") or entry.get("anime") or {}
-            episode = entry.get("episode") or {}
-            progress = entry.get("progress")
-            if progress is None or progress <= 0 or progress >= 100:
-                continue
-            pending_entries.append((entry, show, episode, float(progress)))
-            if show:
-                show_key = (show.get("ids") or {}).get("simkl")
-                if show_key:
-                    show_items_by_key[int(show_key)] = show
-
-        if show_items_by_key:
-            tv_shows = []
-            anime_shows = []
-            for show in show_items_by_key.values():
-                catalog = "anime" if (show.get("ids") or {}).get("mal") else "tv"
-                normalized = simkl_entry_to_sync_dict({"show": show}, catalog)
-                if not normalized:
-                    continue
-                if catalog == "anime":
-                    anime_shows.append(normalized)
-                else:
-                    tv_shows.append(normalized)
-            for batch in (tv_shows, anime_shows):
-                if batch:
-                    self.insert_simkl_shows(batch)
-                    self._mill_if_needed(batch, mill_episodes=True)
-
-        show_rows = []
-        for entry, show, episode, progress in pending_entries:
-            simkl_id = self._resolve_episode_simkl_id(show, episode)
-            if not simkl_id:
-                g.log(
-                    f"Simkl playback sync: could not resolve episode id for "
-                    f"{show.get('title')} S{episode.get('season')}E{episode.get('number')}",
-                    "debug",
-                )
-                continue
-            duration = self._episode_duration_seconds(simkl_id, episode, show)
-            show_rows.append(
-                (
-                    simkl_id,
-                    int(float(progress) / 100 * duration),
-                    progress,
-                    "episode",
-                    entry.get("paused_at") or entry.get("updated_at"),
-                )
-            )
-
-        if show_rows:
-            self.execute_sql(base_sql, show_rows)
-        g.log(f"Simkl bookmark sync: {len(show_rows)} episode playback(s)", "debug")
 
     def _update_progress(self, progress, text=None):
         if not self.silent:

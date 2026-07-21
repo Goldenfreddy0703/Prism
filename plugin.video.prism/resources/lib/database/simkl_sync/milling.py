@@ -5,7 +5,6 @@ from collections import defaultdict
 from typing import Any
 
 from resources.lib.discover.normalize import _normalize_air_date
-from resources.lib.indexers.simkl import SimklAPI
 from resources.lib.modules.globals import g
 
 
@@ -178,7 +177,9 @@ def _build_season_dict(
 
 
 def pull_show_seasons(show_id: int, catalog: str, mill_episodes: bool, slug: str | None = None) -> list[dict[str, Any]]:
-    api = SimklAPI()
+    from resources.lib.indexers.simkl import thread_simkl_api
+
+    api = thread_simkl_api()
     endpoint = "anime/episodes" if catalog == "anime" else "tv/episodes"
     g.log(
         f"[season trace] pull_show_seasons show={show_id} catalog={catalog} endpoint={endpoint} slug={slug or show_id}",
@@ -247,7 +248,9 @@ def pull_show_seasons(show_id: int, catalog: str, mill_episodes: bool, slug: str
 
 def count_special_episodes(show_id: int, catalog: str = "tv", slug: str | None = None) -> int:
     """Return how many Simkl episodes are tagged as specials for a show."""
-    api = SimklAPI()
+    from resources.lib.indexers.simkl import thread_simkl_api
+
+    api = thread_simkl_api()
     if catalog == "anime":
         raw_episodes = api.get_anime_episodes(show_id, slug=slug) or []
     else:

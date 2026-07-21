@@ -276,17 +276,19 @@ class _connection(metaclass=ABCMeta):
 
 
 class SQLiteConnection(_connection):
-    def __init__(self, path):
+    def __init__(self, path, max_lock_retries=50):
         super().__init__()
         self.path = path
+        self.max_lock_retries = max_lock_retries
         self._create_db_path()
 
     def _create_connection(self):
         retries = 0
         delay = 0.1
         exception = None
+        last_lock_error = None
 
-        while retries < 50 and not g.abort_requested():
+        while retries < self.max_lock_retries and not g.abort_requested():
             try:
                 connection = sqlite3.connect(  # pylint: disable=no-member
                     self.path,
@@ -299,8 +301,12 @@ class SQLiteConnection(_connection):
                 return connection
             except sqlite3.OperationalError as error:
                 if "database is locked" in str(error) or "unable to open database" in str(error):
-                    level = "debug" if retries < 49 else "warning"
-                    g.log(f"Database is locked; retrying ({retries + 1}/50)", level)
+                    last_lock_error = error
+                    level = "debug" if retries < self.max_lock_retries - 1 else "warning"
+                    g.log(
+                        f"Database is locked; retrying ({retries + 1}/{self.max_lock_retries})",
+                        level,
+                    )
                     g.wait_for_abort(delay)
                     delay = min(delay * 2, 5)  # Exponential backoff, capped at 5 seconds
                 else:
@@ -312,7 +318,11 @@ class SQLiteConnection(_connection):
             retries += 1
 
         g.log(f"Unable to connect to database '{self.path}' after {retries} attempts: {exception}", "error")
-        raise exception
+        if exception is not None:
+            raise exception
+        raise last_lock_error or sqlite3.OperationalError(  # pylint: disable=no-member
+            f"database is locked after {retries} attempts"
+        )
 
     def _retry_handler(self, exception):
         if isinstance(exception, sqlite3.OperationalError) and (  # pylint: disable=no-member

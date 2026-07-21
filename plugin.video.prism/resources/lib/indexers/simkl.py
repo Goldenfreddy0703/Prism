@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from functools import cached_property, wraps
 from typing import Any
 from urllib import parse
@@ -17,6 +18,17 @@ from resources.lib.modules.global_lock import GlobalLock
 from resources.lib.modules.globals import g
 
 SIMKL_API_URL = "https://api.simkl.com"
+
+_thread_local = threading.local()
+
+
+def thread_simkl_api() -> "SimklAPI":
+    """One Simkl client + HTTP connection pool per worker thread (safe for parallel milling)."""
+    api = getattr(_thread_local, "simkl_api", None)
+    if api is None:
+        api = SimklAPI()
+        _thread_local.simkl_api = api
+    return api
 
 # Simkl path segments for GET /sync/playback/{type}
 PLAYBACK_PATH_TYPES = {
@@ -269,6 +281,7 @@ class SimklAPI:
                         save["username"] = "Simkl User"
                     self._save_settings(save)
                     xbmcgui.Dialog().notification(g.ADDON_NAME, g.get_language_string(30273))
+                    self._queue_sync_after_auth()
                     return True
                 if not wait_auth_interval(interval, progress):
                     return False
@@ -277,6 +290,15 @@ class SimklAPI:
 
         xbmcgui.Dialog().ok(g.ADDON_NAME, g.get_language_string(30023))
         return False
+
+    @staticmethod
+    def _queue_sync_after_auth():
+        """Pull Simkl library + playback state immediately after a successful login."""
+        import xbmc
+
+        xbmc.executebuiltin(
+            'RunPlugin("plugin://plugin.video.prism/?action=syncSimklActivities&force=true")'
+        )
 
     def revoke(self):
         g.set_setting("simkl.auth", "")

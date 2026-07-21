@@ -11,6 +11,10 @@ from resources.lib.modules.resolver import Resolver
 from resources.lib.modules.source_sorter import SourceSorter
 
 
+def _valid_stream_link(stream_link) -> bool:
+    return bool(stream_link) and stream_link != "none"
+
+
 class Resolverhelper:
     """
     Helper object to stream line resolving items
@@ -44,8 +48,11 @@ class Resolverhelper:
             tools.run_threaded(self.window.doModal, sources, pack_select)
             while not g.wait_for_abort(0.30):
                 stream_link, release_title = self.window.get_return_data()
-                if stream_link:
+                if _valid_stream_link(stream_link):
                     break
+
+        if not _valid_stream_link(stream_link):
+            stream_link = None
 
         if item_information['info']['mediatype'] == g.MEDIA_EPISODE and release_title:
             from resources.lib.simkl.ids import release_title_cache_key

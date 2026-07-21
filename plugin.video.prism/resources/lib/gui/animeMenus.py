@@ -120,6 +120,10 @@ class Menus:
     ######################################################
 
     @staticmethod
+    def _library_catalog(default: str = "anime") -> str:
+        return g.REQUEST_PARAMS.get("catalog", default)
+
+    @staticmethod
     @simkl_auth_guard
     def my_anime():
         from resources.lib.simkl.library_menus import my_anime_hub
@@ -127,7 +131,26 @@ class Menus:
         my_anime_hub()
 
     @simkl_auth_guard
-    def on_deck_anime(self):
-        from resources.lib.simkl.library_menus import render_continue_watching_episodes
+    def on_deck(self):
+        from resources.lib.simkl.library_menus import render_continue_watching
 
-        render_continue_watching_episodes("anime")
+        render_continue_watching(self._library_catalog())
+
+    @simkl_auth_guard
+    def on_deck_anime(self):
+        self.on_deck()
+
+    def next_up(self):
+        from resources.lib.simkl.library_menus import render_next_up
+
+        render_next_up(self._library_catalog())
+
+    def recently_watched(self):
+        from resources.lib.simkl.library_menus import render_recently_watched_shows
+
+        render_recently_watched_shows(self._library_catalog())
+
+    def watched_episodes(self):
+        from resources.lib.simkl.library_menus import render_watched_episodes
+
+        render_watched_episodes(self._library_catalog())

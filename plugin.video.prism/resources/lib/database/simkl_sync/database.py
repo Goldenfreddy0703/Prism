@@ -276,6 +276,7 @@ schema = {
                 ("percent_played", ["TEXT", "NOT NULL"]),
                 ("type", ["TEXT", "NOT NULL"]),
                 ("paused_at", ["TEXT", "NOT NULL"]),
+                ("catalog", ["TEXT"]),
             ]
         ),
         "table_constraints": [],
@@ -319,6 +320,7 @@ class SimklSyncDatabase(Database):
         self._migrate_library_status_columns()
         self._migrate_movies_tvdb_id_column()
         self._migrate_library_cache_tables()
+        self._migrate_bookmarks_catalog_column()
 
         if self.activities is None:
             self.clear_all_meta(False)
@@ -441,6 +443,85 @@ class SimklSyncDatabase(Database):
         from resources.lib.simkl.library_cache import ensure_library_cache_tables
 
         ensure_library_cache_tables(self)
+
+    def _migrate_bookmarks_catalog_column(self):
+        columns = {row["name"] for row in self.fetchall("PRAGMA table_info(bookmarks)")}
+        if "catalog" not in columns:
+            self.execute_sql("ALTER TABLE bookmarks ADD COLUMN catalog TEXT")
+            g.log("SimklSync: migrated bookmarks.catalog column", "info")
+            self.execute_sql(
+                """
+                UPDATE bookmarks
+                SET catalog = CASE
+                    WHEN type = 'movie' THEN 'movie'
+                    ELSE 'tv'
+                END
+                WHERE catalog IS NULL
+                """
+            )
+
+    def replace_playback_bookmarks(self, bookmark_type: str, rows: list[tuple]) -> None:
+        """Replace synced Simkl playback sessions for movie or episode type."""
+        self.execute_sql("DELETE FROM bookmarks WHERE type=?", (bookmark_type,))
+        if not rows:
+            return
+        self.execute_sql(
+            "INSERT INTO bookmarks (simkl_id, resume_time, percent_played, type, paused_at, catalog) "
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+            rows,
+        )
+
+    def get_continue_watching(self, catalog: str, hidden_show_ids: set[int] | None = None) -> list[dict]:
+        hidden_show_ids = hidden_show_ids or set()
+        if catalog == "movie":
+            return self._continue_watching_movies(hidden_show_ids)
+        return self._continue_watching_episodes(catalog, hidden_show_ids)
+
+    def _continue_watching_movies(self, hidden_ids: set[int]) -> list[dict]:
+        rows = self.fetchall(
+            """
+            SELECT bm.simkl_id,
+                   bm.resume_time AS progress,
+                   bm.percent_played,
+                   mm.value         AS simkl_object
+            FROM bookmarks AS bm
+                     LEFT JOIN movies_meta AS mm ON bm.simkl_id = mm.id
+            WHERE bm.type = 'movie'
+              AND bm.catalog = 'movie'
+            ORDER BY Datetime(bm.paused_at) DESC
+            """
+        )
+        return self.wrap_in_simkl_object(
+            [row for row in rows if row.get("simkl_id") not in hidden_ids]
+        )
+
+    def _continue_watching_episodes(self, catalog: str, hidden_show_ids: set[int]) -> list[dict]:
+        rows = self.fetchall(
+            """
+            SELECT ep.simkl_show_id   AS simkl_show_id,
+                   ep.simkl_id        AS simkl_id,
+                   ep.simkl_season_id AS simkl_season_id,
+                   ep.season          AS season_x,
+                   ep.number          AS episode_x,
+                   bm.resume_time     AS progress,
+                   bm.percent_played,
+                   em.value           AS episode,
+                   sm.value           AS show
+            FROM bookmarks AS bm
+                     INNER JOIN episodes AS ep ON bm.simkl_id = ep.simkl_id
+                     LEFT JOIN episodes_meta AS em
+                               ON ep.simkl_id = em.id AND em.type = 'simkl'
+                     LEFT JOIN shows_meta AS sm
+                               ON ep.simkl_show_id = sm.id AND sm.type = 'simkl'
+            WHERE bm.type = 'episode'
+              AND bm.catalog = ?
+            ORDER BY Datetime(bm.paused_at) DESC
+            """,
+            (catalog,),
+        )
+        return self.wrap_in_simkl_object(
+            [row for row in rows if row.get("simkl_show_id") not in hidden_show_ids]
+        )
 
     @staticmethod
     def _library_status_from_item(item) -> str | None:
@@ -976,6 +1057,32 @@ class SimklSyncDatabase(Database):
             for i in to_insert:
                 i["simkl_season_id"] = season_ids.get(f"{get(i, 'simkl_show_id')}-{get(i, 'season')}")
 
+        for item in to_insert:
+            show_id = item.get("simkl_show_id")
+            season = get(item, "season")
+            ep_num = get(item, "episode")
+            new_id = item.get("simkl_id")
+            if show_id is None or season is None or ep_num is None or new_id is None:
+                continue
+            old_row = self.fetchone(
+                """
+                SELECT simkl_id
+                FROM episodes
+                WHERE simkl_show_id = ?
+                  AND season = ?
+                  AND number = ?
+                """,
+                (int(show_id), int(season), int(ep_num)),
+            )
+            if not old_row:
+                continue
+            old_id = int(old_row["simkl_id"])
+            if old_id != int(new_id):
+                self.execute_sql(
+                    "UPDATE bookmarks SET simkl_id = ? WHERE simkl_id = ? AND type = 'episode'",
+                    (int(new_id), old_id),
+                )
+
         self.execute_sql(
             self.upsert_episode_query,
             (
@@ -1186,6 +1293,36 @@ class SimklSyncDatabase(Database):
             queue_wrapper,
             mill_episodes,
         )
+
+    def force_mill_shows(self, shows, mill_episodes=True):
+        """Parallel Simkl catalogue pull — skips needs_milling gate and show meta enrichment."""
+        if not shows:
+            return
+        if isinstance(shows, dict):
+            shows = [shows]
+        show_ids = sorted(
+            {
+                int(show_id)
+                for show in shows
+                if (show_id := self._ref_show_id(show) or show.get("simkl_id")) is not None
+            }
+        )
+        if not show_ids:
+            return
+        predicate = ",".join(str(show_id) for show_id in show_ids)
+        rows = self.fetchall(
+            f"""
+            SELECT s.simkl_id, m.value AS simkl_object, s.tmdb_id, s.tvdb_id
+            FROM shows AS s
+                     LEFT JOIN shows_meta AS m ON m.id = s.simkl_id AND m.type = 'simkl'
+            WHERE s.simkl_id IN ({predicate})
+            """
+        )
+        if not rows:
+            rows = [{"simkl_id": show_id} for show_id in show_ids]
+        g.log(f"Parallel force-mill: {len(rows)} show(s)", "debug")
+        self.insert_simkl_shows(rows)
+        self.mill_seasons(rows, self._queue_mill_tasks, mill_episodes=mill_episodes)
 
     def mill_seasons(self, show_collection, queue_wrapper, mill_episodes=False):
         with SyncLock(
@@ -1426,24 +1563,25 @@ class SimklSyncDatabase(Database):
         row = self.fetchone(
             """
             SELECT m.value AS simkl_object, s.info AS show_info
-            FROM shows_meta AS m
-            LEFT JOIN shows AS s ON s.simkl_id = m.id
-            WHERE m.id = ? AND m.type = 'simkl'
+            FROM shows AS s
+            LEFT JOIN shows_meta AS m ON m.id = s.simkl_id AND m.type = 'simkl'
+            WHERE s.simkl_id = ?
             """,
             (int(show_id),),
         )
-        if row:
-            for info in (
-                (row.get("simkl_object") or {}).get("info") or {},
-                row.get("show_info") or {},
-            ):
-                if not isinstance(info, dict):
-                    continue
-                ids = info.get("ids") or {}
-                if ids.get("mal") or info.get("mal_id"):
-                    return "anime"
-                if info.get("catalog") == "anime" or info.get("type") == "anime":
-                    return "anime"
+        if not row:
+            return "tv"
+        for info in (
+            (row.get("simkl_object") or {}).get("info") or {},
+            row.get("show_info") or {},
+        ):
+            if not isinstance(info, dict):
+                continue
+            ids = info.get("ids") or {}
+            if ids.get("mal") or info.get("mal_id"):
+                return "anime"
+            if info.get("catalog") == "anime" or info.get("type") == "anime":
+                return "anime"
         return "tv"
 
     @staticmethod
@@ -1663,6 +1801,330 @@ class SimklSyncDatabase(Database):
             """,
             rows,
         )
+
+    def apply_sync_episode_stubs_from_entries(self, entries, shows, catalog: str | None = None):
+        """Create lightweight season/episode rows from sync payload (no per-show milling)."""
+        show_ids = {int(show["simkl_id"]): show for show in shows if show.get("simkl_id")}
+        if not show_ids:
+            return
+
+        from resources.lib.simkl.field_map import anime_menu_episode_number
+        from resources.lib.simkl.ids import attach_tv_context, season_key, synthetic_episode_id
+
+        season_items: dict[tuple[int, int], dict] = {}
+        episode_items: dict[tuple[int, int, int], dict] = {}
+
+        for entry in entries or []:
+            show_id = self._entry_show_simkl_id(entry)
+            if show_id is None or show_id not in show_ids:
+                continue
+            show_id = int(show_id)
+
+            entry_catalog = catalog
+            if entry_catalog is None:
+                blob = entry.get("anime") or entry.get("show") or entry
+                entry_catalog = "anime" if (blob.get("ids") or {}).get("mal") else "tv"
+
+            for season in entry.get("seasons") or []:
+                season_num = season.get("number") if season.get("number") is not None else season.get("season")
+                if season_num is None:
+                    continue
+                season_num = int(season_num)
+                season_row_id = season_key(show_id, season_num)
+                episodes = season.get("episodes") or []
+
+                if (show_id, season_num) not in season_items:
+                    season_info = {
+                        "simkl_id": season_row_id,
+                        "mediatype": "season",
+                        "catalog": entry_catalog,
+                        "season": season_num,
+                        "simkl_show_id": show_id,
+                        "episode_count": len(episodes),
+                    }
+                    attach_tv_context(
+                        season_info,
+                        show_id,
+                        season_num=season_num,
+                        season_row_id=season_row_id,
+                    )
+                    season_items[(show_id, season_num)] = {
+                        "simkl_id": season_row_id,
+                        "simkl_show_id": show_id,
+                        "simkl_object": {"info": season_info},
+                    }
+
+                for episode in episodes:
+                    ep_num = episode.get("number") if episode.get("number") is not None else episode.get("episode")
+                    if ep_num is None and entry_catalog == "anime":
+                        ep_num = anime_menu_episode_number(episode, season_num, None)
+                    if ep_num is None:
+                        continue
+                    ep_num = int(ep_num)
+
+                    ep_key = (show_id, season_num, ep_num)
+                    if ep_key in episode_items:
+                        continue
+
+                    ep_ids = episode.get("ids") or {}
+                    ep_simkl_id = ep_ids.get("simkl_id") or ep_ids.get("simkl")
+                    if ep_simkl_id is None:
+                        ep_simkl_id = synthetic_episode_id(show_id, season_num, ep_num)
+                    else:
+                        ep_simkl_id = int(ep_simkl_id)
+
+                    tvdb_id = ep_ids.get("tvdb_id")
+                    watched = 1 if self._episode_marked_watched(episode, entry) else 0
+                    ep_info = {
+                        "simkl_id": ep_simkl_id,
+                        "mediatype": "episode",
+                        "catalog": entry_catalog,
+                        "season": season_num,
+                        "episode": ep_num,
+                        "number": ep_num,
+                        "playcount": watched,
+                    }
+                    if tvdb_id is not None:
+                        ep_info["tvdb_id"] = int(tvdb_id)
+                    attach_tv_context(
+                        ep_info,
+                        show_id,
+                        season_num=season_num,
+                        season_row_id=season_row_id,
+                    )
+                    episode_items[ep_key] = {
+                        "simkl_id": ep_simkl_id,
+                        "simkl_show_id": show_id,
+                        "simkl_season_id": season_row_id,
+                        "simkl_object": {"info": ep_info},
+                    }
+
+        seasons = list(season_items.values())
+        episodes = list(episode_items.values())
+        if seasons:
+            self.insert_simkl_seasons(seasons)
+        if episodes:
+            self.insert_simkl_episodes(episodes)
+        if seasons or episodes:
+            g.log(
+                f"Simkl sync stubs: {len(seasons)} season(s), {len(episodes)} episode(s)",
+                "debug",
+            )
+
+    def ensure_playback_episode_row(self, show: dict, episode: dict, catalog: str) -> int | None:
+        """Create a minimal season/episode row for a paused playback entry (no full mill)."""
+        show_id = (show.get("ids") or {}).get("simkl")
+        if not show_id:
+            return None
+        show_id = int(show_id)
+
+        from resources.lib.simkl.field_map import anime_menu_episode_number, anime_menu_season
+        from resources.lib.simkl.ids import attach_tv_context, season_key, synthetic_episode_id
+
+        ep_ids = episode.get("ids") or {}
+        ep_simkl_id = ep_ids.get("simkl_id") or ep_ids.get("simkl")
+
+        season_num = episode.get("season")
+        if season_num is None:
+            season_num = anime_menu_season(episode)
+        if season_num is None:
+            return None
+        season_num = int(season_num)
+
+        ep_num = episode.get("number") or episode.get("episode")
+        ep_num = anime_menu_episode_number(episode, season_num, ep_num)
+        if ep_num is None:
+            return None
+        ep_num = int(ep_num)
+
+        if ep_simkl_id is not None:
+            ep_simkl_id = int(ep_simkl_id)
+        else:
+            row = self.fetchone(
+                """
+                SELECT simkl_id FROM episodes
+                WHERE simkl_show_id = ? AND season = ? AND number = ?
+                """,
+                (show_id, season_num, ep_num),
+            )
+            if row:
+                return int(row["simkl_id"])
+            ep_simkl_id = synthetic_episode_id(show_id, season_num, ep_num)
+
+        if self.fetchone("SELECT 1 AS ok FROM episodes WHERE simkl_id = ?", (ep_simkl_id,)):
+            return ep_simkl_id
+
+        season_row_id = season_key(show_id, season_num)
+        if not self.fetchone("SELECT 1 AS ok FROM seasons WHERE simkl_id = ?", (season_row_id,)):
+            season_info = {
+                "simkl_id": season_row_id,
+                "mediatype": "season",
+                "catalog": catalog,
+                "season": season_num,
+                "simkl_show_id": show_id,
+            }
+            attach_tv_context(
+                season_info,
+                show_id,
+                season_num=season_num,
+                season_row_id=season_row_id,
+            )
+            self.insert_simkl_seasons(
+                [
+                    {
+                        "simkl_id": season_row_id,
+                        "simkl_show_id": show_id,
+                        "simkl_object": {"info": season_info},
+                    }
+                ]
+            )
+
+        tvdb_id = ep_ids.get("tvdb_id")
+        ep_info = {
+            "simkl_id": ep_simkl_id,
+            "mediatype": "episode",
+            "catalog": catalog,
+            "season": season_num,
+            "episode": ep_num,
+            "number": ep_num,
+            "playcount": 0,
+        }
+        if tvdb_id is not None:
+            ep_info["tvdb_id"] = int(tvdb_id)
+        attach_tv_context(
+            ep_info,
+            show_id,
+            season_num=season_num,
+            season_row_id=season_row_id,
+        )
+        self.insert_simkl_episodes(
+            [
+                {
+                    "simkl_id": ep_simkl_id,
+                    "simkl_show_id": show_id,
+                    "simkl_season_id": season_row_id,
+                    "simkl_object": {"info": ep_info},
+                }
+            ]
+        )
+        return ep_simkl_id
+
+    @staticmethod
+    def _parse_next_to_watch_string(value: str | None) -> tuple[int, int] | None:
+        if not value or not isinstance(value, str):
+            return None
+        import re
+
+        match = re.match(r"[Ss](\d+)[Ee](\d+)", value.strip())
+        if not match:
+            return None
+        return int(match.group(1)), int(match.group(2))
+
+    def apply_next_watch_stubs_from_entries(self, entries, shows, catalog: str | None = None):
+        """Seed the next unwatched episode per watching show from Simkl next_watch_info (no milling)."""
+        show_ids = {int(show["simkl_id"]): show for show in shows if show.get("simkl_id")}
+        if not show_ids:
+            return
+
+        from resources.lib.simkl.ids import attach_tv_context, season_key, synthetic_episode_id
+
+        season_items: dict[tuple[int, int], dict] = {}
+        episode_items: dict[tuple[int, int, int], dict] = {}
+        count = 0
+
+        for entry in entries or []:
+            if not isinstance(entry, dict) or entry.get("status") != "watching":
+                continue
+            show_id = self._entry_show_simkl_id(entry)
+            if show_id is None or show_id not in show_ids:
+                continue
+            show_id = int(show_id)
+
+            entry_catalog = catalog
+            if entry_catalog is None:
+                blob = entry.get("anime") or entry.get("show") or entry
+                entry_catalog = "anime" if (blob.get("ids") or {}).get("mal") else "tv"
+
+            next_info = entry.get("next_to_watch_info")
+            season_num = episode_num = None
+            air_date = None
+            title = None
+            if isinstance(next_info, dict):
+                season_num = next_info.get("season")
+                episode_num = next_info.get("episode")
+                if episode_num is None:
+                    episode_num = next_info.get("number")
+                air_date = next_info.get("date")
+                title = next_info.get("title")
+            if season_num is None or episode_num is None:
+                parsed = self._parse_next_to_watch_string(entry.get("next_to_watch"))
+                if parsed:
+                    season_num, episode_num = parsed
+            if season_num is None or episode_num is None:
+                continue
+            season_num = int(season_num)
+            episode_num = int(episode_num)
+
+            season_row_id = season_key(show_id, season_num)
+            ep_key = (show_id, season_num, episode_num)
+            if ep_key in episode_items:
+                continue
+
+            if (show_id, season_num) not in season_items:
+                season_info = {
+                    "simkl_id": season_row_id,
+                    "mediatype": "season",
+                    "catalog": entry_catalog,
+                    "season": season_num,
+                    "simkl_show_id": show_id,
+                }
+                attach_tv_context(
+                    season_info,
+                    show_id,
+                    season_num=season_num,
+                    season_row_id=season_row_id,
+                )
+                season_items[(show_id, season_num)] = {
+                    "simkl_id": season_row_id,
+                    "simkl_show_id": show_id,
+                    "simkl_object": {"info": season_info},
+                }
+
+            ep_simkl_id = synthetic_episode_id(show_id, season_num, episode_num)
+            ep_info = {
+                "simkl_id": ep_simkl_id,
+                "mediatype": "episode",
+                "catalog": entry_catalog,
+                "season": season_num,
+                "episode": episode_num,
+                "number": episode_num,
+                "playcount": 0,
+                "title": title,
+                "aired": air_date,
+                "first_aired": air_date,
+            }
+            attach_tv_context(
+                ep_info,
+                show_id,
+                season_num=season_num,
+                season_row_id=season_row_id,
+            )
+            episode_items[ep_key] = {
+                "simkl_id": ep_simkl_id,
+                "simkl_show_id": show_id,
+                "simkl_season_id": season_row_id,
+                "simkl_object": {"info": ep_info},
+            }
+            count += 1
+
+        seasons = list(season_items.values())
+        episodes = list(episode_items.values())
+        if seasons:
+            self.insert_simkl_seasons(seasons)
+        if episodes:
+            self.insert_simkl_episodes(episodes)
+        if count:
+            g.log(f"Simkl next-watch stubs: {count} episode(s)", "debug")
 
     def apply_watched_episodes_from_entries(self, entries, shows):
         show_ids = {show["simkl_id"]: show for show in shows if show.get("simkl_id")}
@@ -1891,6 +2353,8 @@ class SimklSyncDatabase(Database):
             self.apply_movie_library_status(entries)
             return
         self.apply_show_library_status(entries)
+        self.apply_sync_episode_stubs_from_entries(entries, sync_items, catalog)
+        self.apply_next_watch_stubs_from_entries(entries, sync_items, catalog)
         self.apply_watched_episodes_from_entries(entries, sync_items)
         self.apply_completed_show_watch_flags(entries)
 

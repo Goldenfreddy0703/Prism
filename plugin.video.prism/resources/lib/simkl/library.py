@@ -19,6 +19,17 @@ _SIMKL_SINGULAR = {
 }
 
 
+def sync_entry_media_blob(entry: dict, media_key: str) -> dict:
+    """Extract the title blob from a Simkl sync list row."""
+    if not isinstance(entry, dict):
+        return {}
+    if media_key == "anime":
+        # Anime rows use the ``show`` key even inside the ``anime`` array (simkl_ids_only too).
+        return entry.get("anime") or entry.get("show") or entry
+    singular = _SIMKL_SINGULAR.get(media_key, "show")
+    return entry.get(singular) or entry
+
+
 def _unwrap_sync_items(payload, media_key: str) -> list[dict]:
     if payload is None:
         return []
@@ -27,7 +38,12 @@ def _unwrap_sync_items(payload, media_key: str) -> list[dict]:
     if isinstance(payload, dict):
         if media_key in payload and isinstance(payload[media_key], list):
             return payload[media_key]
-        for key in ("movies", "shows", "anime", "items"):
+        fallback_keys = {
+            "movies": ("movies", "items"),
+            "shows": ("shows", "items"),
+            "anime": ("anime",),
+        }.get(media_key, (media_key, "items"))
+        for key in fallback_keys:
             if isinstance(payload.get(key), list):
                 return payload[key]
     return []
@@ -51,12 +67,16 @@ def fetch_library_refs(catalog: str, status: str = "plantowatch", *, skip_persis
         g.log("Simkl library: not authenticated", "warning")
         return []
 
+    extended = "full_anime_seasons" if catalog == "anime" else "full"
     payload = api.get_json(
         f"/sync/all-items/{simkl_type}/{status}",
-        extended="full",
+        extended=extended,
         episode_watched_at="yes",
+        include_all_episodes="original",
+        episode_tvdb_id="yes",
+        next_watch_info="yes",
     )
-    entries = _unwrap_sync_items(payload, _SIMKL_SINGULAR.get(simkl_type, "show"))
+    entries = _unwrap_sync_items(payload, simkl_type)
 
     sync_items = []
     for entry in entries:

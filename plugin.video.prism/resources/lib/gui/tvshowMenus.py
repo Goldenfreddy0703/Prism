@@ -59,10 +59,42 @@ class Menus:
     ######################################################
 
     @simkl_auth_guard
-    def on_deck_shows(self):
-        from resources.lib.simkl.library_menus import render_continue_watching_episodes
+    def on_deck(self):
+        from resources.lib.simkl.library_menus import render_continue_watching
 
-        render_continue_watching_episodes("tv")
+        render_continue_watching(self._library_catalog())
+
+    @simkl_auth_guard
+    def on_deck_shows(self):
+        self.on_deck()
+
+    def next_up(self):
+        from resources.lib.simkl.library_menus import render_next_up
+
+        render_next_up(self._library_catalog())
+
+    def my_next_up(self):
+        self.next_up()
+
+    def recently_watched(self):
+        from resources.lib.simkl.library_menus import render_recently_watched_shows
+
+        render_recently_watched_shows(self._library_catalog())
+
+    def shows_recently_watched(self):
+        self.recently_watched()
+
+    def watched_episodes(self):
+        from resources.lib.simkl.library_menus import render_watched_episodes
+
+        render_watched_episodes(self._library_catalog())
+
+    def my_watched_episode(self):
+        self.watched_episodes()
+
+    @staticmethod
+    def _library_catalog(default: str = "tv") -> str:
+        return g.REQUEST_PARAMS.get("catalog", default)
 
     @staticmethod
     def discover_shows():
@@ -119,18 +151,6 @@ class Menus:
 
     def shows_new(self):
         browse.render_discover_endpoint("tv", "new")
-
-    def shows_recently_watched(self):
-        from resources.lib.simkl.library_menus import render_recently_watched_shows
-
-        catalog = g.REQUEST_PARAMS.get("catalog", "tv")
-        render_recently_watched_shows(catalog)
-
-    def my_next_up(self):
-        from resources.lib.simkl.library_menus import render_next_up
-
-        catalog = g.REQUEST_PARAMS.get("catalog", "tv")
-        render_next_up(catalog)
 
     @simkl_auth_guard
     def my_recent_episodes(self):
@@ -299,9 +319,3 @@ class Menus:
             refs = enrich_and_persist("tv", items, enrich=hybrid_enrich_on_insert())
             self.list_builder.show_discover_builder(refs, **discover_list_kwargs())
 
-    @simkl_auth_guard
-    def my_watched_episode(self):
-        from resources.lib.simkl.library_menus import render_watched_episodes
-
-        catalog = g.REQUEST_PARAMS.get("catalog", "tv")
-        render_watched_episodes(catalog)

@@ -26,6 +26,37 @@ def paginate_simkl_lists() -> bool:
     return g.get_bool_setting("general.paginatesimkllists")
 
 
+def library_list_has_next(refs: list) -> bool:
+    """True when another page exists for a pre-sorted library status list."""
+    if not paginate_simkl_lists() or not refs:
+        return False
+    page_limit = g.get_int_setting("item.limit")
+    return g.PAGE * page_limit < len(refs)
+
+
+def library_status_list_kwargs(catalog: str, status: str, refs: list) -> dict:
+    """
+    Shared list-builder kwargs for Simkl library status menus (watchlist, watching, etc.).
+
+    Stamps catalog/status on REQUEST_PARAMS so Next Page links and prefetch use the canonical
+    simklLibraryList route with hybrid fast-menu defaults.
+    """
+    from resources.lib.discover.renderer import discover_list_kwargs
+
+    g.REQUEST_PARAMS["action"] = "simklLibraryList"
+    g.REQUEST_PARAMS["catalog"] = catalog
+    g.REQUEST_PARAMS["status"] = status
+
+    return {
+        **discover_list_kwargs(),
+        **list_filter_kwargs(hide_unaired=False, hide_watched=False),
+        "has_next_page": library_list_has_next(refs),
+        "next_action": "simklLibraryList",
+        "catalog_hint": catalog,
+        "enrichment_reason": "library",
+    }
+
+
 def library_list_page(refs: list) -> tuple[list, bool]:
     """
     Apply Paginate Simkl Lists to a pre-sorted ref list.

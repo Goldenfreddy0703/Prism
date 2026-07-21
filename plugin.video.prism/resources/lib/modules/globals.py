@@ -910,12 +910,15 @@ class GlobalVariables:
         self.SEARCH_HISTORY_DB_PATH = tools.translate_path(os.path.join(self.ADDON_USERDATA_PATH, "search.db"))
         self.SKINS_DB_PATH = tools.translate_path(os.path.join(self.ADDON_USERDATA_PATH, "skins.db"))
 
-    def get_kodi_video_db_connection(self):
+    def get_kodi_video_db_connection(self, max_lock_retries=50):
         config = self.get_kodi_video_db_config()
         if config["type"] == "sqlite3":
             from resources.lib.database import SQLiteConnection
 
-            return SQLiteConnection(os.path.join(self.KODI_DATABASE_PATH, f"{config['database']}.db"))
+            return SQLiteConnection(
+                os.path.join(self.KODI_DATABASE_PATH, f"{config['database']}.db"),
+                max_lock_retries=max_lock_retries,
+            )
         elif config["type"] == "mysql":
             from resources.lib.database import MySqlConnection
 
@@ -960,20 +963,26 @@ class GlobalVariables:
                     g.log(f"Failed to parse advanced settings.xml: {pe}", "warning")
         return result
 
-    def clear_kodi_bookmarks(self):
-        with self.get_kodi_video_db_connection() as video_database:
-            if file_ids := [
-                str(i["idFile"])
-                for i in video_database.fetchall("SELECT * FROM files WHERE strFilename LIKE '%plugin.video.prism%'")
-            ]:
-                video_database.execute_sql(
-                    [
-                        f"DELETE FROM {table} WHERE idFile IN ({','.join(file_ids)})"
-                        for table in ["bookmark", "streamdetails", "files"]
-                    ]
-                )
-            else:
-                return
+    def clear_kodi_bookmarks(self, max_lock_retries=5):
+        """Remove stale Kodi-native bookmarks for Prism plugin URLs (fast-fail by default)."""
+        import sqlite3
+
+        try:
+            with self.get_kodi_video_db_connection(max_lock_retries=max_lock_retries) as video_database:
+                if file_ids := [
+                    str(i["idFile"])
+                    for i in video_database.fetchall(
+                        "SELECT * FROM files WHERE strFilename LIKE '%plugin.video.prism%'"
+                    )
+                ]:
+                    video_database.execute_sql(
+                        [
+                            f"DELETE FROM {table} WHERE idFile IN ({','.join(file_ids)})"
+                            for table in ["bookmark", "streamdetails", "files"]
+                        ]
+                    )
+        except sqlite3.OperationalError:
+            g.log("Skipping Kodi bookmark cleanup; video database is locked", "debug")
 
     # region runtime settings
     def set_runtime_setting(self, setting_id, value):

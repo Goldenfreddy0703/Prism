@@ -677,6 +677,8 @@ class ListBuilder:
         menu_cache = params.pop("menu_cache", None)
         enrichment_refs = params.pop("enrichment_refs", None)
         enrichment_media_type = params.pop("enrichment_media_type", None)
+        enrichment_reason = params.pop("enrichment_reason", "list_open")
+        catalog_hint = params.pop("catalog_hint", None)
 
         params.pop("hide_unaired", None)
         params.pop("hide_watched", None)
@@ -719,6 +721,7 @@ class ListBuilder:
                     page_limit=self.page_limit,
                     next_action=next_action,
                     next_args=next_args,
+                    catalog_hint=catalog_hint,
                 )
                 if page_params:
                     g.add_directory_item(
@@ -735,7 +738,12 @@ class ListBuilder:
                     f"list_paint_ms={(time.time() - paint_start) * 1000:.0f} items={len(list_items)}",
                     "debug",
                 )
-                self._schedule_background_enrichment(enrichment_refs, enrichment_media_type)
+                self._schedule_background_enrichment(
+                    enrichment_refs,
+                    enrichment_media_type,
+                    reason=enrichment_reason,
+                    catalog=catalog_hint,
+                )
 
     def is_aired(self, item):
         """

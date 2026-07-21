@@ -4183,6 +4183,11 @@ msgid "Anime with saved playback progress"
 msgstr "Anime with saved playback progress"
 
 #: /resources/lib/simkl/library_menus.py
+msgctxt "#30760"
+msgid "A list of movies you watched sorted by most recently watched"
+msgstr "A list of movies you watched sorted by most recently watched"
+
+#: /resources/lib/simkl/library_menus.py
 msgctxt "#30750"
 msgid "Next anime episode to watch"
 msgstr "Next anime episode to watch"

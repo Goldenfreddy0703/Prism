@@ -32,6 +32,12 @@ def dispatch(params):
 
     g.log(f"Prism, Running Path - {g.REQUEST_PARAMS}")
 
+    if action:
+        from resources.lib.simkl.library_routes import dispatch_library_action
+
+        if dispatch_library_action(action, params):
+            return
+
     if action is None:
         from resources.lib.gui import homeMenu
 
@@ -101,11 +107,6 @@ def dispatch(params):
         from resources.lib.gui import actorMenus
 
         actorMenus.ActorMenus().open_actor_credit(action_args)
-
-    elif action == "myMovies":
-        from resources.lib.gui import movieMenus
-
-        movieMenus.Menus().my_movies()
 
     elif action == "moviesMyCollection":
         from resources.lib.gui import movieMenus
@@ -177,6 +178,7 @@ def dispatch(params):
         smart_play = SmartPlay(item_information)
         background = None
         resolver_window = None
+        g.set_runtime_setting("playback.pipeline_busy", True)
 
         try:
             # Check to confirm user has a debrid provider authenticated and enabled
@@ -248,7 +250,7 @@ def dispatch(params):
                     g.close_all_dialogs()
                     g.notification(g.ADDON_NAME, g.get_language_string(30032), time=5000)
 
-            if not stream_link:
+            if not stream_link or stream_link == "none":
                 raise NoPlayableSourcesException
 
             from resources.lib.modules import player
@@ -277,6 +279,9 @@ def dispatch(params):
                 pass
 
             g.cancel_playback()
+
+        finally:
+            g.clear_runtime_setting("playback.pipeline_busy")
 
     elif action == "preScrape":
 
@@ -334,43 +339,6 @@ def dispatch(params):
         from resources.lib.gui.animeMenus import Menus
 
         Menus().generic_endpoint(ANIME_LEGACY_DISCOVER_ACTIONS[action])
-
-    elif action == "myAnime":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().my_anime()
-
-    elif action == "onDeckAnime":
-        from resources.lib.gui import animeMenus
-
-        animeMenus.Menus().on_deck_anime()
-
-    elif action == "animeNextUp":
-        from resources.lib.simkl.library_menus import render_next_up
-
-        render_next_up("anime")
-
-    elif action == "animeRecentlyWatched":
-        from resources.lib.simkl.library_menus import render_recently_watched_shows
-
-        render_recently_watched_shows("anime")
-
-    elif action == "animeWatchedEpisodes":
-        from resources.lib.simkl.library_menus import render_watched_episodes
-
-        render_watched_episodes("anime")
-
-    elif action == "simklLibraryList":
-        from resources.lib.simkl.library_menus import render_status_list
-
-        catalog = params.get("catalog", "tv")
-        status = params.get("status", "plantowatch")
-        render_status_list(catalog, status)
-
-    elif action == "myShows":
-        from resources.lib.gui import tvshowMenus
-
-        tvshowMenus.Menus().my_shows()
 
     elif action == "showsMyCollection":
         from resources.lib.gui import tvshowMenus
@@ -472,16 +440,6 @@ def dispatch(params):
         from resources.lib.common import tools
 
         SimklContextMenu(tools.get_item_information(action_args))
-
-    elif action == "onDeckShows":
-        from resources.lib.gui import tvshowMenus
-
-        tvshowMenus.Menus().on_deck_shows()
-
-    elif action == "onDeckMovies":
-        from resources.lib.gui.movieMenus import Menus
-
-        Menus().on_deck_movies()
 
     elif action == "cacheAssist":
         from resources.lib.modules.cacheAssist import CacheAssistHelper
@@ -613,11 +571,6 @@ def dispatch(params):
         from resources.lib.gui import debridServices
 
         debridServices.Menus().list_premiumize_transfers()
-
-    elif action == "showsNextUp":
-        from resources.lib.gui import tvshowMenus
-
-        tvshowMenus.Menus().my_next_up()
 
     elif action == "providerTools":
         from resources.lib.gui import homeMenu
@@ -760,7 +713,7 @@ def dispatch(params):
 
         simkl_db = SimklSyncDatabase()
         simkl_db.flush_activities()
-        simkl_db.sync_activities()
+        simkl_db.sync_activities(force=True)
 
     elif action == "rebuildSimklDatabase":
         from resources.lib.database.simkl_sync import SimklSyncDatabase
@@ -776,16 +729,6 @@ def dispatch(params):
         from resources.lib.gui import tvshowMenus
 
         tvshowMenus.Menus().my_upcoming_episodes()
-
-    elif action == "myWatchedEpisodes":
-        from resources.lib.gui import tvshowMenus
-
-        tvshowMenus.Menus().my_watched_episode()
-
-    elif action == "myWatchedMovies":
-        from resources.lib.gui import movieMenus
-
-        movieMenus.Menus().my_watched_movies()
 
     elif action == "playFromRandomPoint":
         from resources.lib.modules import smartPlay
@@ -972,11 +915,6 @@ def dispatch(params):
         )
 
         ProvidersServiceManager().run_long_life_manager()
-
-    elif action == "showsRecentlyWatched":
-        from resources.lib.gui.tvshowMenus import Menus
-
-        Menus().shows_recently_watched()
 
     elif action == "toggleLanguageInvoker":
         from resources.lib.common.maintenance import toggle_reuselanguageinvoker

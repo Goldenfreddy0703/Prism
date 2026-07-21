@@ -201,6 +201,11 @@ def season_key(show_id: int, season_num: int) -> int:
     return int(show_id) * SEASON_ID_FACTOR + int(season_num)
 
 
+def synthetic_episode_id(show_id: int, season_num: int, episode_num: int) -> int:
+    """Fallback episode row id when Simkl sync payload has no per-episode simkl id."""
+    return int(show_id) * 1_000_000 + int(season_num) * 1_000 + int(episode_num)
+
+
 def is_synthetic_season_id(value: int | None) -> bool:
     if value is None:
         return False
@@ -347,9 +352,17 @@ def show_id_from_item(item: dict[str, Any] | None) -> int | None:
     """Resolve parent show id from a menu/sync item wrapper or flat info dict."""
     if not item:
         return None
+    show_id = item.get("simkl_show_id")
+    if show_id is not None:
+        return int(show_id)
     show_id = show_id_from_info(item.get("info"))
     if show_id is not None:
         return show_id
+    nested = item.get("show")
+    if isinstance(nested, dict):
+        show_id = nested.get("simkl_id") or show_id_from_info(nested.get("simkl_object", {}).get("info"))
+        if show_id is not None:
+            return int(show_id)
     return show_id_from_info(item)
 
 

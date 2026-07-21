@@ -1128,7 +1128,7 @@ def combined_credits_by_person(person_id: int, page: int, page_limit: int) -> li
         role = credit.get("character") or credit.get("job")
         if role:
             normalized["_credit_role"] = str(role)
-        results.append(normalized)
+            results.append(normalized)
         if len(results) >= page_limit:
             break
 

@@ -82,9 +82,9 @@ class Menus:
 
     @simkl_auth_guard
     def on_deck_movies(self):
-        from resources.lib.simkl.library_menus import render_continue_watching_movies
+        from resources.lib.simkl.library_menus import render_continue_watching
 
-        render_continue_watching_movies()
+        render_continue_watching("movie")
 
     @simkl_auth_guard
     def my_movie_collection(self):
@@ -201,12 +201,11 @@ class Menus:
 
     @simkl_auth_guard
     def my_watched_movies(self):
-        from resources.lib.discover.renderer import discover_list_kwargs
-        from resources.lib.simkl.menu_helpers import list_filter_kwargs
+        from resources.lib.simkl.library_menus import render_watched_movies
 
-        watched_movies = self.movies_database.get_watched_movies(g.PAGE)
-        list_kwargs = {
-            **discover_list_kwargs(),
-            **list_filter_kwargs(hide_unaired=False, hide_watched=False),
-        }
-        self.list_builder.movie_menu_builder(watched_movies, **list_kwargs)
+        render_watched_movies()
+
+    def recently_watched_movies(self):
+        from resources.lib.simkl.library_menus import render_recently_watched_movies
+
+        render_recently_watched_movies()

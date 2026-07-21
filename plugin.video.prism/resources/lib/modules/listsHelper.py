@@ -1,6 +1,5 @@
 import xbmcgui
 
-from resources.lib.discover.renderer import discover_list_kwargs
 from resources.lib.modules.globals import g
 from resources.lib.modules.list_builder import ListBuilder
 from resources.lib.simkl.library_cache import load_library_list_refs
@@ -37,6 +36,8 @@ class ListsHelper:
         g.close_directory(g.CONTENT_MENU)
 
     def get_list_items(self):
+        from resources.lib.simkl.menu_helpers import library_status_list_kwargs
+
         media_type = g.REQUEST_PARAMS.get("mediatype", "shows")
         status = g.REQUEST_PARAMS.get("status", "plantowatch")
         catalog = self._catalog_for_media_type(media_type)
@@ -45,8 +46,8 @@ class ListsHelper:
         if not refs:
             g.cancel_directory()
             return
+        list_kwargs = library_status_list_kwargs(catalog, status, refs)
         refs, no_paging = library_list_page(refs)
-        list_kwargs = discover_list_kwargs()
         if catalog == "movie":
             self.builder.movie_menu_builder(refs, no_paging=no_paging, library_status=status, **list_kwargs)
         else:
