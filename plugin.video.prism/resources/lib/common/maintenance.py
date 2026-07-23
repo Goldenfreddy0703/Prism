@@ -600,7 +600,7 @@ def run_maintenance():
     except Exception as e:
         g.log(f"Failed to prefetch sync meta cache: {e}", "warning")
     try:
-        from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue
+        from resources.lib.meta.enrichment import MetaEnrichmentQueue
 
         scheduled = MetaEnrichmentQueue.schedule_needs_update()
         if scheduled:

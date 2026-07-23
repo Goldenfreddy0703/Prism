@@ -5160,3 +5160,103 @@ msgstr "Build movie, TV, and anime weekly airing calendars in the background so 
 msgctxt "#30982"
 msgid "Hide the Next page row in skin widgets and skip prefetching page 2. Recommended for faster home screen widget loads."
 msgstr "Hide the Next page row in skin widgets and skip prefetching page 2. Recommended for faster home screen widget loads."
+
+#: /resources/lib/simkl/all_items_sync.py
+msgctxt "#31000"
+msgid "Fetching your Simkl watchlist…"
+msgstr "Fetching your Simkl watchlist…"
+
+#: /resources/lib/simkl/all_items_sync.py
+msgctxt "#31001"
+msgid "Syncing movies…"
+msgstr "Syncing movies…"
+
+#: /resources/lib/simkl/all_items_sync.py
+msgctxt "#31002"
+msgid "Syncing TV shows…"
+msgstr "Syncing TV shows…"
+
+#: /resources/lib/simkl/all_items_sync.py
+msgctxt "#31003"
+msgid "Syncing anime…"
+msgstr "Syncing anime…"
+
+#: /resources/lib/simkl/episode_catalog_sync.py
+msgctxt "#31004"
+msgid "Updating episode info for Next Up and Continue Watching…"
+msgstr "Updating episode info for Next Up and Continue Watching…"
+
+#: /resources/lib/simkl/episode_catalog_sync.py
+msgctxt "#31005"
+msgid "Next Up"
+msgstr "Next Up"
+
+#: /resources/lib/simkl/episode_catalog_sync.py
+msgctxt "#31006"
+msgid "Continue Watching"
+msgstr "Continue Watching"
+
+#: /resources/lib/simkl/episode_catalog_sync.py
+msgctxt "#31007"
+msgid "My Watched Episodes"
+msgstr "My Watched Episodes"
+
+#: /resources/lib/simkl/episode_catalog_sync.py
+msgctxt "#31008"
+msgid "Catalog update"
+msgstr "Catalog update"
+
+#: /resources/lib/simkl/episode_catalog_sync.py
+msgctxt "#31009"
+msgid "Watchlist update"
+msgstr "Watchlist update"
+
+#: /resources/lib/simkl/all_items_sync.py
+msgctxt "#31010"
+msgid "Updating library cache…"
+msgstr "Updating library cache…"
+
+#: /resources/lib/simkl/all_items_sync.py
+msgctxt "#31011"
+msgid "Prefetching {0} ({1}/{2})"
+msgstr "Prefetching {0} ({1}/{2})"
+
+#: /resources/lib/simkl/all_items_sync.py
+msgctxt "#31012"
+msgid "Checking updates…"
+msgstr "Checking updates…"
+
+#: /resources/lib/simkl/all_items_sync.py
+msgctxt "#31013"
+msgid "Simkl sync complete"
+msgstr "Simkl sync complete"
+
+#: /resources/lib/simkl/episode_catalog_sync.py
+msgctxt "#31014"
+msgid "Continue"
+msgstr "Continue"
+
+#: /resources/lib/simkl/episode_catalog_sync.py
+msgctxt "#31015"
+msgid "Watched"
+msgstr "Watched"
+
+#: /resources/lib/simkl/episode_catalog_sync.py
+msgctxt "#31016"
+msgid "Catalog"
+msgstr "Catalog"
+
+#: /resources/lib/simkl/episode_catalog_sync.py
+msgctxt "#31017"
+msgid "Updates"
+msgstr "Updates"
+
+#: /resources/settings.xml
+msgctxt "#31018"
+msgid "Prefetch episode info during sync"
+msgstr "Prefetch episode info during sync"
+
+#: /resources/settings.xml
+msgctxt "#31019"
+msgid "After syncing your watchlist, download episode titles and artwork for Next Up, Continue Watching, and related menus. Disable for faster syncs; menus will load episode info on demand instead."
+msgstr "After syncing your watchlist, download episode titles and artwork for Next Up, Continue Watching, and related menus. Disable for faster syncs; menus will load episode info on demand instead."

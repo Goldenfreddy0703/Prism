@@ -2,28 +2,11 @@
 
 Canonical actions accept a ``catalog`` query param:
   libraryOnDeck, libraryNextUp, libraryRecentlyWatched,
-  libraryWatchedEpisodes, libraryWatchedMovies
-
-Legacy per-catalog action names remain aliases (widgets, shortcuts).
+  libraryWatchedEpisodes, libraryWatchedMovies, simklLibraryList
 """
 from __future__ import annotations
 
 from typing import Any
-
-# route name -> (legacy action, catalog)
-_LEGACY_LIBRARY_ACTIONS: dict[str, tuple[str, str]] = {
-    "onDeckMovies": ("on_deck", "movie"),
-    "onDeckShows": ("on_deck", "tv"),
-    "onDeckAnime": ("on_deck", "anime"),
-    "showsNextUp": ("next_up", "tv"),
-    "animeNextUp": ("next_up", "anime"),
-    "showsRecentlyWatched": ("recently_watched", "tv"),
-    "animeRecentlyWatched": ("recently_watched", "anime"),
-    "myWatchedEpisodes": ("watched_episodes", "tv"),
-    "animeWatchedEpisodes": ("watched_episodes", "anime"),
-    "myWatchedMovies": ("watched_movies", "movie"),
-    "moviesRecentlyWatched": ("recently_watched", "movie"),
-}
 
 _ROUTE_DEFAULT_CATALOG: dict[str, str] = {
     "watched_movies": "movie",
@@ -43,9 +26,6 @@ _HUB_ACTIONS = frozenset({"myMovies", "myShows", "myAnime"})
 def resolve_library_route(action: str, params: dict[str, Any] | None = None) -> tuple[str, str] | None:
     """Return ``(route, catalog)`` when *action* is a library submenu, else None."""
     params = params or {}
-    legacy = _LEGACY_LIBRARY_ACTIONS.get(action)
-    if legacy:
-        return legacy
     route = _CANONICAL_ROUTES.get(action)
     if route:
         catalog = params.get("catalog") or _ROUTE_DEFAULT_CATALOG.get(route, "tv")
@@ -63,6 +43,8 @@ def prefetch_catalog(action: str, params: dict[str, Any] | None = None, *, defau
 
 def dispatch_library_action(action: str, params: dict[str, Any] | None = None) -> bool:
     """Handle library routes. Returns True when *action* was dispatched."""
+    params = params or {}
+
     if action in _HUB_ACTIONS:
         from resources.lib.gui import animeMenus, movieMenus, tvshowMenus
 
@@ -77,7 +59,6 @@ def dispatch_library_action(action: str, params: dict[str, Any] | None = None) -
     if action == "simklLibraryList":
         from resources.lib.simkl.library_menus import render_status_list
 
-        params = params or {}
         render_status_list(params.get("catalog", "tv"), params.get("status", "plantowatch"))
         return True
 

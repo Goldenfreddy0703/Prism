@@ -19,9 +19,9 @@ class Menus:
 
     @cached_property
     def movies_database(self):
-        from resources.lib.database.simkl_sync.movies import SimklSyncDatabase
+        from resources.lib.database.session import get_sync_database
 
-        return SimklSyncDatabase()
+        return get_sync_database()
 
     @cached_property
     def search_history(self):
@@ -97,12 +97,6 @@ class Menus:
         )
 
     @simkl_auth_guard
-    def my_movie_watchlist(self):
-        from resources.lib.simkl.library_menus import render_status_list
-
-        render_status_list("movie", "plantowatch")
-
-    @simkl_auth_guard
     def movies_recommended(self):
         browse.render_discover_endpoint("movie", "anticipated")
 
@@ -173,10 +167,9 @@ class Menus:
             g.cancel_directory()
             return
         from resources.lib.discover.renderer import discover_list_kwargs
-        from resources.lib.modules.meta_enrichment_queue import hybrid_enrich_on_insert
         from resources.lib.simkl.media_ref import enrich_and_persist
 
-        refs = enrich_and_persist("movie", items, enrich=hybrid_enrich_on_insert())
+        refs = enrich_and_persist("movie", items, enrich=False)
         self.list_builder.movie_discover_builder(refs, **discover_list_kwargs())
 
     def movies_genres(self):

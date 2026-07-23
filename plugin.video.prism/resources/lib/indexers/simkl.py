@@ -322,6 +322,15 @@ class SimklAPI:
     def get_activities(self):
         return self.get_json("/sync/activities")
 
+    def get_changes(self, date_from: str | None = None, media_types: str | None = None):
+        """Catalog IDs whose metadata changed recently (public; pair with watchlist intersect)."""
+        params: dict[str, str] = {}
+        if date_from:
+            params["date_from"] = date_from
+        if media_types:
+            params["type"] = media_types
+        return self.get_json("/changes", authorized=False, client_id=self.client_id, **params)
+
     def sync_all_items(self, media_type: str, status: str):
         """Fetch user list bucket. status: watching, completed, hold, dropped, plantowatch."""
         return self.get_json(f"/sync/all-items/{media_type}/{status}")

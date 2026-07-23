@@ -77,7 +77,7 @@ def merge_v2_calendar_rows(
 
 
 def prefetch_calendars_enabled() -> bool:
-    return g.get_bool_setting("general.prefetchCalendars", True)
+    return True
 
 _CALENDAR_RATING_SOURCES = (
     "simkl",
@@ -1184,7 +1184,7 @@ def open_calendar(catalog: str) -> None:
 def _navigate_calendar_selection(selected: dict[str, Any]) -> None:
     from resources.lib.gui.tvshowMenus import Menus as ShowMenus
     from resources.lib.modules.list_builder import ListBuilder
-    from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue, meta_enrichment_background
+    from resources.lib.meta.enrichment import MetaEnrichmentQueue
     from resources.lib.simkl.media_ref import enrich_and_persist, normalize_simkl_item
 
     catalog = selected.get("catalog") or "tv"
@@ -1198,14 +1198,7 @@ def _navigate_calendar_selection(selected: dict[str, Any]) -> None:
         g.cancel_directory()
         return
 
-    fast_path = meta_enrichment_background()
-    if not fast_path:
-        g.show_busy_dialog()
-    try:
-        refs = enrich_and_persist(catalog, [sync], force_simkl_meta=True, enrich=not fast_path)
-    finally:
-        if not fast_path:
-            g.close_busy_dialog()
+    refs = enrich_and_persist(catalog, [sync], force_simkl_meta=True, enrich=False)
 
     if not refs:
         xbmcgui.Dialog().ok(g.ADDON_NAME, "Could not load item details.")

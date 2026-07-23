@@ -9,6 +9,9 @@ CURRENT_YEAR = datetime.datetime.now().year
 
 _POOL_LIMIT = 500
 _HIDDEN_GEMS_LIMIT = 300
+# Rolling window for "New Releases" / "New Series" / "New Anime" discover lists.
+_NEW_RELEASE_LOOKBACK_DAYS = 365
+_NEW_RELEASE_LOOKAHEAD_DAYS = 45
 
 
 def _parse_ratings(row: dict[str, Any]) -> dict[str, Any]:
@@ -38,6 +41,40 @@ def _release_in_current_year(release_date: str | None) -> bool:
     if not release_date:
         return False
     return f"/{CURRENT_YEAR}" in release_date or release_date.startswith(f"{CURRENT_YEAR}-")
+
+
+def _parsed_release_date(release_date: str | None) -> datetime.date | None:
+    """Parse Simkl CDN release_date (ISO or MM/DD/YYYY) to a calendar date."""
+    from resources.lib.discover.normalize import _normalize_air_date
+
+    iso = _normalize_air_date(release_date)
+    if not iso:
+        return None
+    try:
+        return datetime.date.fromisoformat(str(iso)[:10])
+    except ValueError:
+        return None
+
+
+def _is_recent_release(
+    release_date: str | None,
+    *,
+    lookback_days: int = _NEW_RELEASE_LOOKBACK_DAYS,
+    lookahead_days: int = _NEW_RELEASE_LOOKAHEAD_DAYS,
+) -> bool:
+    """True when a title premiered recently (or is about to within the lookahead window)."""
+    day = _parsed_release_date(release_date)
+    if day is None:
+        return False
+    today = datetime.date.today()
+    earliest = today - datetime.timedelta(days=lookback_days)
+    latest = today + datetime.timedelta(days=lookahead_days)
+    return earliest <= day <= latest
+
+
+def _release_date_sort_key(release_date: str | None) -> tuple[bool, datetime.date]:
+    day = _parsed_release_date(release_date)
+    return (day is None, day or datetime.date.min)
 
 
 def _sort_key_desc(field: str):
@@ -82,7 +119,7 @@ def _filter_rows(rows: list[dict[str, Any]], query_name: str, *, catalog: str) -
     if query_name == "top_mdblist":
         return [r for r in rows if _simkl_rating(r) > 0 or r.get("mdblist_score")]
     if query_name == "new_releases":
-        return [r for r in rows if r.get("release_date")]
+        return [r for r in rows if _is_recent_release(r.get("release_date"))]
     if query_name == "ongoing":
         return [r for r in rows if r.get("status") == "ongoing"]
     if query_name == "ongoing_movies":
@@ -135,7 +172,7 @@ def _sort_rows(rows: list[dict[str, Any]], query_name: str, *, catalog: str) -> 
             reverse=True,
         )
     if query_name == "new_releases":
-        return sorted(rows, key=lambda r: r.get("release_date") or "", reverse=True)
+        return sorted(rows, key=lambda r: _release_date_sort_key(r.get("release_date")), reverse=True)
     if query_name == "ongoing":
         return sorted(rows, key=_sort_key_desc("watched"), reverse=True)
     if query_name == "ongoing_movies":
@@ -145,7 +182,7 @@ def _sort_rows(rows: list[dict[str, Any]], query_name: str, *, catalog: str) -> 
     if query_name == "low_drop":
         return sorted(rows, key=lambda r: r.get("drop_rate") or "")
     if query_name == "new_year":
-        return sorted(rows, key=lambda r: r.get("release_date") or "", reverse=True)
+        return sorted(rows, key=lambda r: _release_date_sort_key(r.get("release_date")), reverse=True)
     if query_name == "hidden_gems":
         return sorted(
             rows,

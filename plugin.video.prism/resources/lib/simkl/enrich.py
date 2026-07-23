@@ -85,10 +85,11 @@ def _batch_load_sync_cache(items: list[dict]) -> dict[int, dict]:
             cache[sid] = sync
 
     if movie_misses:
-        from resources.lib.database.simkl_sync.movies import SimklSyncDatabase as MoviesDB
+        from resources.lib.database.session import get_sync_database
 
+        db = get_sync_database()
         placeholders = ",".join("?" * len(movie_misses))
-        rows = MoviesDB().fetchall(
+        rows = db.fetchall(
             f"SELECT simkl_id, info, art, tmdb_id, tvdb_id, imdb_id FROM movies WHERE simkl_id IN ({placeholders})",
             tuple(movie_misses),
         )
@@ -99,9 +100,9 @@ def _batch_load_sync_cache(items: list[dict]) -> dict[int, dict]:
                 cache[int(row["simkl_id"])] = sync
 
     if show_misses:
-        from resources.lib.database.simkl_sync.shows import SimklSyncDatabase as ShowsDB
+        from resources.lib.database.session import get_sync_database
 
-        shows_db = ShowsDB()
+        shows_db = get_sync_database()
         placeholders = ",".join("?" * len(show_misses))
         rows = shows_db.fetchall(
             f"SELECT simkl_id, info, art, tmdb_id, tvdb_id, imdb_id FROM shows WHERE simkl_id IN ({placeholders})",
@@ -305,7 +306,7 @@ def enrich_sync_items(
 
     use_parallel = parallel
     if use_parallel is None:
-        use_parallel = g.get_bool_setting("general.fastMenus", True) and len(rows) > 1
+        use_parallel = len(rows) > 1
 
     if not use_parallel or len(rows) == 1:
         enriched = [_enrich_row(row) for row in rows]

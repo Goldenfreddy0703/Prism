@@ -1,8 +1,13 @@
 """Simkl user sync database."""
-from resources.lib.database.simkl_sync.activities import SimklSyncDatabase
+from resources.lib.database.simkl_sync import activities
+from resources.lib.database.simkl_sync import movies
 from resources.lib.database.simkl_sync.database import SimklSyncDatabase as SimklSyncDatabaseBase
 
-# activities extends shows (episode/season formatting); base schema in database.py.
+
+class SimklSyncDatabase(activities.SimklSyncDatabase, movies.SimklSyncDatabase):
+    """Activities + shows + movies mixins for session singleton and router imports."""
+
+
 SimklSyncDatabaseBase  # re-export for internal submodule imports
 
 __all__ = ["SimklSyncDatabase"]

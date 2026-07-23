@@ -269,7 +269,7 @@ def enrich_and_persist(
         from resources.lib.modules.globals import g
 
         if fast_path is None:
-            fast_path = g.get_bool_setting("general.fastMenus", True)
+            fast_path = len(working) > 1
         working = enrich_sync_items(working, fast=bool(fast_path))
     from resources.lib.simkl.ids import canonicalize_sync_row
 
@@ -286,10 +286,8 @@ def persist_search_results(
     enrich: bool | None = None,
 ) -> list[dict[str, Any]]:
     """Enrich + insert search results; return list-builder refs."""
-    from resources.lib.modules.meta_enrichment_queue import hybrid_enrich_on_insert
-
     if enrich is None:
-        enrich = hybrid_enrich_on_insert()
+        enrich = False
     return enrich_and_persist(
         catalog,
         items,
@@ -305,14 +303,29 @@ def persist_genre_results(
     force_simkl_meta: bool = True,
 ) -> list[dict[str, Any]]:
     """Enrich + insert genre browse results; return list-builder refs."""
-    from resources.lib.modules.meta_enrichment_queue import hybrid_enrich_on_insert
-
     return enrich_and_persist(
         catalog,
         items,
         force_simkl_meta=force_simkl_meta,
-        enrich=hybrid_enrich_on_insert(),
+        enrich=True,
+        fast_path=True,
     )
+
+
+def persist_genre_page(
+    catalog: str,
+    items: list[dict[str, Any]],
+    *,
+    blocking_enrich: bool = True,
+    enrich_reason: str = "genre",
+) -> list[dict[str, Any]]:
+    """Persist a genre page and optionally block on Simkl detail + provider gap-fill."""
+    refs = persist_genre_results(catalog, items)
+    if blocking_enrich and refs:
+        from resources.lib.modules.page_prefetch import enrich_refs_blocking
+
+        enrich_refs_blocking(refs, catalog, reason=enrich_reason)
+    return refs
 
 
 def persist_library_entries(
@@ -395,14 +408,13 @@ def render_mixed_sync_list(
 
     movies, tv, anime = partition_by_catalog(sync_items)
     refs: list[dict] = []
-    from resources.lib.modules.meta_enrichment_queue import hybrid_enrich_on_insert
 
     if movies:
-        refs.extend(enrich_and_persist("movie", movies, force_simkl_meta=True, enrich=hybrid_enrich_on_insert()))
+        refs.extend(enrich_and_persist("movie", movies, force_simkl_meta=True, enrich=False))
     if tv:
-        refs.extend(enrich_and_persist("tv", tv, force_simkl_meta=True, enrich=hybrid_enrich_on_insert()))
+        refs.extend(enrich_and_persist("tv", tv, force_simkl_meta=True, enrich=False))
     if anime:
-        refs.extend(enrich_and_persist("anime", anime, force_simkl_meta=True, enrich=hybrid_enrich_on_insert()))
+        refs.extend(enrich_and_persist("anime", anime, force_simkl_meta=True, enrich=False))
 
     if not refs:
         g.cancel_directory()

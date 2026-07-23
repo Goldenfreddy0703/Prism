@@ -214,6 +214,8 @@ def render_continue_watching_menu(catalog: str) -> None:
 
     list_kwargs.update(list_filter_kwargs(hide_unaired=False, hide_watched=False))
     list_kwargs["catalog"] = catalog
+    list_kwargs["enrichment_reason"] = "library"
+    list_kwargs["catalog_hint"] = catalog
     ListBuilder().mixed_episode_builder(items, **list_kwargs)
 
 

@@ -29,15 +29,14 @@ def insert_discover_page(catalog: str, items: list[dict], *, force_simkl_meta: b
     movies = [i for i in items if i.get("catalog") == "movie"]
     shows = [i for i in items if i.get("catalog") in ("tv", "anime")]
 
-    if movies:
-        from resources.lib.database.simkl_sync.movies import SimklSyncDatabase
+    from resources.lib.database.session import get_sync_database
 
-        SimklSyncDatabase().insert_simkl_movies(movies, force_meta=force_simkl_meta)
+    db = get_sync_database()
+    if movies:
+        db.insert_simkl_movies(movies, force_meta=force_simkl_meta)
 
     if shows:
-        from resources.lib.database.simkl_sync.shows import SimklSyncDatabase
-
-        SimklSyncDatabase().insert_simkl_shows(shows, force_meta=force_simkl_meta)
+        db.insert_simkl_shows(shows, force_meta=force_simkl_meta)
 
     if catalog == "anime" and movies:
         g.log(f"Discover anime page: {len(movies)} movie(s), {len(shows)} series", "debug")

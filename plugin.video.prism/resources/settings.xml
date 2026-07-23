@@ -2957,6 +2957,11 @@
 				</setting>
 			</group>
 			<group id="2" label="30215">
+				<setting id="simkl.syncEpisodeWarm" type="boolean" label="31018" help="31019">
+					<level>0</level>
+					<default>true</default>
+					<control type="toggle"/>
+				</setting>
 				<setting id="simkldb.flush" type="action" label="30216" help="">
 					<level>0</level>
 					<data>RunPlugin(plugin://plugin.video.prism/?action=flushSimklActivities)</data>
@@ -3079,26 +3084,6 @@
 		</category>
 		<category id="advanced" label="30260" help="">
 			<group id="1" label="30605">
-				<setting id="general.menucaching" type="boolean" label="30193" help="">
-					<level>0</level>
-					<default>true</default>
-					<control type="toggle"/>
-				</setting>
-				<setting id="general.fastMenus" type="boolean" label="30848" help="30849">
-					<level>0</level>
-					<default>true</default>
-					<control type="toggle"/>
-				</setting>
-				<setting id="general.prefetchNextPage" type="boolean" label="30978" help="30979">
-					<level>0</level>
-					<default>true</default>
-					<control type="toggle"/>
-				</setting>
-				<setting id="general.prefetchCalendars" type="boolean" label="30980" help="30981">
-					<level>0</level>
-					<default>false</default>
-					<control type="toggle"/>
-				</setting>
 				<setting id="general.widget.stagger" type="boolean" label="30967" help="30968">
 					<level>0</level>
 					<default>false</default>
@@ -3461,7 +3446,7 @@
 				</setting>
 				<setting id="metadata.mdblist.enabled" type="boolean" label="30958" help="30963">
 					<level>0</level>
-					<default>true</default>
+					<default>false</default>
 					<control type="toggle"/>
 				</setting>
 			</group>

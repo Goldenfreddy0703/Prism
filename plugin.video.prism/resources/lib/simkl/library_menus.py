@@ -135,11 +135,12 @@ def render_status_list(catalog: str, status: str) -> None:
 
 
 def render_recently_watched_shows(catalog: str) -> None:
-    from resources.lib.database.simkl_sync.shows import SimklSyncDatabase
+    from resources.lib.database.session import get_sync_database
     from resources.lib.discover.renderer import discover_list_kwargs
     from resources.lib.modules.list_builder import ListBuilder
+    from resources.lib.simkl.menu_helpers import paginate_simkl_lists
 
-    items = SimklSyncDatabase().get_recently_watched_shows(g.PAGE, catalog=catalog)
+    items = get_sync_database().get_recently_watched_shows(g.PAGE, catalog=catalog)
     if not items:
         g.cancel_directory()
         return
@@ -153,17 +154,19 @@ def render_recently_watched_shows(catalog: str) -> None:
 
 
 def render_watched_episodes(catalog: str) -> None:
-    from resources.lib.database.simkl_sync.shows import SimklSyncDatabase
+    from resources.lib.database.session import get_sync_database
     from resources.lib.discover.renderer import discover_list_kwargs
     from resources.lib.modules.list_builder import ListBuilder
     from resources.lib.simkl.menu_helpers import list_filter_kwargs, paginate_simkl_lists
 
-    items = SimklSyncDatabase().get_watched_episodes(g.PAGE, catalog=catalog)
+    items = get_sync_database().get_watched_episodes(g.PAGE, catalog=catalog)
     if not items:
         g.cancel_directory()
         return
     list_kwargs = discover_list_kwargs()
     list_kwargs.update(list_filter_kwargs(hide_unaired=False, hide_watched=False))
+    list_kwargs["enrichment_reason"] = "library"
+    list_kwargs["catalog_hint"] = catalog
     ListBuilder().mixed_episode_builder(
         items,
         no_paging=not paginate_simkl_lists(),
@@ -173,21 +176,15 @@ def render_watched_episodes(catalog: str) -> None:
 
 
 def render_next_up(catalog: str) -> None:
-    from resources.lib.database.simkl_sync.shows import SimklSyncDatabase
+    from resources.lib.database.session import get_sync_database
     from resources.lib.discover.renderer import discover_list_kwargs
     from resources.lib.modules.list_builder import ListBuilder
 
-    show_db = SimklSyncDatabase()
+    show_db = get_sync_database()
     episodes = show_db.get_nextup_episodes(
         g.get_int_setting("nextup.sort") == 1,
         catalog=catalog,
     )
-    if not episodes:
-        show_db.ensure_watching_shows_milled(catalog)
-        episodes = show_db.get_nextup_episodes(
-            g.get_int_setting("nextup.sort") == 1,
-            catalog=catalog,
-        )
     if g.get_bool_setting("limit.nextup"):
         episodes = episodes[: g.get_int_setting("item.limit")]
     if not episodes:
@@ -195,16 +192,18 @@ def render_next_up(catalog: str) -> None:
         return
     list_kwargs = discover_list_kwargs()
     list_kwargs["catalog"] = catalog
+    list_kwargs["enrichment_reason"] = "library"
+    list_kwargs["catalog_hint"] = catalog
     ListBuilder().mixed_episode_builder(episodes, no_paging=True, **list_kwargs)
 
 
 def render_recently_watched_movies() -> None:
-    from resources.lib.database.simkl_sync.movies import SimklSyncDatabase
+    from resources.lib.database.session import get_sync_database
     from resources.lib.discover.renderer import discover_list_kwargs
     from resources.lib.modules.list_builder import ListBuilder
     from resources.lib.simkl.menu_helpers import list_filter_kwargs, paginate_simkl_lists
 
-    items = SimklSyncDatabase().get_watched_movies(g.PAGE)
+    items = get_sync_database().get_watched_movies(g.PAGE)
     if not items:
         g.cancel_directory()
         return

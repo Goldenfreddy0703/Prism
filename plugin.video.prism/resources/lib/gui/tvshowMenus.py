@@ -20,9 +20,9 @@ class Menus:
 
     @cached_property
     def shows_database(self):
-        from resources.lib.database.simkl_sync.shows import SimklSyncDatabase
+        from resources.lib.database.session import get_sync_database
 
-        return SimklSyncDatabase()
+        return get_sync_database()
 
     @cached_property
     def search_history(self):
@@ -128,12 +128,6 @@ class Menus:
             no_paging=False,
             **discover_list_kwargs(),
         )
-
-    @simkl_auth_guard
-    def my_shows_watchlist(self):
-        from resources.lib.simkl.library_menus import render_status_list
-
-        render_status_list("tv", "plantowatch")
 
     @simkl_auth_guard
     def my_show_progress(self):
@@ -313,9 +307,8 @@ class Menus:
                 g.cancel_directory()
                 return
             from resources.lib.discover.renderer import discover_list_kwargs
-            from resources.lib.modules.meta_enrichment_queue import hybrid_enrich_on_insert
             from resources.lib.simkl.media_ref import enrich_and_persist
 
-            refs = enrich_and_persist("tv", items, enrich=hybrid_enrich_on_insert())
+            refs = enrich_and_persist("tv", items, enrich=False)
             self.list_builder.show_discover_builder(refs, **discover_list_kwargs())
 

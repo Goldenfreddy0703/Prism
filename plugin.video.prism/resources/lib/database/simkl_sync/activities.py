@@ -21,10 +21,11 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
         super().__init__()
         self.progress_dialog = None
         self.silent = True
+        self.force_sync = False
         self.current_dialog_text = None
         self._remote_activities = None
         self._sync_activities_list = [
-            ("Simkl library", None, None, self._sync_simkl_library_activity),
+            ("Simkl watchlist", None, None, self._sync_simkl_library_activity),
             (
                 "Show bookmarks",
                 ("tv_shows", "playback"),
@@ -60,6 +61,7 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
     @stopwatch
     def sync_activities(self, silent=False, force=False):
         with GlobalLock("simkl.sync"):
+            self.force_sync = force
             simkl_auth = g.get_setting("simkl.auth")
             update_time = str(self._get_datetime_now())
 
@@ -95,7 +97,7 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
             self._update_all_season_statistics()
 
         try:
-            from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue
+            from resources.lib.meta.enrichment import MetaEnrichmentQueue
 
             MetaEnrichmentQueue.schedule_needs_update()
         except Exception:
@@ -115,6 +117,9 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
 
     def _do_sync_activities(self, remote_activities):
         self._remote_activities = remote_activities
+        if not self.silent and self.progress_dialog is None:
+            self.progress_dialog = xbmcgui.DialogProgressBG()
+            self.progress_dialog.create(f"{g.ADDON_NAME} Sync", "Prism: Simkl Sync")
         total_activities = len(self._sync_activities_list)
         for idx, activity in enumerate(self._sync_activities_list):
             try:
@@ -230,52 +235,14 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
             self.progress_dialog = xbmcgui.DialogProgressBG()
             self.progress_dialog.create(f"{g.ADDON_NAME}Sync", "Prism: Simkl Sync")
 
+    def set_sync_progress(self, percent: int, message: str) -> None:
+        self.current_dialog_text = message
+        self._update_progress(percent, message)
+
     def _sync_simkl_library(self, remote_activities):
-        first_sync = str(self.activities["all_activities"]) == self.base_date
-        date_from = None if first_sync else self.activities["all_activities"]
+        from resources.lib.simkl.all_items_sync import sync_simkl_library
 
-        self.current_dialog_text = "Syncing Simkl library"
-        self._update_progress(10, self.current_dialog_text)
-
-        params = {
-            "extended": "full",
-            "episode_watched_at": "yes",
-            "include_all_episodes": "original",
-            "episode_tvdb_id": "yes",
-            "next_watch_info": "yes",
-        }
-        payload = self.simkl_api.get_all_items(date_from=date_from, **params)
-        if payload:
-            self._process_all_items_payload(payload)
-
-        anime_params = {
-            "extended": "full_anime_seasons",
-            "episode_watched_at": "yes",
-            "include_all_episodes": "original",
-            "episode_tvdb_id": "yes",
-            "next_watch_info": "yes",
-        }
-        anime_payload = self.simkl_api.get_all_items("anime", date_from=date_from, **anime_params)
-        if anime_payload:
-            anime_entries = _unwrap_sync_items(anime_payload, "anime")
-            anime_shows = []
-            for entry in anime_entries:
-                normalized = simkl_entry_to_sync_dict(entry, "anime")
-                if normalized:
-                    normalized["simkl_object"]["info"]["catalog"] = "anime"
-                    if entry.get("status"):
-                        normalized["simkl_object"]["info"]["simkl_status"] = entry.get("status")
-                    anime_shows.append(normalized)
-            if anime_shows:
-                self.insert_simkl_shows(anime_shows)
-                self.apply_sync_episode_stubs_from_entries(anime_entries, anime_shows, "anime")
-                self.apply_next_watch_stubs_from_entries(anime_entries, anime_shows, "anime")
-                self.apply_watched_episodes_from_entries(anime_entries, anime_shows)
-
-        if self._removed_from_list_changed(remote_activities):
-            self._reconcile_removed_items()
-
-        self._update_progress(90, "Updating watch states")
+        sync_simkl_library(self, remote_activities, force=self.force_sync)
 
     def _removed_from_list_changed(self, remote_activities) -> bool:
         local_all = self.activities["all_activities"]
@@ -392,9 +359,17 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
             return
 
         self.insert_simkl_shows(shows)
-        self.apply_sync_episode_stubs_from_entries(entries, shows, catalog)
-        self.apply_next_watch_stubs_from_entries(entries, shows, catalog)
-        self.apply_watched_episodes_from_entries(entries, shows)
+        episode_entries = [
+            entry
+            for entry in (entries or [])
+            if isinstance(entry, dict) and entry.get("status") in ("watching", "completed")
+        ]
+        if episode_entries:
+            self.apply_sync_episode_stubs_from_entries(
+                episode_entries, shows, catalog, selective=True
+            )
+            self.apply_next_watch_stubs_from_entries(episode_entries, shows, catalog)
+            self.apply_watched_episodes_from_entries(episode_entries, shows)
 
     def _resolve_episode_simkl_id(self, show, episode):
         simkl_id = (episode.get("ids") or {}).get("simkl_id") or (episode.get("ids") or {}).get("simkl")

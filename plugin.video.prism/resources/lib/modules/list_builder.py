@@ -69,11 +69,17 @@ class ListBuilder:
         ensure_show_metadata_async(show_id)
         self._fast_list_defaults(params)
         return self._common_menu_builder(
-            shows.SimklSyncDatabase().get_season_list(show_id, **self._apply_list_filters(params)),
+            self._sync_db().get_season_list(show_id, **self._apply_list_filters(params)),
             g.CONTENT_SEASON,
             "seasonEpisodes",
             **params,
         )
+
+    @staticmethod
+    def _sync_db():
+        from resources.lib.database.session import get_sync_database
+
+        return get_sync_database()
 
     def episode_list_builder(self, show_id, season=None, simkl_show_id=None, simkl_season=None, season_row_id=None, **params):
         """
@@ -103,7 +109,7 @@ class ListBuilder:
 
         self._fast_list_defaults(params)
         return self._common_menu_builder(
-            shows.SimklSyncDatabase().get_episode_list(
+            self._sync_db().get_episode_list(
                 show_id,
                 season=season,
                 minimum_episode=params.pop("minimum_episode", None),
@@ -128,7 +134,7 @@ class ListBuilder:
 
         self._fast_list_defaults(params)
         return self._common_menu_builder(
-            shows.SimklSyncDatabase().get_mixed_episode_list(media_list, **self._apply_list_filters(params)),
+            self._sync_db().get_mixed_episode_list(media_list, **self._apply_list_filters(params)),
             g.CONTENT_EPISODE,
             action,
             **params,
@@ -177,22 +183,15 @@ class ListBuilder:
         return page_params
 
     def _fast_list_defaults(self, params: dict) -> None:
-        """Fast menus: page 1 blocks for full metadata; later pages use prefetch + local merge."""
-        if not g.get_bool_setting("general.fastMenus", True):
-            return
-        from resources.lib.modules.meta_enrichment_queue import hybrid_foreground_first_page, hybrid_widget_local_meta
-
+        """Browse lists: skip milling, block provider gap-fill before paint via hybrid_apply_list_meta."""
         params.setdefault("skip_mill", True)
-        if hybrid_widget_local_meta():
-            params.setdefault("skip_update", True)
-        elif not hybrid_foreground_first_page():
-            params.setdefault("skip_update", True)
+        params.setdefault("skip_update", True)
 
     @staticmethod
     def _schedule_background_enrichment(refs: list[dict] | None, media_type: str | None, *, reason: str = "list_open", catalog: str | None = None) -> None:
         if not refs or not media_type:
             return
-        from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue
+        from resources.lib.meta.enrichment import MetaEnrichmentQueue
 
         MetaEnrichmentQueue.schedule_run_plugin(refs, media_type, reason=reason, catalog=catalog)
 
@@ -212,7 +211,7 @@ class ListBuilder:
             action = "forceResumeShow"
 
         self._fast_list_defaults(params)
-        show_db = shows.SimklSyncDatabase()
+        show_db = self._sync_db()
         media_rows = show_db.get_show_list(media_list, **self._apply_list_filters(params))
         enrichment_refs, enrichment_media_type = show_db.consume_list_enrichment_refs()
         self._common_menu_builder(
@@ -236,7 +235,7 @@ class ListBuilder:
         action = "getSources"
 
         self._fast_list_defaults(params)
-        movie_db = movies.SimklSyncDatabase()
+        movie_db = self._sync_db()
         media_rows = movie_db.get_movie_list(media_list, **self._apply_list_filters(params))
         enrichment_refs, enrichment_media_type = movie_db.consume_list_enrichment_refs()
         self._common_menu_builder(
@@ -351,7 +350,7 @@ class ListBuilder:
         show_rows: dict[int, dict] = {}
         enrichment_batches: list[tuple[list[dict], str]] = []
         if movie_refs:
-            movie_db = movies.SimklSyncDatabase()
+            movie_db = self._sync_db()
             for row in movie_db.get_movie_list(movie_refs, **filter_params) or []:
                 if isinstance(row, dict) and row.get("simkl_id") is not None and isinstance(row.get("info"), dict):
                     movie_rows[int(row["simkl_id"])] = row
@@ -359,7 +358,7 @@ class ListBuilder:
             if refs and media_type:
                 enrichment_batches.append((refs, media_type))
         if show_refs:
-            show_db = shows.SimklSyncDatabase()
+            show_db = self._sync_db()
             for row in show_db.get_show_list(show_refs, **filter_params) or []:
                 if isinstance(row, dict) and row.get("simkl_id") is not None and isinstance(row.get("info"), dict):
                     show_rows[int(row["simkl_id"])] = row
@@ -391,11 +390,7 @@ class ListBuilder:
         has_next_page = params.pop("has_next_page", False)
         list_id = params.pop("list_id", None)
         skip_mill = params.pop("skip_mill", True)
-        skip_update = params.pop("skip_update", None)
-        if skip_update is None:
-            from resources.lib.modules.meta_enrichment_queue import meta_enrichment_background, hybrid_foreground_first_page
-
-            skip_update = meta_enrichment_background() and not hybrid_foreground_first_page()
+        skip_update = params.pop("skip_update", True)
         display_rating_priority = params.pop("display_rating_priority", None)
         menu_cache = params.pop("menu_cache", None)
         enrichment_reason = params.pop("enrichment_reason", "discover")
@@ -563,20 +558,6 @@ class ListBuilder:
             **params,
         )
 
-    def lists_menu_builder(self, media_list, **params):
-        """
-        Builds a menu list of lists
-        :param media_list: List of list objects
-        :param params: Parameters to send to common_menu_builder method
-        :return: List list_items if smart_play Kwarg is True else None
-        """
-        self._common_menu_builder(
-            [dict(item, art=g.create_icon_dict("list", g.ICONS_PATH)['art']) for item in media_list],
-            g.CONTENT_MENU,
-            "simklList",
-            **params,
-        )
-
     @staticmethod
     def _menu_action_args(item):
         """Return routing dict from MenuRow args — encode only when building the URL."""
@@ -588,7 +569,7 @@ class ListBuilder:
 
     @staticmethod
     def _use_parallel_list_build(count: int) -> bool:
-        return g.get_bool_setting("general.fastMenus", True) and count > 3
+        return count > 3
 
     def _action_args_for_item(self, processed, library_status=None):
         args = self._menu_action_args(processed)

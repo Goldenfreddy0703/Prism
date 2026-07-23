@@ -1500,9 +1500,9 @@ class MetadataHandler:
             return row
 
         if db is None:
-            from resources.lib.database.simkl_sync.database import SimklSyncDatabase
+            from resources.lib.database.session import get_sync_database
 
-            db = SimklSyncDatabase()
+            db = get_sync_database()
 
         table = "movies" if provider_type == "movie" else "shows"
         db_object = self._db_object_for_row(row, provider_type)
@@ -1579,9 +1579,9 @@ class MetadataHandler:
             return rows, []
 
         if db is None:
-            from resources.lib.database.simkl_sync.database import SimklSyncDatabase
+            from resources.lib.database.session import get_sync_database
 
-            db = SimklSyncDatabase()
+            db = get_sync_database()
 
         start = time.time()
         merged: list = []
@@ -1649,22 +1649,24 @@ class MetadataHandler:
             return []
 
         if db is None:
-            from resources.lib.database.simkl_sync.database import SimklSyncDatabase
+            from resources.lib.database.session import get_sync_database
 
-            db = SimklSyncDatabase()
+            db = get_sync_database()
 
         from resources.lib.database.sync_meta_cache import SyncMetaCache
+        from resources.lib.meta.profiles import current_profile
+        from resources.lib.meta.providers import MetaProviderRouter
         from resources.lib.modules.artwork_profile import artwork_profile_for_row, provider_media_type
 
         meta_cache = SyncMetaCache()
         need_online_refs = [dict(ref) for ref in refs if ref.get("simkl_id") is not None]
+        movie_refs, tvshow_refs = MetaProviderRouter.group_refs_by_provider_type(need_online_refs)
+        active_profile = current_profile()
         online_ids: set[int] = set()
-        movie_refs = [ref for ref in need_online_refs if ref.get("_provider_type") == "movie"]
-        tvshow_refs = [ref for ref in need_online_refs if ref.get("_provider_type") != "movie"]
         if movie_refs:
-            online_ids |= self._online_update_refs(movie_refs, "movie", db)
+            online_ids |= self._online_update_refs(movie_refs, "movie", db, profile=active_profile)
         if tvshow_refs:
-            online_ids |= self._online_update_refs(tvshow_refs, "tvshow", db)
+            online_ids |= self._online_update_refs(tvshow_refs, "tvshow", db, profile=active_profile)
 
         merged_by_id: dict[int, dict] = {}
         if online_ids:
@@ -1727,23 +1729,27 @@ class MetadataHandler:
                 self._persist_list_rows(tvshow_rows, "tvshow", db=db, skip_ids=online_ids)
         return merged
 
-    def _online_update_refs(self, refs: list[dict], media_type: str, db) -> set[int]:
+    def _online_update_refs(self, refs: list[dict], media_type: str, db, *, profile: str | None = None) -> set[int]:
         if not refs:
             return set()
-        if media_type == "movie":
-            updater = db if hasattr(db, "_update_movies") else None
-            if updater is None:
-                from resources.lib.database.simkl_sync.movies import SimklSyncDatabase as MoviesDB
+        from resources.lib.meta.profiles import MetaProfile, current_profile, profile_scope
 
-                updater = MoviesDB()
-            updater._update_movies(refs)
-        else:
-            updater = db if hasattr(db, "_update_mill_format_shows") else None
-            if updater is None:
-                from resources.lib.database.simkl_sync.shows import SimklSyncDatabase as ShowsDB
+        active_profile = profile or current_profile() or MetaProfile.FULL
+        with profile_scope(active_profile):
+            if media_type == "movie":
+                updater = db if hasattr(db, "_update_movies") else None
+                if updater is None:
+                    from resources.lib.database.session import get_sync_database as MoviesDB
 
-                updater = ShowsDB()
-            updater._update_mill_format_shows(refs, False, skip_mill=True)
+                    updater = MoviesDB()
+                updater._update_movies(refs)
+            else:
+                updater = db if hasattr(db, "_update_mill_format_shows") else None
+                if updater is None:
+                    from resources.lib.database.session import get_sync_database as ShowsDB
+
+                    updater = ShowsDB()
+                updater._update_mill_format_shows(refs, False, skip_mill=True)
         return {int(ref["simkl_id"]) for ref in refs if ref.get("simkl_id") is not None}
 
     @staticmethod
@@ -1803,9 +1809,10 @@ class MetadataHandler:
             cast = row.get("cast")
             if not isinstance(info, dict) or not isinstance(art, dict):
                 continue
+            from resources.lib.meta.profiles import current_profile
             from resources.lib.modules.meta_storage import slim_db_row
 
-            slim = slim_db_row({"info": info, "art": art, "cast": cast})
+            slim = slim_db_row({"info": info, "art": art, "cast": cast}, profile=current_profile())
             db.execute_sql(
                 f"UPDATE {table} SET info=?, art=?, cast=?, meta_hash=?, last_updated=? WHERE simkl_id=?",
                 (
@@ -1828,20 +1835,44 @@ class MetadataHandler:
                     "cast": slim.get("cast") if isinstance(slim.get("cast"), list) else [],
                 },
             )
+            from resources.lib.meta.display_store import get_display_meta_store
 
-    def gapfill_list_meta(self, rows, media_type: str, *, db=None, persist: bool = False) -> list:
-        """Merge cached provider meta for fast menus; fetch online only for remaining gaps."""
+            get_display_meta_store().set_row(media_type, slim)
+
+    def gapfill_list_meta(
+        self,
+        rows,
+        media_type: str,
+        *,
+        db=None,
+        persist: bool = False,
+        profile: str | None = None,
+        reason: str = "list_paint",
+    ) -> list:
+        """Merge cached provider meta; fetch online for remaining gaps before list paint."""
         if not rows:
             return rows
 
         if db is None:
-            from resources.lib.database.simkl_sync.database import SimklSyncDatabase
+            from resources.lib.database.session import get_sync_database
 
-            db = SimklSyncDatabase()
+            db = get_sync_database()
 
         merged, enrichment_refs = self.merge_list_meta_local(rows, media_type, db=db)
         if enrichment_refs:
-            self.enrich_list_meta_online(enrichment_refs, media_type, db=db, persist=persist)
+            from resources.lib.meta.profiles import MetaProfile, profile_scope
+            from resources.lib.meta.providers import MetaProviderRouter
+
+            active_profile = profile or MetaProfile.LIST
+            with profile_scope(active_profile):
+                MetaProviderRouter.enrich_list_refs(
+                    enrichment_refs,
+                    media_type,
+                    db=db,
+                    profile=active_profile,
+                    persist=persist,
+                    reason=reason,
+                )
             movie_ids = {int(ref["simkl_id"]) for ref in enrichment_refs if ref.get("_provider_type") == "movie"}
             tvshow_ids = {
                 int(ref["simkl_id"]) for ref in enrichment_refs if ref.get("_provider_type") != "movie"

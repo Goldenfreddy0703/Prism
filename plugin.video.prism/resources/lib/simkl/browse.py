@@ -51,9 +51,6 @@ DISCOVER_ENDPOINTS: dict[str, dict[str, str]] = {
     },
 }
 
-# Re-export for callers that already import from browse.
-from resources.lib.discover.legacy_actions import ANIME_LEGACY_DISCOVER_ACTIONS  # noqa: E402
-
 
 SIMKL_MOVIE_GENRE_SLUGS = (
     "action",

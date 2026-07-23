@@ -199,11 +199,10 @@ class ActorMenus:
             return
 
         from resources.lib.discover.renderer import discover_list_kwargs
-        from resources.lib.modules.meta_enrichment_queue import hybrid_enrich_on_insert
         from resources.lib.simkl.media_ref import enrich_and_persist
 
         catalog_hint = args.get("catalog") or "movie"
-        enrich_and_persist(catalog_hint, items, force_simkl_meta=True, enrich=hybrid_enrich_on_insert())
+        enrich_and_persist(catalog_hint, items, force_simkl_meta=True, enrich=False)
 
         self.list_builder.actor_credits_builder(
             items,

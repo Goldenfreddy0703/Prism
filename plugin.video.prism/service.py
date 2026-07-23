@@ -57,7 +57,7 @@ try:
     while not monitor.abortRequested():
         if _service_db_idle():
             try:
-                from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue
+                from resources.lib.meta.enrichment import MetaEnrichmentQueue
 
                 MetaEnrichmentQueue.process_idle()
             except Exception:

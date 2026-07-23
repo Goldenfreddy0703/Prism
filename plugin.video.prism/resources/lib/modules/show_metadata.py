@@ -15,9 +15,9 @@ def ensure_show_metadata(simkl_show_id: int) -> None:
     """Fetch missing cast/art for one show (blocking, used on season drill-in)."""
     if not simkl_show_id:
         return
-    from resources.lib.database.simkl_sync.shows import SimklSyncDatabase
+    from resources.lib.database.session import get_sync_database
 
-    db = SimklSyncDatabase()
+    db = get_sync_database()
     row = db.fetchone(
         """
         SELECT simkl_id, info, [cast], art, tmdb_id, tvdb_id, imdb_id, last_updated
@@ -41,11 +41,6 @@ def ensure_show_metadata(simkl_show_id: int) -> None:
 def ensure_show_metadata_async(simkl_show_id: int) -> None:
     """Warm cast/art for a show the user is opening — does not block the menu."""
     if not simkl_show_id:
-        return
-    from resources.lib.modules.meta_enrichment_queue import meta_enrichment_background
-
-    if not meta_enrichment_background():
-        ensure_show_metadata(simkl_show_id)
         return
 
     def _run() -> None:

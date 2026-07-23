@@ -18,7 +18,6 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             self._update_movies(media_list)
 
         from resources.lib.database.sync_meta_cache import SyncMetaCache
-        from resources.lib.modules.meta_enrichment_queue import meta_enrichment_background
 
         meta_cache = SyncMetaCache()
 
@@ -49,13 +48,16 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         if params.pop("hide_watched", self.hide_watched):
             query += " AND watched = 0"
 
-        rows = self.fetchall(query)
+        rows = self.fetchall(query) or []
         meta_cache.set_many_rows("movie", rows or [])
 
+        from resources.lib.meta.display_store import get_display_meta_store
+
+        rows = get_display_meta_store().overlay_rows(rows, "movie")
+
         if skip_update:
-            from resources.lib.modules.meta_enrichment_queue import (
+            from resources.lib.meta.enrichment import (
                 hybrid_apply_list_meta,
-                hybrid_foreground_first_page,
                 hybrid_widget_local_meta,
             )
 
@@ -65,12 +67,6 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
 
                 rows = gapfill_anime_title_rows(rows)
                 self.set_list_enrichment_refs(enrichment_refs, "movie")
-            elif hybrid_foreground_first_page():
-                rows = self.metadataHandler.gapfill_list_meta(rows, "movie", db=self, persist=True)
-                from resources.lib.simkl.enrich import gapfill_anime_title_rows
-
-                rows = gapfill_anime_title_rows(rows)
-                self.set_list_enrichment_refs([], "movie")
             else:
                 rows = hybrid_apply_list_meta(rows, "movie", self)
         else:

@@ -8,7 +8,7 @@ import xbmcgui
 from resources.lib.discover.renderer import discover_list_kwargs
 from resources.lib.modules.globals import g
 from resources.lib.simkl import browse
-from resources.lib.simkl.media_ref import persist_genre_results
+from resources.lib.simkl.media_ref import persist_genre_page
 from resources.lib.simkl.search_menus import notify_empty_search, persist_search_pagination
 
 GENRE_GET_ACTIONS = {
@@ -165,7 +165,7 @@ def render_multi_genre_list(catalog: str, action_args, page_limit: int, list_bui
         notify_empty_search(30766)
         return
 
-    refs = persist_genre_results(catalog, page.items)
+    refs = persist_genre_page(catalog, page.items)
     _, get_action = MULTI_GENRE_ACTIONS[catalog]
     next_args: dict[str, str | int] = {"genres": genre_ids}
     if page.has_next_page:
@@ -177,6 +177,7 @@ def render_multi_genre_list(catalog: str, action_args, page_limit: int, list_bui
         has_next_page=page.has_next_page,
         next_action=get_action,
         next_args=next_args,
+        enrichment_reason="genre",
     )
 
     if catalog == "movie":
@@ -208,7 +209,7 @@ def render_anime_multi_genre_list(action_args, page_limit: int, list_builder) ->
         notify_empty_search(30766)
         return
 
-    refs = persist_genre_results("anime", page.items)
+    refs = persist_genre_page("anime", page.items)
     _, get_action = MULTI_GENRE_ACTIONS["anime"]
     next_args: dict[str, str | int] = {"genres": genre_ids}
     if page.has_next_page:
@@ -220,6 +221,7 @@ def render_anime_multi_genre_list(action_args, page_limit: int, list_builder) ->
         has_next_page=page.has_next_page,
         next_action=get_action,
         next_args=next_args,
+        enrichment_reason="genre",
     )
     list_builder.anime_discover_builder(refs, **kwargs)
 
@@ -235,12 +237,13 @@ def render_genre_list(catalog: str, args, page_limit: int, list_builder) -> None
         g.cancel_directory()
         return
 
-    refs = persist_genre_results(catalog, page.items)
+    refs = persist_genre_page(catalog, page.items)
     kwargs = discover_list_kwargs()
     kwargs.update(
         has_next_page=page.has_next_page,
         next_action=GENRE_GET_ACTIONS[catalog],
         next_args=slug,
+        enrichment_reason="genre",
     )
 
     if catalog == "movie":

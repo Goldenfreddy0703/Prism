@@ -17,7 +17,7 @@ _prefetch_events_lock = threading.Lock()
 
 
 def prefetch_next_page_enabled() -> bool:
-    return g.get_bool_setting("general.prefetchNextPage", True)
+    return True
 
 
 def _prefetch_key(page_params: dict[str, Any]) -> str:
@@ -71,10 +71,8 @@ def schedule_refs_enrichment(
 ) -> None:
     if not refs:
         return
-    from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue, meta_enrichment_background
+    from resources.lib.meta.enrichment import MetaEnrichmentQueue
 
-    if not meta_enrichment_background():
-        return
     if blocking:
         _blocking_enrich_refs(refs, default_catalog=catalog, reason=reason)
         return
@@ -158,31 +156,6 @@ def _signal_prefetch_done(key: str) -> None:
                 _prefetch_events.pop(stale_key, None)
 
 
-def wait_for_page_prefetch(page_params: dict[str, Any], timeout_sec: float = 20.0) -> bool:
-    """Block until a prefetch thread for this page finishes (or timeout)."""
-    if not prefetch_next_page_enabled() or not isinstance(page_params, dict):
-        return True
-    key = _prefetch_key(page_params)
-    if key in _done_keys():
-        return True
-    if key not in _in_flight_keys():
-        return True
-    event = _prefetch_event(key)
-    return event.wait(timeout=max(timeout_sec, 0.0))
-
-
-def wait_for_current_page_prefetch(timeout_sec: float = 20.0) -> bool:
-    page_params = current_page_prefetch_params()
-    if not page_params:
-        return True
-    try:
-        if int(page_params.get("page") or 1) <= 1:
-            return True
-    except (TypeError, ValueError):
-        return True
-    return wait_for_page_prefetch(page_params, timeout_sec=timeout_sec)
-
-
 def _prefetch_discover(page_params: dict[str, Any]) -> None:
     from resources.lib.discover.renderer import DiscoverRenderer
 
@@ -226,7 +199,7 @@ def _prefetch_genre_slug(page_params: dict[str, Any]) -> None:
     from urllib import parse
 
     from resources.lib.simkl import browse
-    from resources.lib.simkl.media_ref import persist_genre_results
+    from resources.lib.simkl.media_ref import persist_genre_page
 
     action = page_params.get("action")
     catalog_map = {
@@ -245,8 +218,7 @@ def _prefetch_genre_slug(page_params: dict[str, Any]) -> None:
     result = browse.discover_by_genre_slug(catalog, slug, page, page_limit)
     if not result.items:
         return
-    refs = persist_genre_results(catalog, result.items)
-    enrich_refs_blocking(refs, catalog, reason="prefetch_genre")
+    persist_genre_page(catalog, result.items, blocking_enrich=True, enrich_reason="prefetch_genre")
 
 
 def _prefetch_multi_genre(page_params: dict[str, Any]) -> None:
@@ -255,7 +227,7 @@ def _prefetch_multi_genre(page_params: dict[str, Any]) -> None:
         _parse_tenrai_multi_genre_action_args,
         _parse_tmdb_multi_genre_action_args,
     )
-    from resources.lib.simkl.media_ref import persist_genre_results
+    from resources.lib.simkl.media_ref import persist_genre_page
 
     action = page_params.get("action")
     action_args = page_params.get("action_args")
@@ -289,8 +261,7 @@ def _prefetch_multi_genre(page_params: dict[str, Any]) -> None:
 
     if not result.items:
         return
-    refs = persist_genre_results(catalog, result.items)
-    enrich_refs_blocking(refs, catalog, reason="prefetch_genre")
+    persist_genre_page(catalog, result.items, blocking_enrich=True, enrich_reason="prefetch_genre")
 
 
 def _library_catalog_status(page_params: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -319,7 +290,7 @@ def _blocking_enrich_simkl_ids(
 ) -> None:
     if not simkl_ids:
         return
-    from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue
+    from resources.lib.meta.enrichment import MetaEnrichmentQueue
 
     MetaEnrichmentQueue.enrich_simkl_ids_blocking(simkl_ids, media_type, reason=reason, catalog=catalog)
 
@@ -367,7 +338,6 @@ def _prefetch_library(page_params: dict[str, Any]) -> None:
 
 
 def _prefetch_actor(page_params: dict[str, Any]) -> None:
-    from resources.lib.modules.meta_enrichment_queue import hybrid_enrich_on_insert
     from resources.lib.simkl.enrich import enrich_sync_items
     from resources.lib.simkl.media_ref import enrich_and_persist
     from resources.lib.simkl.person_ref import fetch_filmography_page, normalize_person_ref
@@ -387,13 +357,12 @@ def _prefetch_actor(page_params: dict[str, Any]) -> None:
         catalog_hint,
         items,
         force_simkl_meta=True,
-        enrich=hybrid_enrich_on_insert(),
+        enrich=False,
     )
     _blocking_enrich_refs(refs, default_catalog=catalog_hint, reason="prefetch_actor")
 
 
 def _prefetch_year(page_params: dict[str, Any]) -> None:
-    from resources.lib.modules.meta_enrichment_queue import hybrid_enrich_on_insert
     from resources.lib.simkl import browse
     from resources.lib.simkl.media_ref import enrich_and_persist
 
@@ -410,15 +379,15 @@ def _prefetch_year(page_params: dict[str, Any]) -> None:
     items = browse.discover_by_year(catalog, year, page, page_limit)
     if not items:
         return
-    refs = enrich_and_persist(catalog, items, enrich=hybrid_enrich_on_insert())
+    refs = enrich_and_persist(catalog, items, enrich=False)
     _blocking_enrich_refs(refs, default_catalog=catalog, reason="prefetch_year")
 
 
 def _prefetch_db_movie_page(page_params: dict[str, Any], *, method: str, reason: str) -> None:
     page = int(page_params.get("page") or 1)
-    from resources.lib.database.simkl_sync.movies import SimklSyncDatabase
+    from resources.lib.database.session import get_sync_database
 
-    rows = getattr(SimklSyncDatabase(), method)(page) or []
+    rows = getattr(get_sync_database(), method)(page) or []
     simkl_ids = sorted({int(row["simkl_id"]) for row in rows if row.get("simkl_id") is not None})
     _blocking_enrich_simkl_ids(simkl_ids, "movie", catalog="movie", reason=reason)
 
@@ -432,9 +401,9 @@ def _prefetch_db_show_page(
 ) -> None:
     page = int(page_params.get("page") or 1)
     catalog = catalog or page_params.get("catalog") or "tv"
-    from resources.lib.database.simkl_sync.shows import SimklSyncDatabase
+    from resources.lib.database.session import get_sync_database
 
-    db = SimklSyncDatabase()
+    db = get_sync_database()
     if method == "get_recently_watched_shows":
         rows = db.get_recently_watched_shows(page, catalog=catalog) or []
     else:
@@ -453,10 +422,10 @@ def _prefetch_continue_watching(page_params: dict[str, Any]) -> None:
 def _prefetch_watched_episodes(page_params: dict[str, Any]) -> None:
     catalog = page_params.get("catalog") or "tv"
     page = int(page_params.get("page") or 1)
-    from resources.lib.database.simkl_sync.shows import SimklSyncDatabase
+    from resources.lib.database.session import get_sync_database
     from resources.lib.simkl.ids import show_id_from_item
 
-    items = SimklSyncDatabase().get_watched_episodes(page, catalog=catalog) or []
+    items = get_sync_database().get_watched_episodes(page, catalog=catalog) or []
     show_ids = sorted({int(show_id_from_item(item)) for item in items if show_id_from_item(item) is not None})
     _blocking_enrich_simkl_ids(show_ids, "tvshow", catalog=catalog, reason="prefetch_watched")
 
@@ -476,14 +445,9 @@ def _library_prefetch_handler(route: str, catalog: str):
 
 
 def _build_library_prefetch_handlers() -> dict[str, Callable[[dict[str, Any]], None]]:
-    from resources.lib.simkl.library_routes import _CANONICAL_ROUTES, _LEGACY_LIBRARY_ACTIONS
+    from resources.lib.simkl.library_routes import _CANONICAL_ROUTES
 
     handlers: dict[str, Callable[[dict[str, Any]], None]] = {}
-    for action, (route, catalog) in _LEGACY_LIBRARY_ACTIONS.items():
-        handler = _library_prefetch_handler(route, catalog)
-        if handler is not None:
-            handlers[action] = handler
-
     for action, route in _CANONICAL_ROUTES.items():
 
         def _canonical(route_name: str = route):
@@ -499,17 +463,6 @@ def _build_library_prefetch_handlers() -> dict[str, Callable[[dict[str, Any]], N
     return handlers
 
 
-def _prefetch_legacy_watchlist(page_params: dict[str, Any], *, catalog: str) -> None:
-    _prefetch_library(
-        {
-            **page_params,
-            "action": "simklLibraryList",
-            "catalog": catalog,
-            "status": str(page_params.get("status") or "plantowatch"),
-        }
-    )
-
-
 _PREFETCH_HANDLERS: dict[str, Callable[[dict[str, Any]], None]] = {
     "simklDiscoverList": _prefetch_discover,
     "moviesSearchResults": _prefetch_search,
@@ -522,9 +475,6 @@ _PREFETCH_HANDLERS: dict[str, Callable[[dict[str, Any]], None]] = {
     "showGenresMultiGet": _prefetch_multi_genre,
     "animeGenresMultiGet": _prefetch_multi_genre,
     "simklLibraryList": _prefetch_library,
-    "simklList": _prefetch_library,
-    "moviesMyWatchlist": lambda p: _prefetch_legacy_watchlist(p, catalog="movie"),
-    "showsMyWatchlist": lambda p: _prefetch_legacy_watchlist(p, catalog="tv"),
     "actorCredits": _prefetch_actor,
     "movieYearsMovies": _prefetch_year,
     "showYears": _prefetch_year,

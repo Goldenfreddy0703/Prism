@@ -618,18 +618,26 @@ class GlobalVariables:
         self.NEXT_PAGE_ICON = f"{self.ICONS_PATH}next.png"
         self.init_request(argv)
         self._init_cache()
-        try:
-            from resources.lib.database.sync_meta_cache import maybe_prefetch_sync_meta
+        # Warm session caches from the background service only — not every RunPlugin list open.
+        if self.PLUGIN_HANDLE <= 0:
+            try:
+                from resources.lib.modules.prism_version import do_version_change
 
-            maybe_prefetch_sync_meta()
-        except Exception:
-            self.log_stacktrace()
-        try:
-            from resources.lib.calendar.simkl_calendar import maybe_prefetch_calendars
+                do_version_change()
+            except Exception:
+                self.log_stacktrace()
+            try:
+                from resources.lib.database.sync_meta_cache import maybe_prefetch_sync_meta
 
-            maybe_prefetch_calendars()
-        except Exception:
-            self.log_stacktrace()
+                maybe_prefetch_sync_meta()
+            except Exception:
+                self.log_stacktrace()
+            try:
+                from resources.lib.calendar.simkl_calendar import maybe_prefetch_calendars
+
+                maybe_prefetch_calendars()
+            except Exception:
+                self.log_stacktrace()
 
     def _init_kodi(self):
         self.PLAYLIST = xbmc.PlayList(xbmc.PLAYLIST_VIDEO)
@@ -869,13 +877,6 @@ class GlobalVariables:
                 params["action"] = "genericEndpoint"
                 params["endpoint"] = "boxoffice"
                 params["mediatype"] = "shows"
-            from resources.lib.discover.legacy_actions import ANIME_LEGACY_DISCOVER_ACTIONS
-
-            anime_endpoint = ANIME_LEGACY_DISCOVER_ACTIONS.get(params.get("action"))
-            if anime_endpoint:
-                params["action"] = "genericEndpoint"
-                params["endpoint"] = anime_endpoint
-                params["mediatype"] = "anime"
         return params
 
     def _init_paths(self):
@@ -902,6 +903,7 @@ class GlobalVariables:
         self.PROVIDER_CACHE_DB_PATH = tools.translate_path(os.path.join(self.ADDON_USERDATA_PATH, "providers.db"))
         self.PREMIUMIZE_DB_PATH = tools.translate_path(os.path.join(self.ADDON_USERDATA_PATH, "premiumize.db"))
         self.SIMKL_SYNC_DB_PATH = tools.translate_path(os.path.join(self.ADDON_USERDATA_PATH, "simklSync.db"))
+        self.PRISM_META_DB_PATH = tools.translate_path(os.path.join(self.ADDON_USERDATA_PATH, "prism_meta.db"))
         self.CONTEXT_ADDON_ID = "context.prism"
         self.CONTEXT_ADDON_PATH = tools.translate_path(
             os.path.join("special://home/addons/", self.CONTEXT_ADDON_ID)
@@ -1779,7 +1781,7 @@ class GlobalVariables:
             xbmcplugin.addSortMethod(self.PLUGIN_HANDLE, xbmcplugin.SORT_METHOD_NONE)
         xbmcplugin.setContent(self.PLUGIN_HANDLE, self.kodi_content_type(content_type))
         if cache is None:
-            menu_caching = self.get_bool_setting("general.menucaching")
+            menu_caching = True
         else:
             menu_caching = bool(cache)
         if self.FROM_WIDGET:

@@ -25,17 +25,10 @@ DISCOVER_LIST_KWARGS = {**list_filter_kwargs(), "skip_mill": True}
 
 
 def discover_list_kwargs() -> dict:
-    """Shared list-builder kwargs for all fast hybrid menus (discover, search, library, etc.)."""
-    kwargs = dict(DISCOVER_LIST_KWARGS)
-    from resources.lib.modules.meta_enrichment_queue import meta_enrichment_background, hybrid_foreground_first_page
+    """Shared list-builder kwargs for all fast browse menus (discover, search, library, etc.)."""
+    from resources.lib.meta.list_paint import browse_list_kwargs
 
-    if meta_enrichment_background() and not hybrid_foreground_first_page():
-        kwargs["skip_update"] = True
-    if g.get_bool_setting("general.menucaching", True):
-        kwargs.setdefault("menu_cache", True)
-    else:
-        kwargs.setdefault("menu_cache", False)
-    return kwargs
+    return browse_list_kwargs()
 
 # DB lists that load a candidate pool in SQL, rank/filter in Python, then paginate in memory.
 _POST_FILTER_QUERIES = frozenset(
@@ -231,43 +224,33 @@ class DiscoverRenderer:
             g.cancel_directory()
             return
 
-        from resources.lib.modules.meta_enrichment_queue import hybrid_enrich_on_insert
+        refs = enrich_and_persist(
+            catalog,
+            page_items,
+            force_simkl_meta=True,
+            enrich=False,
+        )
 
-        blocking_enrich = hybrid_enrich_on_insert()
-        show_busy = blocking_enrich and not g.FROM_WIDGET
-        if show_busy:
-            g.show_busy_dialog()
-        try:
-            refs = enrich_and_persist(
-                catalog,
-                page_items,
-                force_simkl_meta=True,
-                enrich=blocking_enrich,
-            )
+        from resources.lib.modules.list_builder import ListBuilder
+        from resources.lib.simkl.field_map import display_rating_priority_for_discover
 
-            from resources.lib.modules.list_builder import ListBuilder
-            from resources.lib.simkl.field_map import display_rating_priority_for_discover
+        builder_kwargs = discover_list_kwargs()
+        builder_kwargs["display_rating_priority"] = display_rating_priority_for_discover(
+            catalog,
+            discover_list.db_query if discover_list.source == "db" else None,
+        )
+        if has_next:
+            builder_kwargs["next_action"] = "simklDiscoverList"
+            builder_kwargs["has_next_page"] = True
+            builder_kwargs["list_id"] = list_id
 
-            builder_kwargs = discover_list_kwargs()
-            builder_kwargs["display_rating_priority"] = display_rating_priority_for_discover(
-                catalog,
-                discover_list.db_query if discover_list.source == "db" else None,
-            )
-            if has_next:
-                builder_kwargs["next_action"] = "simklDiscoverList"
-                builder_kwargs["has_next_page"] = True
-                builder_kwargs["list_id"] = list_id
-
-            builder = ListBuilder()
-            if catalog == "anime":
-                builder.anime_discover_builder(refs, **builder_kwargs)
-            elif catalog == "movie":
-                builder.movie_discover_builder(refs, **builder_kwargs)
-            else:
-                builder.show_discover_builder(refs, **builder_kwargs)
-        finally:
-            if show_busy:
-                g.close_busy_dialog()
+        builder = ListBuilder()
+        if catalog == "anime":
+            builder.anime_discover_builder(refs, **builder_kwargs)
+        elif catalog == "movie":
+            builder.movie_discover_builder(refs, **builder_kwargs)
+        else:
+            builder.show_discover_builder(refs, **builder_kwargs)
 
     def _fetch_cdn(self, discover_list: DiscoverList, catalog: Catalog) -> list:
         if not discover_list.cdn_path:

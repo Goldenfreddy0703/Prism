@@ -8,12 +8,10 @@ from resources.lib.simkl.statuses import library_catalog, library_row_id
 
 
 def _library_db(catalog: str):
-    """Return the sync DB subclass with movie/show watch helpers."""
-    if catalog == "movie":
-        from resources.lib.database.simkl_sync.movies import SimklSyncDatabase
-    else:
-        from resources.lib.database.simkl_sync.shows import SimklSyncDatabase
-    return SimklSyncDatabase()
+    """Return the session sync DB with movie/show watch helpers."""
+    from resources.lib.database.session import get_sync_database
+
+    return get_sync_database()
 
 
 def _library_info(item_or_info: dict) -> dict:

@@ -263,6 +263,7 @@ schema = {
                 ("lists_sync", ["TEXT", "NOT NULL", "DEFAULT '1970-01-01T00:00:00'"]),
                 ("simkl_username", ["TEXT", "NULL"]),
                 ("last_activities_call", ["INTEGER", "NOT NULL", "DEFAULT 1"]),
+                ("last_changes_poll", ["INTEGER", "NOT NULL", "DEFAULT 0"]),
             ]
         ),
         "table_constraints": ["UNIQUE(sync_id)"],
@@ -317,10 +318,13 @@ class SimklSyncDatabase(Database):
         self.task_queue = ThreadPool()
         self.mill_task_queue = ThreadPool()
         self.refresh_activities()
-        self._migrate_library_status_columns()
-        self._migrate_movies_tvdb_id_column()
-        self._migrate_library_cache_tables()
-        self._migrate_bookmarks_catalog_column()
+        if not g.get_bool_runtime_setting("simkl_sync.migrations.done"):
+            self._migrate_library_status_columns()
+            self._migrate_movies_tvdb_id_column()
+            self._migrate_library_cache_tables()
+            self._migrate_bookmarks_catalog_column()
+            self._migrate_last_changes_poll_column()
+            g.set_runtime_setting("simkl_sync.migrations.done", True)
 
         if self.activities is None:
             self.clear_all_meta(False)
@@ -459,6 +463,12 @@ class SimklSyncDatabase(Database):
                 WHERE catalog IS NULL
                 """
             )
+
+    def _migrate_last_changes_poll_column(self):
+        columns = {row["name"] for row in self.fetchall("PRAGMA table_info(activities)")}
+        if "last_changes_poll" not in columns:
+            self.execute_sql("ALTER TABLE activities ADD last_changes_poll INTEGER NOT NULL DEFAULT 0")
+            g.log("SimklSync: migrated activities.last_changes_poll column", "info")
 
     def replace_playback_bookmarks(self, bookmark_type: str, rows: list[tuple]) -> None:
         """Replace synced Simkl playback sessions for movie or episode type."""
@@ -692,9 +702,16 @@ class SimklSyncDatabase(Database):
         else:
             g.notification(self.notification_prefix, g.get_language_string(30272), time=5000)
 
-    def save_to_meta_table(self, items, meta_type, provider_type, id_column):
+    def save_to_meta_table(self, items, meta_type, provider_type, id_column, *, include_children: bool | None = None):
         if items is None:
             return
+        from resources.lib.meta.profiles import include_provider_children, persist_provider_blobs
+
+        if provider_type != "simkl" and not persist_provider_blobs():
+            return
+
+        if include_children is None:
+            include_children = include_provider_children()
         sql_statement = f"""
             INSERT INTO {meta_type}_meta (id, type, meta_hash, value) VALUES (?, ?, ?, ?)
             ON CONFLICT(id, type) DO UPDATE
@@ -737,12 +754,25 @@ class SimklSyncDatabase(Database):
             ),
         )
 
-        for i in items:
-            if i and obj(i):
-                if obj(i).get("seasons"):
-                    self.save_to_meta_table(i.get("seasons"), "season", provider_type, id_column)
-                if obj(i).get("episodes"):
-                    self.save_to_meta_table(i.get("episodes"), "episode", provider_type, id_column)
+        if include_children:
+            for i in items:
+                if i and obj(i):
+                    if obj(i).get("seasons"):
+                        self.save_to_meta_table(
+                            i.get("seasons"),
+                            "season",
+                            provider_type,
+                            id_column,
+                            include_children=include_children,
+                        )
+                    if obj(i).get("episodes"):
+                        self.save_to_meta_table(
+                            i.get("episodes"),
+                            "episode",
+                            provider_type,
+                            id_column,
+                            include_children=include_children,
+                        )
 
     @staticmethod
     def _meta_table_lookup_id(meta_type: str, ext_id) -> int | str | None:
@@ -1802,7 +1832,7 @@ class SimklSyncDatabase(Database):
             rows,
         )
 
-    def apply_sync_episode_stubs_from_entries(self, entries, shows, catalog: str | None = None):
+    def apply_sync_episode_stubs_from_entries(self, entries, shows, catalog: str | None = None, *, selective: bool = False):
         """Create lightweight season/episode rows from sync payload (no per-show milling)."""
         show_ids = {int(show["simkl_id"]): show for show in shows if show.get("simkl_id")}
         if not show_ids:
@@ -1862,6 +1892,9 @@ class SimklSyncDatabase(Database):
                         continue
                     ep_num = int(ep_num)
 
+                    if selective and not self._episode_marked_watched(episode, entry):
+                        continue
+
                     ep_key = (show_id, season_num, ep_num)
                     if ep_key in episode_items:
                         continue
@@ -1910,6 +1943,71 @@ class SimklSyncDatabase(Database):
                 f"Simkl sync stubs: {len(seasons)} season(s), {len(episodes)} episode(s)",
                 "debug",
             )
+
+
+    def prune_library_episodes(self) -> None:
+        """Drop episode rows not needed for Continue Watching / Next Up / Watched Episodes."""
+        bookmarked = self.fetchall("SELECT simkl_id FROM bookmarks WHERE type='episode'")
+        bookmark_ids = {int(row["simkl_id"]) for row in bookmarked if row.get("simkl_id") is not None}
+        bookmark_clause = ""
+        bookmark_params: tuple = ()
+        if bookmark_ids:
+            placeholders = ",".join("?" * len(bookmark_ids))
+            bookmark_clause = f" AND e.simkl_id NOT IN ({placeholders})"
+            bookmark_params = tuple(bookmark_ids)
+
+        self.execute_sql(
+            f"""
+            DELETE FROM episodes AS e
+            WHERE e.simkl_show_id IN (
+                SELECT s.simkl_id FROM shows AS s
+                WHERE COALESCE(s.simkl_status, '') NOT IN ('watching', 'completed')
+            ){bookmark_clause}
+            """,
+            bookmark_params or None,
+        )
+
+        self.execute_sql(
+            f"""
+            DELETE FROM episodes AS e
+            WHERE COALESCE(e.watched, 0) = 0
+              AND e.simkl_show_id IN (
+                SELECT s.simkl_id FROM shows AS s
+                WHERE s.simkl_status = 'completed'
+            ){bookmark_clause}
+            """,
+            bookmark_params or None,
+        )
+
+        self.execute_sql(
+            f"""
+            DELETE FROM episodes AS e
+            WHERE COALESCE(e.watched, 0) = 0
+              AND e.simkl_show_id IN (
+                SELECT s.simkl_id FROM shows AS s
+                WHERE s.simkl_status = 'watching'
+            )
+              AND e.simkl_id NOT IN (
+                SELECT e2.simkl_id
+                FROM episodes AS e2
+                WHERE e2.simkl_show_id = e.simkl_show_id
+                  AND COALESCE(e2.watched, 0) = 0
+                  AND e2.season > 0
+                ORDER BY e2.season ASC, e2.number ASC
+                LIMIT 1
+            ){bookmark_clause}
+            """,
+            bookmark_params or None,
+        )
+
+        self.execute_sql(
+            """
+            DELETE FROM seasons
+            WHERE simkl_show_id NOT IN (
+                SELECT DISTINCT simkl_show_id FROM episodes
+            )
+            """
+        )
 
     def ensure_playback_episode_row(self, show: dict, episode: dict, catalog: str) -> int | None:
         """Create a minimal season/episode row for a paused playback entry (no full mill)."""

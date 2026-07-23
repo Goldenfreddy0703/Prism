@@ -4,7 +4,6 @@ from __future__ import annotations
 import time
 
 from resources.lib.indexers.simkl import SimklAPI
-from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue, meta_enrichment_background
 
 ACTIVITY_CHECK_SECONDS = 120
 CACHE_HOURS_FALLBACK = 24
@@ -17,9 +16,9 @@ _CATALOG_ACTIVITY_SECTION = {
 
 
 def ensure_library_cache_tables(db=None) -> None:
-    from resources.lib.database.simkl_sync.database import SimklSyncDatabase
+    from resources.lib.database.session import get_sync_database
 
-    db = db or SimklSyncDatabase()
+    db = db or get_sync_database()
     db.execute_sql(
         """
         CREATE TABLE IF NOT EXISTS library_status_cache (
@@ -51,9 +50,9 @@ def ensure_library_cache_tables(db=None) -> None:
 
 def invalidate_library_cache(catalog: str | None = None) -> None:
     """Drop cached membership lists after a local status change."""
-    from resources.lib.database.simkl_sync.database import SimklSyncDatabase
+    from resources.lib.database.session import get_sync_database
 
-    db = SimklSyncDatabase()
+    db = get_sync_database()
     ensure_library_cache_tables(db)
     if catalog:
         db.execute_sql("DELETE FROM library_status_cache WHERE catalog=?", (catalog,))
@@ -68,9 +67,9 @@ def _cache_is_fresh(last_updated: int | None, hours: float = CACHE_HOURS_FALLBAC
 
 
 def _get_cached_last_updated(catalog: str, status: str) -> int | None:
-    from resources.lib.database.simkl_sync.database import SimklSyncDatabase
+    from resources.lib.database.session import get_sync_database
 
-    db = SimklSyncDatabase()
+    db = get_sync_database()
     ensure_library_cache_tables(db)
     row = db.fetchone(
         """
@@ -86,9 +85,9 @@ def _get_cached_last_updated(catalog: str, status: str) -> int | None:
 
 
 def _get_cached_refs(catalog: str, status: str) -> list[dict]:
-    from resources.lib.database.simkl_sync.database import SimklSyncDatabase
+    from resources.lib.database.session import get_sync_database
 
-    db = SimklSyncDatabase()
+    db = get_sync_database()
     ensure_library_cache_tables(db)
     rows = db.fetchall(
         """
@@ -103,9 +102,9 @@ def _get_cached_refs(catalog: str, status: str) -> list[dict]:
 
 
 def _save_cached_refs(catalog: str, status: str, refs: list[dict]) -> None:
-    from resources.lib.database.simkl_sync.database import SimklSyncDatabase
+    from resources.lib.database.session import get_sync_database
 
-    db = SimklSyncDatabase()
+    db = get_sync_database()
     ensure_library_cache_tables(db)
     now = int(time.time())
     rows = [
@@ -129,9 +128,9 @@ def _save_cached_refs(catalog: str, status: str, refs: list[dict]) -> None:
 
 
 def _stored_activity(catalog: str) -> dict | None:
-    from resources.lib.database.simkl_sync.database import SimklSyncDatabase
+    from resources.lib.database.session import get_sync_database
 
-    db = SimklSyncDatabase()
+    db = get_sync_database()
     ensure_library_cache_tables(db)
     return db.fetchone(
         "SELECT activity_timestamp, last_checked FROM library_status_activity WHERE catalog=?",
@@ -140,9 +139,9 @@ def _stored_activity(catalog: str) -> dict | None:
 
 
 def _save_activity_check(catalog: str, activity_timestamp: str | None) -> None:
-    from resources.lib.database.simkl_sync.database import SimklSyncDatabase
+    from resources.lib.database.session import get_sync_database
 
-    db = SimklSyncDatabase()
+    db = get_sync_database()
     ensure_library_cache_tables(db)
     db.execute_sql(
         """
@@ -227,49 +226,39 @@ def _schedule_library_refresh(catalog: str, status: str) -> None:
 
 
 def refresh_library_cache_background(catalog: str | None, status: str | None) -> None:
-    """Background refresh of library membership cache after stale-while-revalidate paint."""
-    from resources.lib.modules.global_lock import global_lock_running
-    from resources.lib.modules.globals import g
-    from resources.lib.simkl.library import fetch_library_refs
-    from resources.lib.simkl.library_sort import sort_library_refs
-    from resources.lib.simkl.library_status import stamp_library_list_status
+    """Rebuild library membership cache from local sync DB (no Simkl API)."""
+    from resources.lib.simkl.all_items_sync import rebuild_library_cache_from_db
 
-    if not catalog or not status:
-        return
+    rebuild_library_cache_from_db()
 
-    sync_running = global_lock_running("simkl.sync")
-    refs = fetch_library_refs(catalog, status=status, skip_persist=sync_running)
-    if refs and not sync_running:
-        _save_cached_refs(catalog, status, refs)
-    if refs:
-        stamp_library_list_status(catalog, status, sort_library_refs(refs, catalog))
-        movie_refs = [{"simkl_id": ref["simkl_id"]} for ref in refs if ref.get("catalog") == "movie"]
-        show_refs = [
-            {"simkl_id": ref["simkl_id"]}
-            for ref in refs
-            if ref.get("catalog") in ("tv", "anime")
-        ]
-        if movie_refs:
-            MetaEnrichmentQueue.schedule_run_plugin(movie_refs, "movie", reason="library", catalog="movie")
-        if show_refs:
-            MetaEnrichmentQueue.schedule_run_plugin(show_refs, "tvshow", reason="library", catalog=catalog)
+
+def _load_refs_from_sync_db(catalog: str, status: str) -> list[dict]:
+    from resources.lib.database.session import get_sync_database
+
+    db = get_sync_database()
+    if catalog == "movie":
+        refs = db.get_movies_by_simkl_status(status)
+        for ref in refs:
+            ref["catalog"] = "movie"
+        return refs
+
+    refs = db.get_shows_by_simkl_status(status, catalog=catalog)
+    for ref in refs:
+        ref["catalog"] = catalog
+    return refs
 
 
 def load_library_list_refs(catalog: str, status: str) -> list[dict]:
     """
     Return list-builder refs for a My Library status list.
 
-    Simkl ``/sync/all-items/...`` is the source of truth for membership.
-    Cached simklSync.db rows supply metadata when rendering the list.
+    Membership comes from local simkl_sync.db (populated by activities all-items sync).
+    No per-status Simkl API calls on menu open.
     """
-    from resources.lib.modules.global_lock import global_lock_running
     from resources.lib.modules.globals import g
     from resources.lib.modules.widget_loader import mark_widget_session_loaded
-    from resources.lib.simkl.library import fetch_library_refs
     from resources.lib.simkl.library_sort import sort_library_refs
     from resources.lib.simkl.library_status import stamp_library_list_status
-
-    sync_running = global_lock_running("simkl.sync")
 
     if g.FROM_WIDGET and mark_widget_session_loaded(f"library.{catalog}.{status}"):
         cached = _get_cached_refs(catalog, status)
@@ -278,36 +267,15 @@ def load_library_list_refs(catalog: str, status: str) -> list[dict]:
             stamp_library_list_status(catalog, status, refs)
             return refs
 
-    if sync_running:
-        cached = _get_cached_refs(catalog, status)
-        if cached:
-            refs = sort_library_refs(cached, catalog)
-            stamp_library_list_status(catalog, status, refs)
-            return refs
-
-    if should_refresh_library_cache(catalog, status):
-        cached = _get_cached_refs(catalog, status)
-        if cached and meta_enrichment_background():
-            _schedule_library_refresh(catalog, status)
-            refs = sort_library_refs(cached, catalog)
-            stamp_library_list_status(catalog, status, refs)
-            return refs
-        refs = fetch_library_refs(catalog, status=status, skip_persist=sync_running)
-        if refs:
-            stamp_library_list_status(catalog, status, refs)
-        if refs and not sync_running:
-            _save_cached_refs(catalog, status, refs)
-        return refs
-
-    refs = _get_cached_refs(catalog, status)
-    if refs:
-        refs = sort_library_refs(refs, catalog)
+    cached = _get_cached_refs(catalog, status)
+    if cached and _cache_is_fresh(_get_cached_last_updated(catalog, status)):
+        refs = sort_library_refs(cached, catalog)
         stamp_library_list_status(catalog, status, refs)
         return refs
 
-    refs = fetch_library_refs(catalog, status=status, skip_persist=sync_running)
+    refs = _load_refs_from_sync_db(catalog, status)
+    refs = sort_library_refs(refs, catalog)
+    stamp_library_list_status(catalog, status, refs)
     if refs:
-        stamp_library_list_status(catalog, status, refs)
-    if refs and not sync_running:
         _save_cached_refs(catalog, status, refs)
     return refs

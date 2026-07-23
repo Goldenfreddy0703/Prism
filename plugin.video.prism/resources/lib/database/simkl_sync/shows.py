@@ -299,7 +299,6 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             self._update_mill_format_shows(media_list, False, skip_mill=skip_mill)
         g.log("Show list update and milling complete", "debug")
         from resources.lib.database.sync_meta_cache import SyncMetaCache
-        from resources.lib.modules.meta_enrichment_queue import meta_enrichment_background
 
         meta_cache = SyncMetaCache()
 
@@ -318,10 +317,13 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
 
         rows = self.fetchall(statement)
         meta_cache.set_many_rows("show", rows or [])
+
+        from resources.lib.meta.display_store import get_display_meta_store
+
+        rows = get_display_meta_store().overlay_rows(rows, "tvshow")
         if skip_update:
-            from resources.lib.modules.meta_enrichment_queue import (
+            from resources.lib.meta.enrichment import (
                 hybrid_apply_list_meta,
-                hybrid_foreground_first_page,
                 hybrid_widget_local_meta,
             )
 
@@ -331,12 +333,6 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
 
                 rows = gapfill_anime_title_rows(rows)
                 self.set_list_enrichment_refs(enrichment_refs, "tvshow")
-            elif hybrid_foreground_first_page():
-                rows = self.metadataHandler.gapfill_list_meta(rows, "tvshow", db=self, persist=True)
-                from resources.lib.simkl.enrich import gapfill_anime_title_rows
-
-                rows = gapfill_anime_title_rows(rows)
-                self.set_list_enrichment_refs([], "tvshow")
             else:
                 rows = hybrid_apply_list_meta(rows, "tvshow", self)
         else:
@@ -406,16 +402,19 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             from resources.lib.simkl.ids import season_key
 
             season_row_id = season_key(simkl_show_id, int(season))
-        cold_open = False
-        if skip_update and not self._has_season_rows(
-            simkl_show_id, season=season, simkl_id=simkl_id
-        ):
-            cold_open = True
-            g.log(
-                f"Cold-open season list for show {simkl_show_id}: syncing once",
-                "debug",
+        simkl_pulled = False
+        seasons_need_format = False
+        if skip_update:
+            simkl_pulled = self._ensure_simkl_episode_tree(
+                simkl_show_id,
+                season_num=season,
             )
-        if not skip_update or cold_open:
+            seasons_need_format = self._seasons_need_format(
+                simkl_show_id,
+                season_num=season,
+                season_row_id=season_row_id,
+            )
+        if not skip_update or simkl_pulled or seasons_need_format:
             self._try_update_seasons(simkl_show_id, season_row_id)
         g.log("Updated requested seasons", "debug")
         statement = """SELECT s.simkl_id, s.season, s.info, s.cast, s.art, s.args, s.watched_episodes, s.unwatched_episodes,
@@ -446,9 +445,9 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 "debug",
             )
         if skip_update:
-            from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue, meta_enrichment_background
+            from resources.lib.meta.enrichment import MetaEnrichmentQueue
 
-            if meta_enrichment_background() and not cold_open:
+            if not simkl_pulled and not seasons_need_format:
                 MetaEnrichmentQueue.schedule_show_children(
                     int(simkl_show_id),
                     kind="season_list",
@@ -484,19 +483,23 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
 
         g.log("Fetching Episode list from sync database and updating", "debug")
         skip_update = params.pop("skip_update", False)
-        cold_open = False
-        if skip_update and not self._has_episode_rows(
-            simkl_show_id,
-            season_num=season_num,
-            simkl_id=simkl_id,
-            season_row_id=season_row_id,
-        ):
-            cold_open = True
-            g.log(
-                f"Cold-open episode list for show {simkl_show_id}: syncing once",
-                "debug",
+        simkl_pulled = False
+        episodes_need_format = False
+        if skip_update:
+            simkl_pulled = self._ensure_simkl_episode_tree(
+                simkl_show_id,
+                season_num=season_num,
+                simkl_id=simkl_id,
+                season_row_id=season_row_id,
             )
-        if not skip_update or cold_open:
+            if not simkl_pulled:
+                episodes_need_format = self._episodes_scope_need_format(
+                    simkl_show_id,
+                    season_num=season_num,
+                    simkl_id=simkl_id,
+                    season_row_id=season_row_id,
+                )
+        if not skip_update or simkl_pulled or episodes_need_format:
             self._try_update_episodes(simkl_show_id, season_row_id, simkl_id)
         g.log("Updated required episodes", "debug")
         statement = """SELECT e.simkl_id, e.simkl_show_id, e.simkl_season_id, e.info, e.cast, e.art, e.args, e.watched as play_count,
@@ -523,13 +526,15 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             statement += f" AND e.number >= {int(minimum_episode)}"
         statement += " order by e.season, e.number "
         rows = self.fetchall(statement)
-        if rows and any(not row.get("info") for row in rows):
-            self._format_episodes([{"simkl_id": row["simkl_id"]} for row in rows if not row.get("info")])
+        if rows and any(self._episode_row_needs_format(row) for row in rows):
+            self._format_episodes(
+                [{"simkl_id": row["simkl_id"]} for row in rows if self._episode_row_needs_format(row)]
+            )
             rows = self.fetchall(statement)
         if skip_update:
-            from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue, meta_enrichment_background
+            from resources.lib.meta.enrichment import MetaEnrichmentQueue
 
-            if meta_enrichment_background() and not cold_open:
+            if not simkl_pulled and not episodes_need_format:
                 episode_ids = [int(row["simkl_id"]) for row in rows or [] if row.get("simkl_id") is not None]
                 MetaEnrichmentQueue.schedule_show_children(
                     int(simkl_show_id),
@@ -597,6 +602,208 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             resolved.append(item)
         return resolved
 
+
+    @staticmethod
+    def _episode_row_needs_format(row: dict | None) -> bool:
+        """True when episode DB row lacks display-ready title (sync stubs, cold open)."""
+        if not row or not isinstance(row, dict):
+            return True
+        info = row.get("info")
+        if not isinstance(info, dict) or not info:
+            return True
+        return not (info.get("title") or info.get("name"))
+
+    def _fetch_episode_scope_rows(
+        self,
+        simkl_show_id,
+        *,
+        season_num=None,
+        simkl_id=None,
+        season_row_id=None,
+    ) -> list[dict]:
+        if simkl_id is not None:
+            return self.fetchall(
+                "SELECT simkl_id, info FROM episodes WHERE simkl_id = ?",
+                (int(simkl_id),),
+            )
+        if season_num is not None:
+            return self.fetchall(
+                "SELECT simkl_id, info FROM episodes WHERE simkl_show_id = ? AND season = ?",
+                (int(simkl_show_id), int(season_num)),
+            )
+        if season_row_id is not None:
+            return self.fetchall(
+                "SELECT simkl_id, info FROM episodes WHERE simkl_season_id = ?",
+                (int(season_row_id),),
+            )
+        return self.fetchall(
+            "SELECT simkl_id, info FROM episodes WHERE simkl_show_id = ?",
+            (int(simkl_show_id),),
+        )
+
+    @staticmethod
+    def _season_row_needs_format(row: dict | None) -> bool:
+        """True when season DB row lacks display-ready title (sync stubs after watchlist ingest)."""
+        if not row or not isinstance(row, dict):
+            return True
+        info = row.get("info")
+        if not isinstance(info, dict) or not info:
+            return True
+        return not (info.get("title") or info.get("name"))
+
+    def _fetch_season_scope_rows(
+        self,
+        simkl_show_id,
+        *,
+        season_num=None,
+        season_row_id=None,
+    ) -> list[dict]:
+        if season_num is not None:
+            return self.fetchall(
+                "SELECT simkl_id, season, info FROM seasons WHERE simkl_show_id = ? AND season = ?",
+                (int(simkl_show_id), int(season_num)),
+            )
+        if season_row_id is not None:
+            return self.fetchall(
+                "SELECT simkl_id, season, info FROM seasons WHERE simkl_id = ?",
+                (int(season_row_id),),
+            )
+        return self.fetchall(
+            "SELECT simkl_id, season, info FROM seasons WHERE simkl_show_id = ?",
+            (int(simkl_show_id),),
+        )
+
+    def _seasons_need_format(
+        self,
+        simkl_show_id,
+        *,
+        season_num=None,
+        season_row_id=None,
+    ) -> bool:
+        if not self._has_season_rows(
+            simkl_show_id,
+            season=season_num,
+            simkl_id=season_row_id,
+        ):
+            return False
+        rows = self._fetch_season_scope_rows(
+            simkl_show_id,
+            season_num=season_num,
+            season_row_id=season_row_id,
+        )
+        return any(self._season_row_needs_format(row) for row in rows)
+
+    def _episodes_scope_need_format(
+        self,
+        simkl_show_id,
+        *,
+        season_num=None,
+        simkl_id=None,
+        season_row_id=None,
+    ) -> bool:
+        if not self._has_episode_rows(
+            simkl_show_id,
+            season_num=season_num,
+            simkl_id=simkl_id,
+            season_row_id=season_row_id,
+        ):
+            return False
+        rows = self._fetch_episode_scope_rows(
+            simkl_show_id,
+            season_num=season_num,
+            simkl_id=simkl_id,
+            season_row_id=season_row_id,
+        )
+        return any(self._episode_row_needs_format(row) for row in rows)
+
+    def _needs_simkl_episode_pull(
+        self,
+        simkl_show_id,
+        *,
+        season_num=None,
+        simkl_id=None,
+        season_row_id=None,
+    ) -> bool:
+        """True when drill-in should call Simkl episodes API (discover cold-open parity)."""
+        if not self._has_episode_rows(
+            simkl_show_id,
+            season_num=season_num,
+            simkl_id=simkl_id,
+            season_row_id=season_row_id,
+        ):
+            return True
+        rows = self._fetch_episode_scope_rows(
+            simkl_show_id,
+            season_num=season_num,
+            simkl_id=simkl_id,
+            season_row_id=season_row_id,
+        )
+        if not rows:
+            return True
+        if any(self._episode_row_needs_format(row) for row in rows):
+            return True
+        if simkl_id is None and season_num is None and season_row_id is None:
+            show_row = self.fetchone(
+                "SELECT episode_count FROM shows WHERE simkl_id = ?",
+                (int(simkl_show_id),),
+            )
+            expected = int(show_row["episode_count"] or 0) if show_row else 0
+            if expected > 0 and len(rows) < expected:
+                return True
+        return False
+
+    def _ensure_simkl_episode_tree(
+        self,
+        simkl_show_id,
+        *,
+        season_num=None,
+        simkl_id=None,
+        season_row_id=None,
+    ) -> bool:
+        """Pull seasons/episodes from Simkl when local sync stubs would paint blank."""
+        if not self._needs_simkl_episode_pull(
+            simkl_show_id,
+            season_num=season_num,
+            simkl_id=simkl_id,
+            season_row_id=season_row_id,
+        ):
+            return False
+        show_meta = self._get_single_show_meta(simkl_show_id)
+        if not show_meta:
+            show_meta = {"simkl_id": int(simkl_show_id)}
+        g.log(
+            f"Drill-in Simkl episode pull for show {simkl_show_id}",
+            "info",
+        )
+        self.force_mill_shows(show_meta, mill_episodes=True)
+        return True
+
+    def _mixed_episodes_missing_rows(self, media_items) -> bool:
+        """True when a listed episode has no row in the local episodes table."""
+        if not media_items:
+            return False
+        for item in self._resolve_episode_list_ids(media_items):
+            simkl_id = item.get("simkl_id") if isinstance(item, dict) else None
+            coords = self._episode_coords_from_list_item(item) if isinstance(item, dict) else None
+            row = None
+            if simkl_id is not None:
+                row = self.fetchone(
+                    "SELECT 1 AS ok FROM episodes WHERE simkl_id = ?",
+                    (int(simkl_id),),
+                )
+            if row is None and coords:
+                show_id, season, ep_num = coords
+                row = self.fetchone(
+                    """
+                    SELECT 1 AS ok FROM episodes
+                    WHERE simkl_show_id = ? AND season = ? AND number = ?
+                    """,
+                    (show_id, season, ep_num),
+                )
+            if row is None:
+                return True
+        return False
+
     def _mixed_episodes_need_sync(self, media_items) -> bool:
         if not media_items:
             return False
@@ -629,7 +836,9 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 )
             if row is None:
                 return True
-            if row.get("info") is None or row.get("meta_id") is None:
+            if row.get("meta_id") is None:
+                return True
+            if self._episode_row_needs_format(row):
                 return True
         return False
 
@@ -646,32 +855,26 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         skip_update = params.pop("skip_update", False)
         params.pop("skip_mill", False)
         media_items = self._resolve_episode_list_ids(media_items)
-        need_sync = self._mixed_episodes_need_sync(media_items)
-        if not skip_update or need_sync:
-            if need_sync:
-                g.log("Mixed episode list: force-milling parent shows for episode metadata", "debug")
-                show_ids = sorted(
-                    {int(i["simkl_show_id"]) for i in media_items if i.get("simkl_show_id")}
-                )
-                if show_ids:
-                    predicate = ",".join(str(i) for i in show_ids)
-                    shows = self.fetchall(
-                        f"""
-                        SELECT m.value AS simkl_object,
-                               s.simkl_id,
-                               s.tvdb_id,
-                               s.tmdb_id
-                        FROM shows AS s
-                                 LEFT JOIN shows_meta AS m ON m.id = s.simkl_id AND m.type = 'simkl'
-                        WHERE s.simkl_id IN ({predicate})
-                        """
-                    )
-                    if not shows:
-                        shows = [{"simkl_id": show_id} for show_id in show_ids]
-                    self.force_mill_shows(shows, mill_episodes=True)
-            else:
-                self._try_update_mixed_episodes(media_items)
+        missing_rows = self._mixed_episodes_missing_rows(media_items)
+        if missing_rows and not skip_update:
+            g.log(
+                "Mixed episode list: syncing listed episodes before paint",
+                "debug",
+            )
+            self._try_update_mixed_episodes(media_items)
             media_items = self._resolve_episode_list_ids(media_items)
+        elif missing_rows:
+            show_ids = sorted(
+                {int(item["simkl_show_id"]) for item in media_items if item.get("simkl_show_id") is not None}
+            )
+            if show_ids:
+                from resources.lib.meta.enrichment import MetaEnrichmentQueue
+
+                MetaEnrichmentQueue.schedule_run_plugin(
+                    [{"simkl_id": show_id} for show_id in show_ids],
+                    "tvshow",
+                    reason="mixed_episode_list",
+                )
         in_predicate = ",".join([str(i["simkl_id"]) for i in media_items if i.get("simkl_id") is not None])
         if not in_predicate:
             return []
@@ -713,29 +916,33 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             query += " AND e.watched = 0"
 
         rows = self.fetchall(query)
+        if rows and any(self._episode_row_needs_format(row) for row in rows):
+            self._format_episodes(
+                [{"simkl_id": row["simkl_id"]} for row in rows if self._episode_row_needs_format(row)]
+            )
+            rows = self.fetchall(query)
         if skip_update:
             from collections import defaultdict
 
-            from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue, meta_enrichment_background
+            from resources.lib.meta.enrichment import MetaEnrichmentQueue
 
-            if meta_enrichment_background():
-                groups: dict[tuple[int, int | None], list[int]] = defaultdict(list)
-                for item in media_items:
-                    if not isinstance(item, dict):
-                        continue
-                    show_id = item.get("simkl_show_id")
-                    season_id = item.get("simkl_season_id")
-                    episode_id = item.get("simkl_id")
-                    if show_id is None or episode_id is None:
-                        continue
-                    groups[(int(show_id), int(season_id) if season_id is not None else None)].append(int(episode_id))
-                for (show_id, season_row_id), episode_ids in groups.items():
-                    MetaEnrichmentQueue.schedule_show_children(
-                        show_id,
-                        kind="episode_list",
-                        season_row_id=season_row_id,
-                        episode_ids=episode_ids,
-                    )
+            groups: dict[tuple[int, int | None], list[int]] = defaultdict(list)
+            for item in media_items:
+                if not isinstance(item, dict):
+                    continue
+                show_id = item.get("simkl_show_id")
+                season_id = item.get("simkl_season_id")
+                episode_id = item.get("simkl_id")
+                if show_id is None or episode_id is None:
+                    continue
+                groups[(int(show_id), int(season_id) if season_id is not None else None)].append(int(episode_id))
+            for (show_id, season_row_id), episode_ids in groups.items():
+                MetaEnrichmentQueue.schedule_show_children(
+                    show_id,
+                    kind="episode_list",
+                    season_row_id=season_row_id,
+                    episode_ids=episode_ids,
+                )
         return MetadataHandler.sort_list_items(rows, media_items)
 
     @guard_against_none()

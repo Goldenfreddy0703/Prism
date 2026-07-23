@@ -1,7 +1,6 @@
 import xbmc
 import xbmcgui
 
-from resources.lib.discover.legacy_actions import ANIME_LEGACY_DISCOVER_ACTIONS
 from resources.lib.modules.exceptions import NoPlayableSourcesException
 from resources.lib.modules.globals import g
 
@@ -112,11 +111,6 @@ def dispatch(params):
         from resources.lib.gui import movieMenus
 
         movieMenus.Menus().my_movie_collection()
-
-    elif action == "moviesMyWatchlist":
-        from resources.lib.gui import movieMenus
-
-        movieMenus.Menus().my_movie_watchlist()
 
     elif action == "moviesRelated":
         from resources.lib.simkl.related import render_recommendations
@@ -335,20 +329,10 @@ def dispatch(params):
 
         Menus.discover_anime()
 
-    elif action in ANIME_LEGACY_DISCOVER_ACTIONS:
-        from resources.lib.gui.animeMenus import Menus
-
-        Menus().generic_endpoint(ANIME_LEGACY_DISCOVER_ACTIONS[action])
-
     elif action == "showsMyCollection":
         from resources.lib.gui import tvshowMenus
 
         tvshowMenus.Menus().my_shows_collection()
-
-    elif action == "showsMyWatchlist":
-        from resources.lib.gui import tvshowMenus
-
-        tvshowMenus.Menus().my_shows_watchlist()
 
     elif action == "showsMyProgress":
         from resources.lib.gui import tvshowMenus
@@ -527,31 +511,6 @@ def dispatch(params):
     elif action == "openSettings":
         xbmc.executebuiltin(f"Addon.OpenSettings({g.ADDON_ID})")
 
-    elif action == "mySimklLists":
-        from resources.lib.modules.listsHelper import ListsHelper
-
-        ListsHelper().my_simkl_lists(mediatype)
-
-    elif action == "myLikedLists":
-        from resources.lib.modules.listsHelper import ListsHelper
-
-        ListsHelper().my_liked_lists(mediatype)
-
-    elif action == "TrendingLists":
-        from resources.lib.modules.listsHelper import ListsHelper
-
-        ListsHelper().trending_lists(mediatype)
-
-    elif action == "PopularLists":
-        from resources.lib.modules.listsHelper import ListsHelper
-
-        ListsHelper().popular_lists(mediatype)
-
-    elif action == "simklList":
-        from resources.lib.modules.listsHelper import ListsHelper
-
-        ListsHelper().get_list_items()
-
     elif action == "nonActiveAssistClear":
         from resources.lib.gui import debridServices
 
@@ -681,7 +640,7 @@ def dispatch(params):
         from resources.lib.database.simkl_sync import SimklSyncDatabase
 
         force = str(params.get("force", "")).lower() in ("1", "true", "yes")
-        SimklSyncDatabase().sync_activities(force=force)
+        SimklSyncDatabase().sync_activities(silent=not force, force=force)
 
     elif action == "simklSyncTools":
         from resources.lib.gui import homeMenu
@@ -933,7 +892,7 @@ def dispatch(params):
             prefetch_all_calendars()
 
     elif action == "processMetaEnrichmentQueue":
-        from resources.lib.modules.meta_enrichment_queue import MetaEnrichmentQueue
+        from resources.lib.meta.enrichment import MetaEnrichmentQueue
 
         try:
             MetaEnrichmentQueue.process_request(action_args)

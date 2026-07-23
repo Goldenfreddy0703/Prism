@@ -241,11 +241,22 @@ class SyncMetaCache:
         return warmed
 
 
+def row_has_display_meta(row: dict[str, Any] | None) -> bool:
+    """True when a sync/display row has enough data to paint a list item."""
+    return SyncMetaCache.row_has_display_meta(row)
+
+
 def maybe_prefetch_sync_meta() -> None:
     """Prefetch once per Kodi session."""
     if g.get_bool_runtime_setting("sync_meta.prefetch.done"):
         return
     g.set_runtime_setting("sync_meta.prefetch.done", True)
     count = SyncMetaCache().prefetch()
+    try:
+        from resources.lib.meta.display_store import get_display_meta_store
+
+        count += get_display_meta_store().prefetch()
+    except Exception:
+        g.log_stacktrace()
     if count:
         g.log(f"Sync meta cache prefetched {count} rows", "debug")
