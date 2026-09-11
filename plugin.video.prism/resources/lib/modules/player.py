@@ -205,7 +205,13 @@ class PrismPlayer(xbmc.Player):
 
         self.playing_next_time = max(self.playing_next_time, self.item_information["info"].get("duration", 0) * (1 - (g.get_int_setting("playingnext.percent") / 100)))
 
+        from resources.lib.simkl.kodi_watched_bridge import (
+            arm_post_playback_suppression,
+            set_prism_playback_active,
+        )
+
         locale_backup = None
+        set_prism_playback_active(True)
         try:
             locale_backup = locale_playback.apply_catalog_locale(
                 locale_playback.catalog_from_item(item_information)
@@ -216,6 +222,8 @@ class PrismPlayer(xbmc.Player):
 
             self._keep_alive()
         finally:
+            set_prism_playback_active(False)
+            arm_post_playback_suppression()
             if self._should_restore_catalog_locale():
                 locale_playback.restore_catalog_locale(locale_backup)
             self._locale_backup = None

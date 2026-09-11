@@ -10,6 +10,18 @@ import xbmcgui
 from resources.lib.modules import locale_playback
 from resources.lib.modules.globals import g
 
+_NAME_LANGUAGE_CODES = {
+    "english": "eng",
+    "arabic": "ara",
+    "french": "fre",
+    "german": "ger",
+    "italian": "ita",
+    "portuguese": "por",
+    "russian": "rus",
+    "spanish": "spa",
+    "japanese": "jpn",
+}
+
 KEYWORD_OFF = "off"
 KEYWORD_DIALOG = "dialog"
 KEYWORD_SIGNS_SONGS = "signs_songs"
@@ -204,6 +216,27 @@ def _find_keyword_stream(subtitle_streams: list[dict], keywords: tuple[str, ...]
     return None
 
 
+def _language_code_from_name(name: str | None) -> str | None:
+    lower = (name or "").lower()
+    if not lower:
+        return None
+    for keyword, code in _NAME_LANGUAGE_CODES.items():
+        if keyword in lower:
+            return code
+    return None
+
+
+def _stream_language_code(stream: dict) -> str | None:
+    raw = (stream.get("language") or "").strip().lower()
+    if raw and raw not in ("und", "unknown", "none"):
+        if len(raw) == 3 and raw.isalpha():
+            return raw
+        code = _language_code(raw)
+        if code:
+            return code
+    return _language_code_from_name(stream.get("name"))
+
+
 def _find_language_stream(subtitle_streams: list[dict], language_code: str | None) -> int | None:
     if not language_code:
         return None
@@ -213,7 +246,9 @@ def _find_language_stream(subtitle_streams: list[dict], language_code: str | Non
                 return _kodi_stream_index(stream, fallback=position)
         return None
     for position, stream in enumerate(subtitle_streams):
-        if isinstance(stream, dict) and (stream.get("language") or "").lower() == language_code:
+        if not isinstance(stream, dict):
+            continue
+        if _stream_language_code(stream) == language_code:
             return _kodi_stream_index(stream, fallback=position)
     return None
 
@@ -267,15 +302,17 @@ def _pick_subtitle_stream(
 
 
 def apply_anime_streams(player: xbmc.Player, *, catalog: str = "anime") -> None:
-    """Select keyword-matched subtitle streams after playback starts (audio via locale JSON-RPC)."""
+    """Select preferred or keyword-matched subtitle streams after playback starts."""
     from resources.lib.modules.catalog_profiles import normalize_catalog
 
     if normalize_catalog(catalog) != "anime":
         return
 
-    keyword_mode = get_subtitle_keyword_mode()
-    if not keyword_mode_active(keyword_mode):
+    if _catalog_subtitle_setting(catalog) == "none":
         return
+
+    keyword_mode = get_subtitle_keyword_mode()
+    active_keyword_mode = keyword_mode if keyword_mode_active(keyword_mode) else KEYWORD_OFF
 
     subtitle_streams: list[dict] = []
 
@@ -296,7 +333,7 @@ def apply_anime_streams(player: xbmc.Player, *, catalog: str = "anime") -> None:
     stream_index = _pick_subtitle_stream(
         subtitle_streams,
         catalog=catalog,
-        keyword_mode=keyword_mode,
+        keyword_mode=active_keyword_mode,
     )
 
     try:

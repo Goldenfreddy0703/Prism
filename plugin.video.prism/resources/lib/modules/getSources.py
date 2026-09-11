@@ -984,6 +984,7 @@ class Sources:
             build_anime_simple_info_fields,
             is_anime_item,
         )
+        from resources.lib.simkl.field_map import tvdb_from_episode
         from resources.lib.simkl.ids import episode_num_from_info
 
         ep_info = info.get("info") or {}
@@ -1010,6 +1011,12 @@ class Sources:
         Sources._append_clean_alias(simple_info['show_title'], simple_info['show_aliases'])
         Sources._append_scraper_title_aliases(ep_info, show_info, simple_info['show_aliases'])
         simple_info['isanime'] = is_anime_item(ep_info, info)
+
+        tvdb_bucket, tvdb_ep = tvdb_from_episode(ep_info)
+        if tvdb_bucket is not None:
+            simple_info["tvdb_season_number"] = str(1 if int(tvdb_bucket) == 0 else tvdb_bucket)
+        if tvdb_ep is not None:
+            simple_info["tvdb_episode_number"] = str(tvdb_ep)
 
         if simple_info['isanime']:
             simple_info.update(build_anime_simple_info_fields(ep_info, info, show_info))

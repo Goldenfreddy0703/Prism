@@ -206,6 +206,26 @@ def synthetic_episode_id(show_id: int, season_num: int, episode_num: int) -> int
     return int(show_id) * 1_000_000 + int(season_num) * 1_000 + int(episode_num)
 
 
+def split_synthetic_episode_id(episode_row_id: int) -> tuple[int, int, int]:
+    episode_row_id = int(episode_row_id)
+    show_id = episode_row_id // 1_000_000
+    season_num = (episode_row_id % 1_000_000) // 1_000
+    episode_num = episode_row_id % 1_000
+    return show_id, season_num, episode_num
+
+
+def is_synthetic_episode_id(value: int | None) -> bool:
+    if value is None:
+        return False
+    value = int(value)
+    if value < 1_000_000:
+        return False
+    show_id, season_num, episode_num = split_synthetic_episode_id(value)
+    if show_id <= 0 or season_num < 0 or episode_num < 0:
+        return False
+    return synthetic_episode_id(show_id, season_num, episode_num) == value
+
+
 def is_synthetic_season_id(value: int | None) -> bool:
     if value is None:
         return False

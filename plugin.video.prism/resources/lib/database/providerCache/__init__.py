@@ -328,3 +328,6 @@ class ProviderCache(Database):
 
     def debrid_providers_enabed(self):
         return any(p for p in self.get_providers() if p.get("provider_type") in ["torrent", "hoster"])
+
+    def adaptive_providers_enabled(self):
+        return any(p for p in self.get_providers() if p.get("provider_type") == "adaptive")

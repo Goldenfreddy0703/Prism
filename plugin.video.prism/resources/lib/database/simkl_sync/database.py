@@ -1760,6 +1760,37 @@ class SimklSyncDatabase(Database):
                 },
             )
 
+    def _migrate_episode_bookmark_simkl_id(self, old_id: int, new_id: int) -> None:
+        """Re-key resume bookmarks when Simkl episode ids change after a re-mill."""
+        old_id = int(old_id)
+        new_id = int(new_id)
+        if old_id == new_id:
+            return
+
+        old_bookmark = self.fetchone(
+            "SELECT simkl_id FROM bookmarks WHERE simkl_id = ? AND type = 'episode'",
+            (old_id,),
+        )
+        if not old_bookmark:
+            return
+
+        new_bookmark = self.fetchone(
+            "SELECT simkl_id FROM bookmarks WHERE simkl_id = ? AND type = 'episode'",
+            (new_id,),
+        )
+        if new_bookmark:
+            # Stale milled/synthetic id bookmark; canonical Simkl id already has a row.
+            self.execute_sql(
+                "DELETE FROM bookmarks WHERE simkl_id = ? AND type = 'episode'",
+                (old_id,),
+            )
+            return
+
+        self.execute_sql(
+            "UPDATE bookmarks SET simkl_id = ? WHERE simkl_id = ? AND type = 'episode'",
+            (new_id, old_id),
+        )
+
     def insert_simkl_episodes(self, episodes):
         if not episodes:
             return
@@ -1802,10 +1833,7 @@ class SimklSyncDatabase(Database):
                 continue
             old_id = int(old_row["simkl_id"])
             if old_id != int(new_id):
-                self.execute_sql(
-                    "UPDATE bookmarks SET simkl_id = ? WHERE simkl_id = ? AND type = 'episode'",
-                    (int(new_id), old_id),
-                )
+                self._migrate_episode_bookmark_simkl_id(old_id, int(new_id))
 
         self.execute_sql(
             self.upsert_episode_query,

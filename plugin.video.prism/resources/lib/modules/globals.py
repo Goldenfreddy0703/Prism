@@ -1463,8 +1463,19 @@ class GlobalVariables:
 
     def premium_check(self):
         return bool(
-            self.PLAYLIST.getposition() > 0 or self.debrid_available() or self.local_playback_available()
+            self.PLAYLIST.getposition() > 0
+            or self.debrid_available()
+            or self.local_playback_available()
+            or self.adaptive_playback_available()
         )
+
+    def adaptive_playback_available(self):
+        try:
+            from resources.lib.database.providerCache import ProviderCache
+
+            return ProviderCache().adaptive_providers_enabled()
+        except Exception:
+            return False
 
     def local_playback_available(self):
         import xbmcvfs
