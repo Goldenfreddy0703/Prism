@@ -1004,6 +1004,7 @@ class Sources:
             'is_airing': info.get('is_airing', False),
             'no_episodes': str(info.get('episode_count', '')),
             'isanime': False,
+            'tmdb_id': ep_info.get('tmdb_id') or show_info.get('tmdb_id') or info.get('tmdb_id'),
         }
 
         if '.' in simple_info['show_title']:
@@ -1052,6 +1053,7 @@ class Sources:
             'year': str(info['info'].get('year', '')),
             'aliases': info['info'].get('aliases', []),
             'country': info['info'].get('country_origin', ''),
+            'tmdb_id': info['info'].get('tmdb_id'),
         }
 
         if '.' in simple_info['title']:
