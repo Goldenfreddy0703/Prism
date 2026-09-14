@@ -137,6 +137,83 @@ class SimklAPI:
             "app-version": version,
         }
 
+    @staticmethod
+    def is_catalog_path(url: str) -> bool:
+        """True for Cloudflare-cached detail and episode-list paths (no client_id quota)."""
+        path = (url or "").split("?")[0]
+        if not path.startswith("/"):
+            path = f"/{path}"
+        if path.startswith("/tv/episodes/") or path.startswith("/anime/episodes/"):
+            return True
+        parts = [segment for segment in path.strip("/").split("/") if segment]
+        if len(parts) != 2:
+            return False
+        catalog, segment = parts
+        browse_segments = {
+            "movies": frozenset({"genres", "premieres"}),
+            "tv": frozenset({"episodes", "airing", "genres", "best", "premieres"}),
+            "anime": frozenset({"episodes", "airing", "genres", "best", "premieres"}),
+        }
+        if catalog not in browse_segments:
+            return False
+        return segment not in browse_segments[catalog]
+
+    def _get_catalog_headers(self) -> dict:
+        g.ensure_addon()
+        version = getattr(g, "VERSION", None) or g.ADDON.getAddonInfo("version")
+        return {
+            "Content-Type": "application/json",
+            "User-Agent": f"{g.ADDON_ID}/{version}",
+        }
+
+    def get_catalog_json(self, url: str, **params):
+        """GET a catalog detail or episode-list path (client_id when configured)."""
+        timeout = params.pop("timeout", 15)
+        query = {
+            key: value
+            for key, value in params.items()
+            if key not in ("client_id", "app-name", "app-version")
+        }
+        full_url = parse.urljoin(self.ApiUrl, url)
+        headers = self._get_catalog_headers()
+        if self.client_id:
+            query.update(self._cdn_query())
+            headers = self._get_headers(authorized=False)
+        try:
+            response = self.session.get(
+                full_url,
+                params=query or None,
+                headers=headers,
+                timeout=timeout,
+            )
+        except Exception:
+            return None
+
+        if response.status_code in (401, 412) and self.client_id:
+            fallback_query = dict(query)
+            fallback_query.update(self._cdn_query())
+            try:
+                response = self.session.get(
+                    full_url,
+                    params=fallback_query or None,
+                    headers=self._get_headers(authorized=False),
+                    timeout=timeout,
+                )
+            except Exception:
+                return None
+
+        if response.status_code != 200 or not response.text:
+            if response.status_code not in (200, 404):
+                g.log(
+                    f"Simkl catalog HTTP {response.status_code} for {full_url.split('?')[0]}",
+                    "warning",
+                )
+            return None
+        try:
+            return response.json()
+        except json.JSONDecodeError:
+            return None
+
     @simkl_guard_response
     def get(self, url, authorized: bool = True, **params):
         timeout = params.pop("timeout", 15)
@@ -203,6 +280,10 @@ class SimklAPI:
     @use_cache(cache_hours=300 / 3600)
     def get_json_cached(self, url, authorized: bool = True, **params):
         return self.get_json(url, authorized=authorized, **params)
+
+    @use_cache(cache_hours=12)
+    def get_catalog_json_cached(self, url: str, **params):
+        return self.get_catalog_json(url, **params)
 
     def auth(self):
         """Device PIN OAuth flow with QR dialog."""
@@ -364,20 +445,16 @@ class SimklAPI:
     def get_tv_episodes(self, simkl_id: int, slug: str | None = None):
         from resources.lib.simkl.ids import tv_episodes_api_path
 
-        return self.get_json(
-            tv_episodes_api_path(simkl_id, slug),
-            authorized=False,
-            client_id=self.client_id,
-        )
+        return self.get_catalog_json(tv_episodes_api_path(simkl_id, slug))
 
     @use_cache(cache_hours=24)
     def get_anime_episodes(self, simkl_id: int, extended: str | None = None, slug: str | None = None):
         from resources.lib.simkl.ids import anime_episodes_api_path
 
-        params = {"client_id": self.client_id}
+        params: dict[str, str] = {}
         if extended:
             params["extended"] = extended
-        return self.get_json(anime_episodes_api_path(simkl_id, slug), authorized=False, **params)
+        return self.get_catalog_json(anime_episodes_api_path(simkl_id, slug), **params)
 
     def get_show_json(self, simkl_id: int, slug: str | None = None, **params):
         from resources.lib.simkl.ids import show_api_path

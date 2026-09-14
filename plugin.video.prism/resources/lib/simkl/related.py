@@ -7,7 +7,6 @@ from urllib.parse import urlencode
 
 import xbmc
 
-from resources.lib.indexers.simkl import SimklAPI
 from resources.lib.modules.globals import g
 from resources.lib.simkl.ids import (
     normalize_action_args,
@@ -57,25 +56,9 @@ def detail_target_from_action_args(action_args: dict[str, Any] | None) -> tuple[
 
 
 def _fetch_detail(catalog: str, simkl_id: int, *, prefer_anime: bool = False) -> dict[str, Any] | None:
-    from resources.lib.simkl.ids import anime_api_path, movie_api_path, show_api_path
+    from resources.lib.simkl.catalog_fetch import fetch_catalog_detail
 
-    api = SimklAPI()
-    params = {"client_id": api.client_id}
-    paths = []
-    if catalog == "movie":
-        paths.append(movie_api_path(simkl_id))
-    elif catalog == "anime" or prefer_anime:
-        paths.append(anime_api_path(simkl_id))
-        paths.append(show_api_path(simkl_id))
-    else:
-        paths.append(show_api_path(simkl_id))
-        paths.append(anime_api_path(simkl_id))
-
-    for path in paths:
-        data = api.get_json(path, authorized=False, **params)
-        if isinstance(data, dict) and not data.get("error"):
-            return data
-    return None
+    return fetch_catalog_detail(catalog, int(simkl_id), prefer_anime=prefer_anime)
 
 
 def _related_entry_to_sync(entry: dict[str, Any], *, relation_label: bool = False) -> dict[str, Any] | None:

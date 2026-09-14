@@ -20,6 +20,46 @@ def clear_raw_episodes_cache(show_id: int | None = None) -> None:
         _RAW_EPISODES_CACHE.pop(key, None)
 
 
+def prefetch_raw_show_episodes(
+    requests: list[dict[str, Any]],
+    *,
+    api=None,
+) -> int:
+    """Parallel episode-list GETs; primes process cache before show milling."""
+    if not requests:
+        return 0
+
+    from resources.lib.simkl.catalog_fetch import fetch_episode_lists_parallel
+
+    fetched = fetch_episode_lists_parallel(requests, api=api)
+    if not fetched:
+        return 0
+
+    slug_by_key: dict[tuple[str, int], str] = {}
+    for request in requests:
+        if not isinstance(request, dict):
+            continue
+        catalog = request.get("catalog")
+        show_id = request.get("show_id")
+        if catalog not in ("tv", "anime") or show_id is None:
+            continue
+        slug_by_key[(str(catalog), int(show_id))] = str(request.get("slug") or "")
+
+    primed = 0
+    for key, episodes in fetched.items():
+        slug = slug_by_key.get(key, "")
+        _RAW_EPISODES_CACHE[(int(key[1]), key[0], slug)] = episodes
+        primed += 1
+
+    if primed:
+        g.log(
+            f"Simkl episode prefetch: {primed}/{len(requests)} show(s), "
+            f"{sum(len(eps) for eps in fetched.values())} episode row(s)",
+            "debug",
+        )
+    return primed
+
+
 def fetch_raw_show_episodes(
     show_id: int,
     catalog: str,

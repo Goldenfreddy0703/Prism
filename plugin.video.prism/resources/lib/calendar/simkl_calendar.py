@@ -40,9 +40,6 @@ CALENDAR_MDBLIST_BATCH_SIZE = DEFAULT_BATCH_SIZE  # MDBList allows up to 200 ids
 CALENDAR_MDBLIST_SLEEP = DEFAULT_SLEEP
 CALENDAR_IMDB_BATCH_SIZE = 50
 CALENDAR_IMDB_SLEEP = 0.25
-CALENDAR_SIMKL_API_SLEEP = 0.15
-
-
 def merge_v2_calendar_rows(
     calendar: list[dict[str, Any]],
     metadata: dict[str, Any],
@@ -708,27 +705,28 @@ def _fetch_simkl_api_metadata(
     catalog: str,
     simkl_ids: list[int],
 ) -> dict[int, dict[str, Any]]:
-    """Last-resort gap-fill via Simkl API title detail."""
-    from resources.lib.simkl.related import _fetch_detail
+    """Last-resort gap-fill via Simkl API title detail (parallel catalog batch)."""
+    from resources.lib.simkl.catalog_fetch import fetch_catalog_details_parallel
 
     unique_ids = sorted({int(value) for value in simkl_ids if value})
     if not unique_ids:
         return {}
 
+    requests = [{"catalog": catalog, "simkl_id": simkl_id} for simkl_id in unique_ids]
+    try:
+        details = fetch_catalog_details_parallel(requests)
+    except Exception:
+        g.log_stacktrace()
+        details = {}
+
     out: dict[int, dict[str, Any]] = {}
-    for index, simkl_id in enumerate(unique_ids):
-        try:
-            detail = _fetch_detail(catalog, simkl_id)
-        except Exception:
-            g.log_stacktrace()
-            detail = None
+    for simkl_id in unique_ids:
+        detail = details.get((catalog, simkl_id))
         if not isinstance(detail, dict) or detail.get("error"):
             continue
         enrichment = _simkl_api_to_enrichment(detail)
         if enrichment:
             out[simkl_id] = enrichment
-        if index + 1 < len(unique_ids):
-            time_module.sleep(CALENDAR_SIMKL_API_SLEEP)
 
     g.log(
         f"Simkl calendar: Simkl API matched {len(out)}/{len(unique_ids)} "

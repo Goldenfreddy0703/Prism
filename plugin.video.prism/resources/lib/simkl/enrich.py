@@ -10,20 +10,160 @@ from resources.lib.modules.globals import g
 from resources.lib.simkl.catalog import resolve_item_catalog
 
 
-@use_cache(cache_hours=12)
-def _simkl_detail_sync_dict(simkl_id: int, catalog: str) -> dict | None:
-    g.ensure_addon()
+def _detail_json_to_sync_dict(detail: dict, catalog_hint: str) -> dict | None:
     from resources.lib.simkl.api_normalize import api_detail_to_sync_dict
-    from resources.lib.simkl.related import _fetch_detail
 
-    detail = _fetch_detail(catalog, int(simkl_id))
-    if not detail:
-        return None
-    resolved_catalog = resolve_item_catalog(detail, catalog)
+    resolved_catalog = resolve_item_catalog(detail, catalog_hint)
     sync = api_detail_to_sync_dict(detail, resolved_catalog)
     if sync:
         sync["catalog"] = resolved_catalog
     return sync
+
+
+@use_cache(cache_hours=12)
+def _simkl_detail_sync_dict(simkl_id: int, catalog: str) -> dict | None:
+    g.ensure_addon()
+    from resources.lib.simkl.catalog_fetch import fetch_catalog_detail
+
+    detail = fetch_catalog_detail(catalog, int(simkl_id))
+    if not detail:
+        return None
+    return _detail_json_to_sync_dict(detail, catalog)
+
+
+def _prefer_anime_catalog(item: dict, catalog: str) -> bool:
+    blob_info = (item.get("simkl_object") or {}).get("info") or item.get("info") or {}
+    if not isinstance(blob_info, dict):
+        blob_info = {}
+    return catalog == "anime" or _is_anime_info(blob_info)
+
+
+def _prepare_row_local(item: dict, sync_cache: dict[int, dict] | None) -> dict:
+    sid = int(item["simkl_id"])
+    working = copy.deepcopy(item)
+    cached = (sync_cache or {}).get(sid)
+    if cached:
+        working = _merge_sync_item_rows(cached, working)
+    working = _merge_discover_db_gaps(working)
+    blob_info = (working.get("simkl_object") or {}).get("info") or {}
+    if _is_anime_info(blob_info):
+        from resources.lib.simkl.field_map import ensure_anime_title_slots
+
+        ensure_anime_title_slots(blob_info)
+    return working
+
+
+def _batch_apply_catalog_details(
+    rows: list[dict],
+    *,
+    sync_cache: dict[int, dict] | None,
+    force_detail: bool = False,
+    ignore_enrich_miss: bool = False,
+) -> list[dict]:
+    """Local hydrate + CDN gap-fill, then one parallel catalog detail batch for thin rows."""
+    if not rows:
+        return []
+
+    from resources.lib.database.sync_meta_cache import SyncMetaCache
+    from resources.lib.simkl.catalog_fetch import fetch_catalog_details_parallel
+
+    meta_cache = SyncMetaCache()
+    pending: list[tuple[str, dict, dict, str, int]] = []
+    api_requests: list[dict] = []
+    api_keys: list[tuple[str, int]] = []
+
+    for item in rows:
+        if not isinstance(item, dict):
+            pending.append(("skip", item, item, "", -1))
+            continue
+        simkl_id = item.get("simkl_id")
+        catalog = item.get("catalog")
+        if simkl_id is None or catalog not in ("movie", "tv", "anime"):
+            pending.append(("skip", item, item, "", -1))
+            continue
+
+        sid = int(simkl_id)
+        working = _prepare_row_local(item, sync_cache)
+
+        if not force_detail and not simkl_detail_needed(working):
+            pending.append(("ready", item, working, catalog, sid))
+            continue
+
+        if (
+            not force_detail
+            and not ignore_enrich_miss
+            and meta_cache.is_enrich_miss(catalog, sid)
+        ):
+            pending.append(("miss", item, working, catalog, sid))
+            continue
+
+        key = (catalog, sid)
+        if key not in api_keys:
+            api_keys.append(key)
+            api_requests.append(
+                {
+                    "catalog": catalog,
+                    "simkl_id": sid,
+                    "prefer_anime": _prefer_anime_catalog(working, catalog),
+                }
+            )
+        pending.append(("api", item, working, catalog, sid))
+
+    miss_count = sum(1 for kind, *_ in pending if kind == "miss")
+    ready_count = sum(1 for kind, *_ in pending if kind == "ready")
+    api_count = len(api_requests)
+    g.log(
+        f"Simkl catalog detail prep: api={api_count} miss={miss_count} ready={ready_count} "
+        f"(force_detail={force_detail})",
+        "info",
+    )
+
+    catalog_api = None
+    if api_requests:
+        from resources.lib.indexers.simkl import SimklAPI
+
+        catalog_api = SimklAPI()
+    details = (
+        fetch_catalog_details_parallel(api_requests, api=catalog_api)
+        if api_requests
+        else {}
+    )
+    sync_by_key: dict[tuple[str, int], dict] = {}
+    for key, detail in details.items():
+        sync = _detail_json_to_sync_dict(detail, key[0])
+        if sync:
+            meta_cache.clear_enrich_miss(key[0], key[1])
+            sync_by_key[key] = sync
+        else:
+            meta_cache.mark_enrich_miss(key[0], key[1])
+
+    for key in api_keys:
+        if key not in details:
+            meta_cache.mark_enrich_miss(key[0], key[1])
+
+    if api_requests:
+        g.log(
+            f"Simkl catalog detail batch: {len(details)}/{len(api_requests)} fetched",
+            "debug",
+        )
+
+    enriched: list[dict] = []
+    for kind, item, working, catalog, sid in pending:
+        if kind == "skip":
+            if isinstance(item, dict):
+                enriched.append(item)
+            continue
+        if kind in ("ready", "miss"):
+            enriched.append(_apply_overlay_fields(item, working))
+            continue
+        enriched_row = sync_by_key.get((catalog, sid))
+        if enriched_row:
+            merged = _merge_sync_item_rows(working, copy.deepcopy(enriched_row))
+            merged = _merge_discover_db_gaps(merged)
+            enriched.append(_apply_overlay_fields(item, merged))
+        else:
+            enriched.append(_apply_overlay_fields(item, working))
+    return enriched
 
 
 def _sync_dict_from_db_row(row: dict, catalog: str) -> dict | None:
@@ -384,55 +524,6 @@ def hydrate_sync_items_local(items: list[dict]) -> list[dict]:
     return list(get_shared_executor().map(hydrator, rows))
 
 
-def _enrich_sync_item(
-    item: dict,
-    *,
-    sync_cache: dict[int, dict] | None = None,
-) -> dict:
-    """Hydrate from sync DB, gap-fill from discover CDN, then API only when still thin."""
-    if not isinstance(item, dict):
-        return item
-
-    simkl_id = item.get("simkl_id")
-    catalog = item.get("catalog")
-    if simkl_id is None or catalog not in ("movie", "tv", "anime"):
-        return item
-
-    sid = int(simkl_id)
-    working = copy.deepcopy(item)
-    cached = (sync_cache or {}).get(sid)
-    if cached:
-        working = _merge_sync_item_rows(cached, working)
-    working = _merge_discover_db_gaps(working)
-
-    blob_info = (working.get("simkl_object") or {}).get("info") or {}
-    if _is_anime_info(blob_info):
-        from resources.lib.simkl.field_map import ensure_anime_title_slots
-
-        ensure_anime_title_slots(blob_info)
-    if not simkl_detail_needed(working):
-        if cached:
-            g.log(f"Simkl enrich skipped API (sync cache): {sid}", "debug")
-        return _apply_overlay_fields(item, working)
-
-    from resources.lib.database.sync_meta_cache import SyncMetaCache
-
-    meta_cache = SyncMetaCache()
-    if meta_cache.is_enrich_miss(catalog, sid):
-        return _apply_overlay_fields(item, working)
-
-    enriched = _simkl_detail_sync_dict(sid, catalog)
-    if not enriched:
-        meta_cache.mark_enrich_miss(catalog, sid)
-        return _apply_overlay_fields(item, working)
-
-    meta_cache.clear_enrich_miss(catalog, sid)
-
-    enriched = copy.deepcopy(enriched)
-    enriched = _merge_discover_db_gaps(enriched)
-    return _apply_overlay_fields(item, enriched)
-
-
 def enrich_sync_items(
     items: list[dict],
     *,
@@ -443,28 +534,13 @@ def enrich_sync_items(
     if not items:
         return []
 
+    g.ensure_addon()
     rows = [item for item in items if isinstance(item, dict)]
     if not rows:
         return []
 
     sync_cache = _batch_load_sync_cache(rows)
-    enricher = partial(_enrich_sync_item, sync_cache=sync_cache)
-
-    def _enrich_row(row: dict) -> dict:
-        g.ensure_addon()
-        return enricher(row)
-
-    use_parallel = parallel
-    if use_parallel is None:
-        use_parallel = len(rows) > 1
-
-    if not use_parallel or len(rows) == 1:
-        enriched = [_enrich_row(row) for row in rows]
-    else:
-        from resources.lib.common.thread_pool import get_shared_executor
-
-        enriched = list(get_shared_executor().map(_enrich_row, rows))
-
+    enriched = _batch_apply_catalog_details(rows, sync_cache=sync_cache, force_detail=False)
     enriched = [row for row in enriched if isinstance(row, dict)]
     if enriched:
         mode = "fast" if fast else "detail"
@@ -485,56 +561,27 @@ def persist_enriched_items(catalog: str, items: list[dict]) -> None:
     publish_sync_rows_to_paint_store(catalog, items)
 
 
-def _fetch_simkl_detail(item: dict, *, force: bool = False) -> dict:
-    """Blocking Simkl detail fetch — GET /movies|tv|anime/{id} for each row when forced or thin."""
-    if not isinstance(item, dict):
-        return item
-    if not force and not simkl_detail_needed(item):
-        return item
-
-    simkl_id = item.get("simkl_id")
-    catalog = item.get("catalog")
-    if simkl_id is None or catalog not in ("movie", "tv", "anime"):
-        return item
-
-    from resources.lib.simkl.api_normalize import api_detail_to_sync_dict
-    from resources.lib.simkl.catalog import resolve_item_catalog
-    from resources.lib.simkl.related import _fetch_detail
-
-    sid = int(simkl_id)
-    blob_info = (item.get("simkl_object") or {}).get("info") or item.get("info") or {}
-    prefer_anime = catalog == "anime" or _is_anime_info(blob_info if isinstance(blob_info, dict) else {})
-    detail = _fetch_detail(catalog, sid, prefer_anime=prefer_anime)
-    if not detail:
-        g.log(f"Simkl detail: API miss {sid} ({catalog})", "debug")
-        return item
-
-    resolved_catalog = resolve_item_catalog(detail, catalog)
-    enriched = api_detail_to_sync_dict(detail, resolved_catalog)
-    if not enriched:
-        return item
-
-    enriched = copy.deepcopy(enriched)
-    enriched["catalog"] = resolved_catalog
-    merged = _merge_sync_item_rows(item, enriched)
-    return _apply_overlay_fields(item, merged)
-
-
-def _enrich_items(items: list[dict], *, parallel: bool, force_detail: bool = False) -> list[dict]:
+def _enrich_items(
+    items: list[dict],
+    *,
+    parallel: bool,
+    force_detail: bool = False,
+    ignore_enrich_miss: bool = False,
+) -> list[dict]:
     if not items:
         return []
 
-    def _enrich_row(row: dict) -> dict:
-        g.ensure_addon()
-        return _fetch_simkl_detail(row, force=force_detail)
-
-    if not parallel or len(items) == 1:
-        return [_enrich_row(row) for row in items]
-
-    from resources.lib.common.thread_pool import get_shared_executor
-
-    with get_shared_executor() as executor:
-        return list(executor.map(_enrich_row, items))
+    g.ensure_addon()
+    rows = [row for row in items if isinstance(row, dict)]
+    if not rows:
+        return []
+    sync_cache = _batch_load_sync_cache(rows)
+    return _batch_apply_catalog_details(
+        rows,
+        sync_cache=sync_cache,
+        force_detail=force_detail,
+        ignore_enrich_miss=ignore_enrich_miss,
+    )
 
 
 def enrich_sync_items_persisted(
@@ -543,6 +590,7 @@ def enrich_sync_items_persisted(
     *,
     parallel: bool | None = None,
     force_detail: bool = False,
+    ignore_enrich_miss: bool = False,
 ) -> list[dict]:
     """Fetch Simkl detail rows, persist to sync DB + catalog_items + display_meta."""
     if not items:
@@ -564,7 +612,12 @@ def enrich_sync_items_persisted(
 
     enriched_by_id: dict[int, dict] = {}
     if targets:
-        for row in _enrich_items(targets, parallel=parallel, force_detail=force_detail):
+        for row in _enrich_items(
+            targets,
+            parallel=parallel,
+            force_detail=force_detail,
+            ignore_enrich_miss=ignore_enrich_miss,
+        ):
             if isinstance(row, dict) and row.get("simkl_id") is not None:
                 enriched_by_id[int(row["simkl_id"])] = row
 
@@ -602,7 +655,12 @@ def enrich_page_for_paint(
     force_detail: bool = False,
 ) -> list[dict]:
     """Blocking Simkl detail fetch for the visible list page."""
-    return enrich_sync_items_persisted(catalog, page_sync, force_detail=force_detail)
+    return enrich_sync_items_persisted(
+        catalog,
+        page_sync,
+        force_detail=force_detail,
+        ignore_enrich_miss=True,
+    )
 
 
 def prepare_page_sync_for_paint(

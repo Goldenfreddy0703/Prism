@@ -155,11 +155,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
     def _fetch_movie_summary(self, simkl_id):
         from resources.lib.simkl.ids import movie_api_path
 
-        return self.simkl_api.get_json_cached(
-            movie_api_path(int(simkl_id)),
-            authorized=False,
-            client_id=self.simkl_api.client_id,
-        )
+        return self.simkl_api.get_catalog_json_cached(movie_api_path(int(simkl_id)))
 
     @guard_against_none(list)
     def get_movie(self, simkl_id):

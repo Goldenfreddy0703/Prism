@@ -223,6 +223,31 @@ def resolve_warm_targets(
     return targets
 
 
+def _episode_prefetch_requests(
+    db: "SimklSyncDatabase",
+    show_rows: list[dict],
+) -> list[dict[str, str | int | None]]:
+    requests: list[dict[str, str | int | None]] = []
+    for show_row in show_rows:
+        if not isinstance(show_row, dict):
+            continue
+        show_id = show_row.get("simkl_id")
+        if show_id is None:
+            continue
+        sid = int(show_id)
+        catalog = show_row.get("catalog") or db._infer_show_catalog(sid)
+        if catalog not in ("tv", "anime"):
+            continue
+        requests.append(
+            {
+                "catalog": str(catalog),
+                "show_id": sid,
+                "slug": db._meta_slug(sid, "shows"),
+            }
+        )
+    return requests
+
+
 def _show_title(show_row: dict) -> str:
     from resources.lib.modules.metadataHandler import MetadataHandler
 
@@ -254,9 +279,22 @@ def warm_episode_catalogs(
     total = len(targets)
     warmed = 0
     pull_started = time.time()
+    prefetch_ms = 0.0
+    from resources.lib.common.thread_pool import prism_plugin_no_threads
+    from resources.lib.database.simkl_sync.milling import prefetch_raw_show_episodes
+
+    prefetch_api = db.simkl_api if prism_plugin_no_threads() else None
     for start in range(0, total, EPISODE_WARM_BATCH_SIZE):
         batch = targets[start : start + EPISODE_WARM_BATCH_SIZE]
         show_rows = [row for row, _ in batch]
+        prefetch_requests = _episode_prefetch_requests(db, show_rows)
+        if prefetch_requests:
+            batch_prefetch_started = time.time()
+            prefetch_raw_show_episodes(
+                prefetch_requests,
+                api=prefetch_api,
+            )
+            prefetch_ms += (time.time() - batch_prefetch_started) * 1000
         db.force_mill_shows(
             show_rows,
             mill_episodes=True,
@@ -271,7 +309,8 @@ def warm_episode_catalogs(
 
     pull_ms = (time.time() - pull_started) * 1000
     g.log(
-        f"Simkl episode catalog warm complete: pulled={warmed} pull_ms={pull_ms:.0f}",
+        f"Simkl episode catalog warm complete: pulled={warmed} "
+        f"prefetch_ms={prefetch_ms:.0f} pull_ms={pull_ms:.0f}",
         "info",
     )
     return warmed

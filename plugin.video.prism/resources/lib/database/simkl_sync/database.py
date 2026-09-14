@@ -2507,11 +2507,7 @@ class SimklSyncDatabase(Database):
             item = {}
         if simkl_object(item) is None or simkl_object(item) == {}:
             catalog = {"shows": "tv", "movies": "movie"}.get(media_type, media_type)
-            new_object = self.simkl_api.get_json(
-                api_url,
-                authorized=False,
-                client_id=self.simkl_api.client_id,
-            )
+            new_object = self.simkl_api.get_catalog_json(api_url)
             if not new_object:
                 g.log(f"Simkl meta fetch failed: {api_url}", "warning")
                 return item
