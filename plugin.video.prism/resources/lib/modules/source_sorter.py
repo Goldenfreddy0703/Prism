@@ -2,10 +2,24 @@ from difflib import SequenceMatcher
 
 import xbmcgui
 
-from resources.lib.common.source_utils import get_accepted_resolution_set
+from resources.lib.common.source_utils import (
+    SORT_NONE_LABEL,
+    SORT_TAG_CATEGORIES,
+    get_accepted_resolution_set,
+    sort_tag_sub_options,
+)
 from resources.lib.common.tools import FixedSortPositionObject
 from resources.lib.modules.catalog_profiles import ensure_migrated, resolve_catalog_from_item_information
 from resources.lib.modules.globals import g
+
+
+TAG_SORT_METHODS = {
+    5: "videocodecsort",
+    6: "hdrcodecsort",
+    7: "audiocodecsort",
+    8: "miscsort",
+    9: "audiochannelssort",
+}
 
 
 class SourceSorter:
@@ -145,18 +159,15 @@ class SourceSorter:
         Get Prism settings for sort methods
         """
         sort_methods = []
+        self._tag_sort_priorities = {}
         sort_method_settings = {
             0: None,
             1: self._get_quality_sort_key,
             2: self._get_type_sort_key,
             3: self._get_debrid_priority_key,
             4: self._get_size_sort_key,
-            5: self._get_low_cam_sort_key,
-            6: self._get_hevc_sort_key,
-            7: self._get_hdr_sort_key,
-            8: self._get_audio_channels_sort_key,
-            9: self._get_audio_lang_sort_key,
-            10: self._get_subtitle_sort_key,
+            10: self._get_audio_lang_sort_key,
+            11: self._get_subtitle_sort_key,
         }
 
         if (
@@ -175,22 +186,31 @@ class SourceSorter:
             sm = g.get_int_setting(f"general.sortmethod.{self.catalog}.{i}")
             reverse = g.get_bool_setting(f"general.sortmethod.{self.catalog}.{i}.reverse")
 
-            if sort_method_settings[sm] is None:
+            if sm == 0:
                 break
 
-            if sort_method_settings[sm] == self._get_type_sort_key:
+            if sm in TAG_SORT_METHODS:
+                category_key = TAG_SORT_METHODS[sm]
+                self._load_tag_sort_priorities(category_key)
+                handler = lambda source, cat=category_key: self._get_tag_priority_sort_key(source, cat)
+                sort_methods.append((handler, reverse))
+                continue
+
+            handler = sort_method_settings.get(sm)
+            if handler is None:
+                break
+
+            if handler == self._get_type_sort_key:
                 self._get_type_sort_order()
-            if sort_method_settings[sm] == self._get_debrid_priority_key:
+            if handler == self._get_debrid_priority_key:
                 self._get_debrid_sort_order()
                 reverse = False
-            if sort_method_settings[sm] == self._get_hdr_sort_key:
-                self._get_hdr_sort_order()
-            if sort_method_settings[sm] == self._get_audio_lang_sort_key:
+            if handler == self._get_audio_lang_sort_key:
                 self._get_audio_sort_order()
-            if sort_method_settings[sm] == self._get_subtitle_sort_key:
+            if handler == self._get_subtitle_sort_key:
                 self._get_subtitle_sort_order()
 
-            sort_methods.append((sort_method_settings[sm], reverse))
+            sort_methods.append((handler, reverse))
 
         self.sort_methods = sort_methods
 
@@ -215,23 +235,26 @@ class SourceSorter:
             type_priorities[tp] = -i
         self.type_priorities = type_priorities
 
-    def _get_hdr_sort_order(self):
-        """
-        Get prism settings for type sort priority
-        """
-        hdr_priorities = {}
-        hdr_priority_settings = {
-            0: None,
-            1: "DV",
-            2: "HDR",
+    def _load_tag_sort_priorities(self, category_key):
+        struct_key, max_slots = SORT_TAG_CATEGORIES[category_key]
+        options = sort_tag_sub_options(struct_key)
+        tag_by_index = {
+            index: (None if option == SORT_NONE_LABEL else option)
+            for index, option in enumerate(options)
         }
-
-        for i in range(1, 3):
-            hdrp = hdr_priority_settings.get(g.get_int_setting(f"general.hdrsort.{self.catalog}.{i}"))
-            if hdrp is None:
+        priorities = {}
+        for level in range(1, max_slots + 1):
+            idx = g.get_int_setting(f"general.{category_key}.{self.catalog}.{level}")
+            tag = tag_by_index.get(idx)
+            if tag is None:
                 break
-            hdr_priorities[hdrp] = -i
-        self.hdr_priorities = hdr_priorities
+            priorities[tag] = -level
+        self._tag_sort_priorities[category_key] = priorities
+
+    def _get_tag_priority_sort_key(self, source, category_key):
+        priorities = self._tag_sort_priorities.get(category_key, {})
+        present = source.get("info", set()) & priorities.keys()
+        return max((priorities[tag] for tag in present), default=-99)
 
     def _get_debrid_sort_order(self):
         """
@@ -324,25 +347,6 @@ class SourceSorter:
             size = 0
         return size
 
-    @staticmethod
-    def _get_low_cam_sort_key(source):
-        return "CAM" not in source.get("info", {})
-
-    @staticmethod
-    def _get_hevc_sort_key(source):
-        return "HEVC" in source.get("info", {})
-
-    def _get_hdr_sort_key(self, source):
-        hdrp = -99
-        dvp = -99
-
-        if "HDR" in source.get("info", {}):
-            hdrp = self.hdr_priorities.get("HDR", -99)
-        if "DV" in source.get("info", {}):
-            dvp = self.hdr_priorities.get("DV", -99)
-
-        return max(hdrp, dvp)
-
     def _load_last_release_name(self):
         from resources.lib.simkl.ids import release_title_cache_key
 
@@ -364,13 +368,6 @@ class SourceSorter:
             return 0
         ratio = sm.ratio()
         return 0 if ratio < 0.85 else ratio
-
-    @staticmethod
-    def _get_audio_channels_sort_key(source):
-        audio_channels = None
-        if info := source['info']:
-            audio_channels = {"2.0", "5.1", "7.1"} & info
-        return float(max(audio_channels)) if audio_channels else 0
 
     def _get_audio_lang_sort_key(self, source):
         present = {"MULTI-AUDIO", "DUAL-AUDIO", "SUB", "DUB"} & source.get("info", set())

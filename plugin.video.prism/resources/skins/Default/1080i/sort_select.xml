@@ -1723,6 +1723,7 @@
 				<control type="grouplist" id="9000">
 					<top>25</top>
 					<onleft>1000</onleft>
+					<ondown>9301</ondown>
 					<itemgap>10</itemgap>
 
 					<!-- Movies -->
@@ -1791,6 +1792,8 @@
 						<label>$ADDON[plugin.video.prism 30835]</label>
 						<align>right</align>
 						<textcolor>FFFFFFFF</textcolor>
+						<onleft>1000</onleft>
+						<ondown>9001</ondown>
 					</control>
 
 					<!-- Close -->
@@ -1802,6 +1805,9 @@
 						<label>$ADDON[plugin.video.prism 30459]</label>
 						<align>right</align>
 						<textcolor>FFFFFFFF</textcolor>
+						<onleft>1000</onleft>
+						<onup>9204</onup>
+						<ondown>9301</ondown>
 					</control>
 				</control>
 
@@ -1833,6 +1839,51 @@
 					<colordiffuse>$INFO[Window().Property(settings.color)]</colordiffuse>
 					<visible>String.IsEqual(Window().Property(profile.catalog),anime)</visible>
 				</control>
+			</control>
+		</control>
+
+		<!-- Sort help -->
+		<control type="group">
+			<animation effect="slide" start="600,0" time="350" tween="cubic" easing="in">WindowOpen</animation>
+			<animation effect="slide" end="600,0" time="350" tween="cubic" easing="in">WindowClose</animation>
+			<right>20</right>
+			<top>650</top>
+			<width>500</width>
+			<height>240</height>
+
+			<control type="image">
+				<width>500</width>
+				<height>330</height>
+				<texture>white.png</texture>
+				<colordiffuse>99362e33</colordiffuse>
+			</control>
+
+			<control type="scrollbar" id="9301">
+				<left>12</left>
+				<top>16</top>
+				<width>12</width>
+				<height>300</height>
+				<onup>9001</onup>
+				<ondown>9001</ondown>
+				<onleft>1000</onleft>
+				<onright>9001</onright>
+				<orientation>vertical</orientation>
+				<showonepage>false</showonepage>
+				<texturesliderbackground colordiffuse="66362e33">white.png</texturesliderbackground>
+				<texturesliderbar colordiffuse="66FFFFFF">white.png</texturesliderbar>
+				<texturesliderbarfocus colordiffuse="$INFO[Window().Property(settings.color)]">white.png</texturesliderbarfocus>
+			</control>
+
+			<control type="textbox" id="9300">
+				<left>36</left>
+				<top>16</top>
+				<width>444</width>
+				<height>300</height>
+				<font>font10</font>
+				<textcolor>CCFFFFFF</textcolor>
+				<align>left</align>
+				<pagecontrol>9301</pagecontrol>
+				<label>$ADDON[plugin.video.prism 31088]</label>
 			</control>
 		</control>
 	</controls>
