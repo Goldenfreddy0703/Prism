@@ -120,6 +120,62 @@ INFO_STRUCT = {
     },
 }
 
+SORT_NONE_LABEL = 30513
+
+# Sort category key -> (INFO_STRUCT key, max sub-priority slots).
+SORT_TAG_CATEGORIES = {
+    "videocodecsort": ("videocodec", 4),
+    "hdrcodecsort": ("hdrcodec", 3),
+    "audiocodecsort": ("audiocodec", 4),
+    "miscsort": ("misc", 4),
+    "audiochannelssort": ("audiochannels", 3),
+}
+
+SORT_TAG_CATEGORY_LABELS = {
+    "videocodecsort": 30619,
+    "hdrcodecsort": 30620,
+    "audiocodecsort": 30621,
+    "miscsort": 30608,
+    "audiochannelssort": 30575,
+}
+
+SORT_TAG_EXCLUDE = {
+    "hdrcodec": frozenset({"SDR"}),
+    "misc": frozenset({"CAM"}),
+}
+
+SORT_TAG_ORDER = {
+    "audiochannels": ("7.1", "5.1", "2.0"),
+    "hdrcodec": ("DV", "HDR", "HYBRID"),
+}
+
+
+def sort_tag_sub_options(struct_key):
+    """Build sort sub-option list: None label id, then tag names."""
+    tags = INFO_STRUCT[struct_key]
+    exclude = SORT_TAG_EXCLUDE.get(struct_key, frozenset())
+    order = SORT_TAG_ORDER.get(struct_key)
+    if order:
+        ordered = [tag for tag in order if tag in tags and tag not in exclude]
+    else:
+        ordered = sorted(tag for tag in tags if tag not in exclude)
+    return [SORT_NONE_LABEL] + ordered
+
+
+def sort_option_label(option):
+    if isinstance(option, int):
+        return g.get_language_string(option)
+    return str(option)
+
+
+def tag_at_sort_index(struct_key, index):
+    """Map stored sub-sort index to tag name, or None."""
+    options = sort_tag_sub_options(struct_key)
+    if index < 0 or index >= len(options):
+        return None
+    option = options[index]
+    return None if option == SORT_NONE_LABEL else option
+
 
 def info_set_to_dict(info_set):
     """

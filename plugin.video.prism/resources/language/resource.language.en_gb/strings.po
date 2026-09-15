@@ -3448,6 +3448,8 @@ msgstr "Performance"
 
 #: /resources/settings.xml:141
 #: /resources/skins/Default/1080i/filter_select.xml:749
+#: /resources/settings.xml
+#: /resources/lib/gui/windows/sort_select.py
 msgctxt "#30608"
 msgid "Miscellaneous"
 msgstr "Miscellaneous"
@@ -3503,16 +3505,22 @@ msgid "Filter Configuration"
 msgstr "Filter Configuration"
 
 #: /resources/skins/Default/1080i/filter_select.xml:71
+#: /resources/settings.xml
+#: /resources/lib/gui/windows/sort_select.py
 msgctxt "#30619"
 msgid "Video Codecs"
 msgstr "Video Codecs"
 
 #: /resources/skins/Default/1080i/filter_select.xml:240
+#: /resources/settings.xml
+#: /resources/lib/gui/windows/sort_select.py
 msgctxt "#30620"
 msgid "HDR Codecs"
 msgstr "HDR Codecs"
 
 #: /resources/skins/Default/1080i/filter_select.xml:409
+#: /resources/settings.xml
+#: /resources/lib/gui/windows/sort_select.py
 msgctxt "#30621"
 msgid "Audio Codecs"
 msgstr "Audio Codecs"
@@ -5614,3 +5622,18 @@ msgstr "When enabled, Prism syncs Kodi's native Mark as Watched menu on Prism li
 msgctxt "#31087"
 msgid "Starting Prism"
 msgstr "Starting Prism"
+
+#: /resources/skins/Default/1080i/sort_select.xml
+msgctxt "#31088"
+msgid ""
+"[B]How sorting works[/B][CR]"
+"Rules run top to bottom — higher rows beat lower rows.[CR][CR]"
+"[B]Automatic:[/B] Resolution and Size sort on their own. Use the arrow button to reverse direction.[CR][CR]"
+"[B]Tag-based:[/B] HDR Codecs, Video Codecs, Audio Codecs, and similar rows only work when you pick tags after the arrow (e.g. DV, HEVC, Dual-Audio).[CR][CR]"
+"[B]None does not mean \"all\":[/B] HDR Codecs → None will NOT sort every HDR type (DV, HDR, HYBRID). None means that rule is turned off. Click None and choose the tags you want to prefer."
+msgstr ""
+"[B]How sorting works[/B][CR]"
+"Rules run top to bottom — higher rows beat lower rows.[CR][CR]"
+"[B]Automatic:[/B] Resolution and Size sort on their own. Use the arrow button to reverse direction.[CR][CR]"
+"[B]Tag-based:[/B] HDR Codecs, Video Codecs, Audio Codecs, and similar rows only work when you pick tags after the arrow (e.g. DV, HEVC, Dual-Audio).[CR][CR]"
+"[B]None does not mean \"all\":[/B] HDR Codecs → None will NOT sort every HDR type (DV, HDR, HYBRID). None means that rule is turned off. Click None and choose the tags you want to prefer."

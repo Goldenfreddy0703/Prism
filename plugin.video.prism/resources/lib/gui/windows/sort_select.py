@@ -1,37 +1,55 @@
+from resources.lib.common.source_utils import (
+    SORT_TAG_CATEGORIES,
+    SORT_TAG_CATEGORY_LABELS,
+    sort_option_label,
+    sort_tag_sub_options,
+)
 from resources.lib.gui.windows.base_window import BaseWindow
 from resources.lib.modules import catalog_profiles
 from resources.lib.modules.globals import g
 
-SORT_OPTIONS = {
-    "sortmethod": [30513, 30237, 30252, 30570, 30251, 30571, 30572, 30573, 30575, 30840, 30841],
-    # None, Resolution, Source Type, Debrid Provider, Size, Low Cam Sort, HEVC, DV/HDR, Audio Channels, Audio, Subtitles
-    "none": [],
-    "resolution": [],
-    "sourcetypesort": [30581, 30249, 30470, 30057, 30058, 30631],
-    # Other, Cloud, Adaptive, Torrents, Hosters, Direct
-    "debridsort": [30513, 30134, 30135, 30333, 30718, 31027],
-    # None, Premiumize, Real-Debrid, AllDebrid, TorBox, Offcloud
-    "size": [],
-    "cam": [],
-    "hevc": [],
-    "hdrsort": [30513, 30590, 30574],
-    # None, DV, HDR
-    "audiochannels": [],
-    "audiosort": [30513, 30842, 30843, 30844, 30845],
-    # None, Multi-Audio, Dual-Audio, Sub, Dub
-    "subtitlesort": [30513, 30846],
-    # None, Multi-Sub
-}
+
+def _build_sort_options():
+    options = {
+        "sortmethod": [
+            30513,
+            30237,
+            30252,
+            30570,
+            30251,
+            SORT_TAG_CATEGORY_LABELS["videocodecsort"],
+            SORT_TAG_CATEGORY_LABELS["hdrcodecsort"],
+            SORT_TAG_CATEGORY_LABELS["audiocodecsort"],
+            SORT_TAG_CATEGORY_LABELS["miscsort"],
+            SORT_TAG_CATEGORY_LABELS["audiochannelssort"],
+            30840,
+            30841,
+        ],
+        "none": [],
+        "resolution": [],
+        "sourcetypesort": [30581, 30249, 30470, 30057, 30058, 30631],
+        "debridsort": [30513, 30134, 30135, 30333, 30718, 31027],
+        "size": [],
+        "audiosort": [30513, 30842, 30843, 30844, 30845],
+        "subtitlesort": [30513, 30846],
+    }
+    for category_key, (struct_key, _) in SORT_TAG_CATEGORIES.items():
+        options[category_key] = sort_tag_sub_options(struct_key)
+    return options
+
+
+SORT_OPTIONS = _build_sort_options()
 SORT_METHODS = [
     "none",
     "resolution",
     "sourcetypesort",
     "debridsort",
     "size",
-    "cam",
-    "hevc",
-    "hdrsort",
-    "audiochannels",
+    "videocodecsort",
+    "hdrcodecsort",
+    "audiocodecsort",
+    "miscsort",
+    "audiochannelssort",
     "audiosort",
     "subtitlesort",
 ]
@@ -110,7 +128,7 @@ class SortSelect(BaseWindow):
                 lang_code = SORT_OPTIONS['sortmethod'][self.sort_options[sort_method]]
                 self.setProperty(
                     f'general.sortmethod.{level}.label.{idx}',
-                    str(g.get_language_string(lang_code)),
+                    sort_option_label(lang_code),
                 )
                 if lang_code == 30513:
                     self.max_level = level
@@ -122,7 +140,7 @@ class SortSelect(BaseWindow):
                 lang_code = options[self.sort_options[sub_setting]]
                 self.setProperty(
                     f'general.sortmethod.{level}.label.{idx}',
-                    str(g.get_language_string(lang_code)),
+                    sort_option_label(lang_code),
                 )
 
             if lang_code in [30513, 30581] or loops == 1 or idx == loops - 1:
