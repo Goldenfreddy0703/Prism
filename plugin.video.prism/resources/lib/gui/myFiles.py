@@ -70,6 +70,16 @@ class Menus:
     def my_files_play(self, args):
         self.providers[args['debrid_provider']][1]().play_item(args)
 
+    def my_files_local_action(self, args):
+        from resources.lib.gui.my_files_local_ops import dispatch_local_action
+
+        try:
+            dispatch_local_action(args)
+        finally:
+            # RunPlugin invocations (handle -1) must end the directory cleanly or Back
+            # can jump to the addon home instead of the previous folder.
+            g.cancel_directory()
+
 
 class BaseDebridWalker:
     provider = ''
@@ -471,9 +481,40 @@ class OffCloudWalker(BaseDebridWalker):
 class BaseLocalPathWalker(BaseDebridWalker):
     setting_id = ''
     missing_path_string_id = 30446
+    _current_browse_path = ''
 
     def _root_folder(self):
         return (g.get_setting(self.setting_id) or '').strip()
+
+    def _format_items(self, items):
+        from resources.lib.gui.my_files_local_ops import build_context_menu
+
+        is_downloads = self.provider == 'local_downloads'
+        browse_path = self._current_browse_path
+        for i in items:
+            i.update({'debrid_provider': self.provider})
+            if self._is_folder(i):
+                name = i['name']
+                is_playable = False
+                is_folder = True
+                action = 'myFilesFolder'
+            else:
+                name = f"{i['name']}  ({tools.bytes_size_display(i['size'])})" if i.get("size") else i['name']
+                is_folder = False
+                is_playable = True
+                action = 'myFilesPlay'
+
+            cm = build_context_menu(i, browse_path, is_downloads=is_downloads)
+
+            g.add_directory_item(
+                name,
+                action=action,
+                is_playable=is_playable,
+                is_folder=is_folder,
+                action_args=tools.construct_action_args(i),
+                menu_item=g.create_icon_dict(self.provider, g.ICONS_PATH),
+                cm=cm,
+            )
 
     def _get_folder_list(self, path):
         try:
@@ -504,13 +545,16 @@ class BaseLocalPathWalker(BaseDebridWalker):
         if not root or not xbmcvfs.exists(root):
             g.notification(g.ADDON_NAME, g.get_language_string(self.missing_path_string_id))
             return
+        self._current_browse_path = root
         self._format_items(self._get_folder_list(root))
 
     def _is_folder(self, list_item):
         return list_item['path'].endswith(('\\', '/'))
 
     def get_folder(self, list_item):
-        self._format_items(self._get_folder_list(list_item['path']))
+        folder_path = list_item['path']
+        self._current_browse_path = folder_path
+        self._format_items(self._get_folder_list(folder_path))
 
     def resolve_link(self, list_item):
         return list_item['path']

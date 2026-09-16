@@ -144,16 +144,151 @@ def _normalize_path(path):
     return os.path.normpath(tools.validate_path(path))
 
 
-def _move_file(source, dest):
+def move_vfs_path(source, dest):
     if xbmcvfs.rename(source, dest):
         return True
-    g.log(f'Auto-move: rename failed, trying copy {source} -> {dest}', 'debug')
+    g.log(f'VFS move: rename failed, trying copy {source} -> {dest}', 'debug')
     if xbmcvfs.copy(source, dest):
         if xbmcvfs.delete(source):
             return True
-        g.log(f'Auto-move: copied but failed to delete source: {source}', 'warning')
+        g.log(f'VFS move: copied but failed to delete source: {source}', 'warning')
         return True
     return False
+
+
+def _move_file(source, dest):
+    return move_vfs_path(source, dest)
+
+
+def _is_vfs_folder(path):
+    if not path:
+        return False
+    if str(path).endswith(('/', '\\')):
+        return True
+    trimmed = str(path).rstrip('/\\')
+    normalized = _normalize_path(trimmed)
+    dir_path = tools.ensure_path_is_dir(trimmed)
+    exists_as_file = xbmcvfs.exists(normalized)
+    exists_as_dir = xbmcvfs.exists(dir_path)
+    # ensure_path_is_dir("file.mkv") -> "file.mkv\\"; only treat as folder when Kodi
+    # recognizes the directory form (plain exists alone is not enough).
+    if exists_as_file and not exists_as_dir:
+        return False
+    if exists_as_dir:
+        return True
+    try:
+        xbmcvfs.listdir(dir_path)
+        return True
+    except OSError:
+        return False
+
+
+def _vfs_exists(path, is_folder=None):
+    """xbmcvfs.exists() is unreliable for folders unless the path ends with a separator."""
+    if not path:
+        return False
+    if is_folder is None:
+        is_folder = _is_vfs_folder(path)
+    trimmed = str(path).rstrip('/\\')
+    if is_folder:
+        return xbmcvfs.exists(tools.ensure_path_is_dir(trimmed))
+    return xbmcvfs.exists(_normalize_path(trimmed))
+
+
+def _relative_under_download_root(source_path, download_root):
+    source_path = _normalize_path(str(source_path).rstrip('/\\'))
+    download_root = _normalize_path(download_root.rstrip('/\\'))
+    try:
+        relative = os.path.relpath(source_path, download_root)
+    except ValueError:
+        return None
+    if relative.startswith('..') or os.path.isabs(relative):
+        return None
+    return relative
+
+
+def _join_vfs_path(base, name):
+    if base.endswith(('/', '\\')):
+        return f"{base}{name}"
+    if '/' in base:
+        return f"{base}/{name}"
+    return f"{base}\\{name}"
+
+
+def _move_vfs_tree(source, dest):
+    """Move a folder tree into local.location, preserving structure."""
+    source_norm = _normalize_path(str(source).rstrip('/\\'))
+    dest_norm = _normalize_path(str(dest).rstrip('/\\'))
+    source_dir = tools.ensure_path_is_dir(source_norm)
+    if not _vfs_exists(source_norm, is_folder=True):
+        return False
+
+    dest_exists = _vfs_exists(dest_norm, is_folder=True)
+    if not dest_exists:
+        if move_vfs_path(source_norm, dest_norm):
+            return True
+        if not xbmcvfs.mkdirs(tools.ensure_path_is_dir(dest_norm)):
+            return False
+
+    try:
+        dirs, files = xbmcvfs.listdir(source_dir)
+    except OSError:
+        return False
+
+    for filename in files:
+        dest_file = _join_vfs_path(dest_norm, filename)
+        if _vfs_exists(dest_file, is_folder=False):
+            return False
+        if not move_vfs_path(_join_vfs_path(source_norm, filename), dest_file):
+            return False
+
+    for dirname in dirs:
+        if not _move_vfs_tree(
+            tools.ensure_path_is_dir(_join_vfs_path(source_norm, dirname)),
+            tools.ensure_path_is_dir(_join_vfs_path(dest_norm, dirname)),
+        ):
+            return False
+
+    return bool(xbmcvfs.rmdir(source_dir))
+
+
+def manual_move_to_local_library(source_path, is_folder=None):
+    """Move a download file or folder into local.location (context menu; ignores automove setting)."""
+    local_root = (g.get_setting('local.location') or '').strip()
+    download_root = (g.get_setting('download.location') or '').strip()
+    if not local_root or not download_root:
+        return None
+
+    if is_folder is None:
+        is_folder = _is_vfs_folder(source_path)
+    source_path = _normalize_path(str(source_path).rstrip('/\\'))
+    download_root = _normalize_path(download_root.rstrip('/\\'))
+    local_root = _normalize_path(local_root.rstrip('/\\'))
+
+    if not _vfs_exists(source_path, is_folder=is_folder):
+        return None
+    if not _vfs_exists(local_root, is_folder=True):
+        xbmcvfs.mkdir(tools.ensure_path_is_dir(local_root))
+
+    relative = _relative_under_download_root(source_path, download_root)
+    if not relative:
+        return None
+
+    dest = _normalize_path(os.path.join(local_root, relative))
+    if is_folder:
+        if not _move_vfs_tree(source_path, dest):
+            return None
+    else:
+        dest_dir = os.path.dirname(dest)
+        if dest_dir and not _vfs_exists(dest_dir, is_folder=True):
+            xbmcvfs.mkdirs(tools.ensure_path_is_dir(dest_dir))
+        if _vfs_exists(dest, is_folder=False):
+            return None
+        if not move_vfs_path(source_path, dest):
+            return None
+
+    _cleanup_empty_dirs(os.path.dirname(source_path), download_root)
+    return dest
 
 
 def move_to_local_library(completed_file_path):

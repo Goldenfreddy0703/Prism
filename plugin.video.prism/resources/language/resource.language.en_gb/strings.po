@@ -5624,6 +5624,131 @@ msgid "Starting Prism"
 msgstr "Starting Prism"
 
 #: /resources/skins/Default/1080i/sort_select.xml
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31089"
+msgid "Rename"
+msgstr "Rename"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31090"
+msgid "Move to folder…"
+msgstr "Move to folder…"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31091"
+msgid "Copy to folder…"
+msgstr "Copy to folder…"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31092"
+msgid "New subfolder & move here"
+msgstr "New subfolder & move here"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31093"
+msgid "File info"
+msgstr "File info"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31094"
+msgid "Open containing folder"
+msgstr "Open containing folder"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31095"
+msgid "Delete"
+msgstr "Delete"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31096"
+msgid "Move to Local Library"
+msgstr "Move to Local Library"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31097"
+msgid "Create folder"
+msgstr "Create folder"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31098"
+msgid "Delete \"{}\"?"
+msgstr "Delete \"{}\"?"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31099"
+msgid "Delete folder \"{}\" and all contents?"
+msgstr "Delete folder \"{}\" and all contents?"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31100"
+msgid "Rename item"
+msgstr "Rename item"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31101"
+msgid "New folder name"
+msgstr "New folder name"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31102"
+msgid "Choose destination folder"
+msgstr "Choose destination folder"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31103"
+msgid "File operation failed."
+msgstr "File operation failed."
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31104"
+msgid "Done."
+msgstr "Done."
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31105"
+msgid "Local library folder is not configured."
+msgstr "Local library folder is not configured."
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31106"
+msgid "Please wait…"
+msgstr "Please wait…"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31107"
+msgid "Copying: {}"
+msgstr "Copying: {}"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31108"
+msgid "Moving: {}"
+msgstr "Moving: {}"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31109"
+msgid "Deleting: {}"
+msgstr "Deleting: {}"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31110"
+msgid "Renaming: {}"
+msgstr "Renaming: {}"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31111"
+msgid "Creating folder: {}"
+msgstr "Creating folder: {}"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31112"
+msgid "{} — {} / {}"
+msgstr "{} — {} / {}"
+
+#: /resources/lib/gui/my_files_local_ops.py
+msgctxt "#31113"
+msgid "{} — {}%"
+msgstr "{} — {}%"
+
 msgctxt "#31088"
 msgid ""
 "[B]How sorting works[/B][CR]"
