@@ -459,6 +459,11 @@ def dispatch(params):
 
         homeMenu.Menus().search_menu()
 
+    elif action == "playbackHistory":
+        from resources.lib.simkl.playback_history import render_playback_history
+
+        render_playback_history()
+
     elif action == "toolsMenu":
         from resources.lib.gui import homeMenu
 

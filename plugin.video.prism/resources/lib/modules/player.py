@@ -30,6 +30,8 @@ class PrismPlayer(xbmc.Player):
     Class to handle playback methods and accept callbacks from Kodi player
     """
 
+    _LOCAL_HISTORY_MIN_SECONDS = 30
+
     def __init__(self):
         super().__init__()
 
@@ -441,10 +443,7 @@ class PrismPlayer(xbmc.Player):
         g.close_all_dialogs()
 
         if self.smart_playlists and self.mediatype == "episode":
-            if g.PLAYLIST.size() == 1 and not self.smart_module.is_season_final():
-                self.smart_module.build_playlist()
-            elif g.PLAYLIST.size() == g.PLAYLIST.getposition() + 1:
-                self.smart_module.append_next_season()
+            self.smart_module.ensure_binge_playlist_expanded()
 
         catalog = locale_playback.catalog_from_item(self.item_information)
         if catalog == "anime":
@@ -644,11 +643,14 @@ class PrismPlayer(xbmc.Player):
                 season,
                 episode,
             )
+            db.stamp_local_playback(self.simkl_id, self.mediatype)
             self.bookmark_sync.remove_bookmark(self.simkl_id)
         if self.mediatype == "movie":
             from resources.lib.database.session import get_sync_database
 
-            get_sync_database().mark_movie_watched(self.simkl_id)
+            movie_db = get_sync_database()
+            movie_db.mark_movie_watched(self.simkl_id)
+            movie_db.stamp_local_playback(self.simkl_id, self.mediatype)
         from resources.lib.simkl.library_status import apply_local_status_after_watch
 
         apply_local_status_after_watch(self.item_information)
@@ -845,6 +847,10 @@ class PrismPlayer(xbmc.Player):
                 g.log_stacktrace()
         if self.current_time == 0 or self.total_time == 0:
             return
+
+        current_secs = int(self.current_time)
+        if current_secs >= self._LOCAL_HISTORY_MIN_SECONDS:
+            self.bookmark_sync.stamp_local_playback(self.simkl_id, self.mediatype)
 
         if self.watched_percentage < self.playCountMinimumPercent and self.current_time >= self.ignoreSecondsAtStart:
             info = self.item_information.get("info") or {}

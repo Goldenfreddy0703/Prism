@@ -5795,3 +5795,28 @@ msgstr ""
 "[B]Automatic:[/B] Resolution and Size sort on their own. Use the arrow button to reverse direction.[CR][CR]"
 "[B]Tag-based:[/B] HDR Codecs, Video Codecs, Audio Codecs, and similar rows only work when you pick tags after the arrow (e.g. DV, HEVC, Dual-Audio).[CR][CR]"
 "[B]None does not mean \"all\":[/B] HDR Codecs → None will NOT sort every HDR type (DV, HDR, HYBRID). None means that rule is turned off. Click None and choose the tags you want to prefer."
+
+#: /resources/lib/simkl/playback_history.py
+msgctxt "#31122"
+msgid "My Watch History"
+msgstr "My Watch History"
+
+#: /resources/lib/simkl/playback_history.py
+msgctxt "#31123"
+msgid "Movies and episodes you have played in Prism"
+msgstr "Movies and episodes you have played in Prism"
+
+#: /resources/settings.xml
+msgctxt "#31126"
+msgid "Show My Watch History on home menu"
+msgstr "Show My Watch History on home menu"
+
+#: /resources/settings.xml
+msgctxt "#31127"
+msgid "Show a global My Watch History folder on the Prism home menu. Hidden when empty."
+msgstr "Show a global My Watch History folder on the Prism home menu. Hidden when empty."
+
+#: /resources/lib/simkl/playback.py
+msgctxt "#31128"
+msgid "Nothing to continue watching right now"
+msgstr "Nothing to continue watching right now"

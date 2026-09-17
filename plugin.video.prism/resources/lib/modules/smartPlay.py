@@ -155,12 +155,41 @@ class SmartPlay:
                     window.close()
                 del window
 
+    def _collect_binge_episode_items(self, season_num, minimum_episode):
+        """Return playable rows for the binge queue (next episodes in season)."""
+        try:
+            return [
+                item
+                for item in (
+                    self.list_builder.episode_list_builder(
+                        self.show_simkl_id,
+                        season=season_num,
+                        minimum_episode=minimum_episode,
+                        smart_play=True,
+                        hide_unaired=True,
+                        hide_watched=False,
+                        skip_update=False,
+                    )
+                    or []
+                )
+                if item is not None
+            ]
+        except TypeError:
+            g.log(
+                "Unable to add more episodes to the playlist, they may not be available for the requested season",
+                "warning",
+            )
+            return []
+
     def build_playlist(self, season_num=None, minimum_episode=None):
         """
         Uses available information to add relevant episodes to the current playlist
         :param season_num: Season number to build from
         :param minimum_episode: Minimum episodes to add from
         """
+        from resources.lib.database.session import get_sync_database
+        from resources.lib.simkl.ids import episode_num_from_info
+
         action_args = self.item_information.get("action_args") or {}
         if action_args.get("external_play"):
             return self._build_external_playlist(season_num, minimum_episode)
@@ -168,24 +197,26 @@ class SmartPlay:
         if season_num is None:
             season_num = self.item_information["info"]["season"]
 
+        current_episode = episode_num_from_info(self.item_information["info"])
         if minimum_episode is None:
-            minimum_episode = int(self.item_information["info"]["episode"]) + 1
+            if current_episode is None:
+                current_episode = self.item_information["info"].get("episode")
+            minimum_episode = int(current_episode) + 1
 
-        try:
-            for i in self.list_builder.episode_list_builder(
-                self.show_simkl_id,
-                season=season_num,
-                minimum_episode=minimum_episode,
-                smart_play=True,
-                hide_unaired=True,
-            ):
-                g.PLAYLIST.add(url=i[0], listitem=i[1])
-        except TypeError:
-            g.log(
-                "Unable to add more episodes to the playlist, they may not be available for the requested season",
-                "warning",
-            )
-            return
+        playlist_items = self._collect_binge_episode_items(season_num, minimum_episode)
+        if not playlist_items and not self.is_season_final():
+            # Continue Watching often only mills the bookmarked episode; pull the full season.
+            try:
+                get_sync_database()._ensure_simkl_episode_tree_for_seasons(
+                    self.show_simkl_id,
+                    {int(season_num)},
+                )
+                playlist_items = self._collect_binge_episode_items(season_num, minimum_episode)
+            except Exception:
+                g.log_stacktrace()
+
+        for item in playlist_items:
+            g.PLAYLIST.add(url=item[0], listitem=item[1])
 
     def prepare_external_playlist(self, url_extras: dict[str, str] | None = None) -> None:
         """Seed SmartPlay playlist for TMDb Helper external episode playback."""
@@ -529,19 +560,46 @@ class SmartPlay:
         g.PLAYLIST.add(url=playlist[0], listitem=playlist[1])
         xbmc.Player().play(g.PLAYLIST)
 
-    def create_single_item_playlist_from_info(self):
-        g.cancel_playback()
-        name = self.item_information["info"]["title"]
+    def add_episode_to_playlist(self, item_information=None, url_extras=None):
+        """Append one episode getSources row to the video playlist (no playback cancel)."""
+        item_information = item_information or self.item_information
+        info = item_information.get("info") or {}
+        if info.get("mediatype") != "episode":
+            return None
+        name = info.get("title") or item_information.get("name") or ""
         entry = g.add_directory_item(
             name,
             action="getSources",
-            menu_item=copy.deepcopy(self.item_information),
-            action_args=encode_action_args(self.item_information),
+            menu_item=copy.deepcopy(item_information),
+            action_args=encode_action_args(item_information),
             bulk_add=True,
             is_playable=True,
+            **(url_extras or {}),
         )
         g.PLAYLIST.add(url=entry[0], listitem=entry[1])
+        return entry
+
+    def create_single_item_playlist_from_info(self):
+        g.cancel_playback()
+        g.PLAYLIST.clear()
+        self.add_episode_to_playlist()
         return g.PLAYLIST
+
+    def ensure_binge_playlist_expanded(self) -> None:
+        """Seed and expand the SmartPlay binge queue for the episode now playing."""
+        if not g.get_bool_setting("smartplay.playlistcreate"):
+            return
+        info = self.item_information.get("info") or {}
+        if info.get("mediatype") != "episode":
+            return
+
+        if g.PLAYLIST.size() == 0:
+            self.add_episode_to_playlist()
+
+        if g.PLAYLIST.size() == 1 and not self.is_season_final():
+            self.build_playlist()
+        elif g.PLAYLIST.size() == g.PLAYLIST.getposition() + 1:
+            self.append_next_season()
 
     @staticmethod
     def clear_other_playlist_items():
@@ -569,9 +627,14 @@ class SmartPlay:
             g.PLAYLIST[i].getPath() for i in range(g.PLAYLIST.size())  # pylint: disable=unsubscriptable-object
         ]
 
-        # Check to see if we are just starting playback and kodi has created a playlist
-        if len(playlist_uris) == 1 and playlist_uris[0].split('/')[-1].lstrip('?') == g.PARAM_STRING:
+        # Next Up / Continue Watching: Kodi already seeded a matching single-item playlist.
+        # Resolve in this getSources call (fast setResolvedUrl) — binge queue expands on playback start.
+        if len(playlist_uris) == 1 and playlist_uris[0].split("/")[-1].lstrip("?") == g.PARAM_STRING:
             return
+
+        # Resume URLs differ from the stale Kodi playlist row — clear and resolve normally.
+        if len(playlist_uris) == 1 and g.PLAYLIST.getposition() <= 0:
+            g.PLAYLIST.clear()
 
         if g.PLAYLIST.getposition() == -1:
             return self.create_single_item_playlist_from_info()
@@ -635,6 +698,16 @@ class SmartPlay:
         :rtype: int
         """
         bookmark_style = g.get_int_setting("general.bookmarkstyle")
+        kodi_resume_handled = (g.REQUEST_PARAMS or {}).get("kodiresumehandled") == "true"
+
+        if kodi_resume_handled and not force_resume_off:
+            if resume_switch is None:
+                return None
+            try:
+                resume_secs = int(float(resume_switch))
+                return resume_secs if resume_secs > 0 else None
+            except (TypeError, ValueError):
+                return None
 
         if not resume_switch and not force_resume_off and bookmark_style != 2:
             action_args = g.REQUEST_PARAMS.get("action_args") or {}

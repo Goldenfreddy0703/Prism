@@ -229,6 +229,12 @@ def list_continue_watching(catalog: str, page: int | None = None, *, resync_if_e
     return items[page_start:page_end]
 
 
+def notify_empty_continue_watching() -> None:
+    """Tell the user Continue Watching has nothing to show, then close the folder."""
+    g.notification(g.ADDON_NAME, g.get_language_string(31128), time=4000)
+    g.cancel_directory()
+
+
 @simkl_auth_guard
 def render_continue_watching_menu(catalog: str) -> None:
     """Render Continue Watching for movie, tv, or anime."""
@@ -241,24 +247,30 @@ def render_continue_watching_menu(catalog: str) -> None:
     page = g.PAGE
 
     items = list_continue_watching(catalog, page=page, resync_if_empty=True)
+    if not items:
+        if catalog != CATALOG_MOVIE:
+            db = get_sync_database()
+            bookmark_rows = db.fetchall(
+                """
+                SELECT DISTINCT e.simkl_show_id AS simkl_id
+                FROM bookmarks AS b
+                         INNER JOIN episodes AS e ON e.simkl_id = b.simkl_id
+                WHERE b.type = 'episode'
+                """
+            )
+            show_ids = {int(row["simkl_id"]) for row in bookmark_rows if row.get("simkl_id") is not None}
+            if show_ids:
+                schedule_lazy_episode_warm(db, show_ids)
+        if page <= 1:
+            notify_empty_continue_watching()
+            return
+        g.cancel_directory()
+        return
+
     for item in items:
         if isinstance(item, dict):
             item.setdefault("catalog", catalog)
             item["force_resume_indicator"] = True
-
-    if catalog != CATALOG_MOVIE and not items:
-        db = get_sync_database()
-        bookmark_rows = db.fetchall(
-            """
-            SELECT DISTINCT e.simkl_show_id AS simkl_id
-            FROM bookmarks AS b
-                     INNER JOIN episodes AS e ON e.simkl_id = b.simkl_id
-            WHERE b.type = 'episode'
-            """
-        )
-        show_ids = {int(row["simkl_id"]) for row in bookmark_rows if row.get("simkl_id") is not None}
-        if show_ids:
-            schedule_lazy_episode_warm(db, show_ids)
 
     builder = ListBuilder()
     profile = MenuPaintProfile.LIBRARY_EPISODES if catalog != CATALOG_MOVIE else MenuPaintProfile.LIBRARY

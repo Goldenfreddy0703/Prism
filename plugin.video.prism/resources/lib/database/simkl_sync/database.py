@@ -151,6 +151,7 @@ schema = {
                 ("args", ["TEXT", "NOT NULL"]),
                 ("air_date", ["TEXT"]),
                 ("last_watched_at", ["TEXT"]),
+                ("local_playback_at", ["TEXT"]),
                 ("user_rating", ["INTEGER", "NULL"]),
                 ("needs_update", ["BOOLEAN", "NOT NULL", "DEFAULT 1"]),
             ]
@@ -185,6 +186,7 @@ schema = {
                 ("args", ["TEXT", "NOT NULL"]),
                 ("air_date", ["TEXT"]),
                 ("last_watched_at", ["TEXT"]),
+                ("local_playback_at", ["TEXT"]),
                 ("user_rating", ["INTEGER", "NULL"]),
                 ("needs_update", ["BOOLEAN", "NOT NULL", "DEFAULT 1"]),
                 ("simkl_status", ["TEXT", "NULL"]),
@@ -275,6 +277,7 @@ class SimklSyncDatabase(Database):
             g.set_runtime_setting("simkl_sync.migrations.done", True)
 
         self._migrate_movie_history_cleared_column()
+        self._migrate_local_playback_at_columns()
 
         # Heavy migrations touch display_meta + bulk SQL — run from service only.
         if int(getattr(g, "PLUGIN_HANDLE", 0) or 0) <= 0:
@@ -610,6 +613,14 @@ class SimklSyncDatabase(Database):
         if "history_cleared" not in columns:
             self.execute_sql("ALTER TABLE movies ADD COLUMN history_cleared INTEGER NOT NULL DEFAULT 0")
             g.log("SimklSync: migrated movies.history_cleared column", "info")
+
+    def _migrate_local_playback_at_columns(self):
+        """Prism-only playback timestamps (not written by Simkl cloud sync)."""
+        for table in ("movies", "episodes"):
+            columns = {row["name"] for row in self.fetchall(f"PRAGMA table_info({table})")}
+            if "local_playback_at" not in columns:
+                self.execute_sql(f"ALTER TABLE {table} ADD COLUMN local_playback_at TEXT")
+                g.log(f"SimklSync: migrated {table}.local_playback_at column", "info")
 
     def _migrate_movies_tvdb_id_column(self):
         columns = {row["name"] for row in self.fetchall("PRAGMA table_info(movies)")}

@@ -56,6 +56,11 @@
 					<default>true</default>
 					<control type="toggle"/>
 				</setting>
+				<setting id="home.showWatchHistory" type="boolean" label="31126" help="31127">
+					<level>0</level>
+					<default>true</default>
+					<control type="toggle"/>
+				</setting>
 				<setting id="general.genres.endpoint.movies" type="integer" label="30447" help="">
 					<level>0</level>
 					<default>1</default>

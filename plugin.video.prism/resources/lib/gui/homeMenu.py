@@ -5,6 +5,8 @@ from resources.lib.modules.globals import g
 class Menus:
     @staticmethod
     def home():
+        from resources.lib.simkl.playback_history import add_watch_history_home_item
+
         g.add_directory_item(
             g.get_language_string(30000),
             action='moviesHome',
@@ -23,6 +25,7 @@ class Menus:
             description=g.get_language_string(30659),
             menu_item=g.create_icon_dict("anime", g.ICONS_PATH),
         )
+        add_watch_history_home_item()
         if g.get_setting('simkl.auth'):
             g.add_directory_item(
                 g.get_language_string(30001),

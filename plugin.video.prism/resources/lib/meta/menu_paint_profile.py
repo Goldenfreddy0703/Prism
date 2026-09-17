@@ -56,6 +56,7 @@ _ACTION_PROFILES: dict[str, MenuPaintProfile] = {
     "libraryOnDeck": MenuPaintProfile.LIBRARY_EPISODES,
     "libraryNextUp": MenuPaintProfile.LIBRARY_EPISODES,
     "libraryWatchedEpisodes": MenuPaintProfile.LIBRARY_EPISODES,
+    "playbackHistory": MenuPaintProfile.LIBRARY_EPISODES,
     # Episode drilldown
     "showSeasons": MenuPaintProfile.DRILLDOWN,
     "seasonEpisodes": MenuPaintProfile.DRILLDOWN,

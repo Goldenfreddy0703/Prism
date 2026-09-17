@@ -1726,11 +1726,18 @@ class GlobalVariables:
             except Exception:
                 duration = None
 
+        is_playable_item = bool(params.get("is_playable", False))
+
         if episode_in_progress:
             if partial_percent > 0:
                 item.setProperty("percentplayed", str(partial_percent))
             if has_resume_time:
-                params["resume"] = str(resume_time)
+                # Playable rows use Kodi's native resume UI (setResumePoint below).
+                # Do not also bake resume into the URL or Prism prompts twice.
+                if is_playable_item:
+                    params["kodiresumehandled"] = "true"
+                else:
+                    params["resume"] = str(resume_time)
                 item.setProperty("resumetime", str(resume_time))
                 if duration:
                     item.setProperty("totaltime", str(int(duration)))
