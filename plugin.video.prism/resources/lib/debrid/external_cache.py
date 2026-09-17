@@ -174,10 +174,11 @@ def torrentio_check_cache(imdb, season, episode, service="rd", debrid_key=None):
                 matches = _HASH_PATTERN.findall(stream_url)
                 if matches:
                     hashes.add(matches[-1].lower())
-        g.log(
-            f"ExternalCache: Torrentio returned {len(hashes)} cached hashes for {(service or 'rd').upper()}",
-            "info",
-        )
+            g.log(
+                f"ExternalCache: Torrentio ({_TIO_BASE}) returned {len(hashes)} cached hashes "
+                f"for {(service or 'rd').upper()}",
+                "info",
+            )
     except Exception as exc:
         g.log(f"ExternalCache: Torrentio check failed ({service}): {exc}", "warning")
     return hashes
@@ -311,7 +312,8 @@ def aio_check_cache(imdb, season, episode, service="ad", api_key=None):
                 if info_hash:
                     hashes.add(info_hash.lower())
             g.log(
-                f"ExternalCache: AIOStreams returned {len(hashes)} cached hashes for {(service or 'ad').upper()}",
+                f"ExternalCache: AIOStreams ({url}) returned {len(hashes)} cached hashes "
+                f"for {(service or 'ad').upper()}",
                 "info",
             )
             return hashes
@@ -367,7 +369,7 @@ def comet_check_cache(imdb, season, episode, api_key=None, service="ad"):
             resp.raise_for_status()
             hashes = _extract_hashes_from_streams(resp.json().get("streams", []))
             g.log(
-                f"ExternalCache: Comet returned {len(hashes)} cached hashes for {svc.upper()}",
+                f"ExternalCache: Comet ({base}) returned {len(hashes)} cached hashes for {svc.upper()}",
                 "info",
             )
             break
@@ -423,6 +425,28 @@ def check_rd_external(hash_list, imdb, season, episode):
     cached, success = _run_parallel_checks(futures_map, "RD")
     g.log(f"ExternalCache RD: {len(cached)} total cached hashes", "info")
     return cached, success
+
+
+_AD_PRIME_IMDB = "tt0111161"
+
+
+def prime_ad_cache_checker_devices():
+    """
+    Contact Torrentio, AIOStreams, and Comet with the user's AllDebrid key.
+
+    This does not approve devices automatically — it triggers AllDebrid's pending
+    device/location prompts so they appear on alldebrid.com/magnets/ right after PIN auth.
+    """
+    ad_key = (g.get_setting("alldebrid.apikey") or "").strip()
+    if not ad_key:
+        return
+    futures_map = {
+        "torrentio": lambda: torrentio_check_cache(_AD_PRIME_IMDB, None, None, "ad", ad_key),
+        "aiostreams": lambda: aio_check_cache(_AD_PRIME_IMDB, None, None, "ad", ad_key),
+        "comet": lambda: comet_check_cache(_AD_PRIME_IMDB, None, None, ad_key, "ad"),
+    }
+    _run_parallel_checks(futures_map, "AD-prime", timeout=12)
+    g.log("ExternalCache AD: primed cache checker device approval requests", "info")
 
 
 def check_ad_external(hash_list, imdb, season, episode):

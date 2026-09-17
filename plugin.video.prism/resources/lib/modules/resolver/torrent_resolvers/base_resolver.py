@@ -5,6 +5,8 @@ import xbmcgui
 from resources.lib.common import source_utils
 from resources.lib.indexers.apibase import ApiBase
 from resources.lib.modules.exceptions import FileIdentification
+from resources.lib.modules.exceptions import NoFileSelectionAvailable
+from resources.lib.modules.exceptions import UserCancelledSelection
 from resources.lib.modules.globals import g
 
 
@@ -86,10 +88,15 @@ class TorrentResolverBase(ApiBase):
     def _user_selection(self, folder_details):
         folder_details = self._filter_non_playable_files(folder_details)
         folder_details = sorted(folder_details, key=lambda k: k['path'].split("/")[-1])
+        if len(folder_details) <= 1:
+            g.notification(g.ADDON_NAME, g.get_language_string(31120), time=4000)
+            raise NoFileSelectionAvailable
         selection = xbmcgui.Dialog().select(
             g.get_language_string(30483), [i['path'].split('/')[-1] for i in folder_details]
         )
-        return folder_details[selection] if selection >= 0 else None
+        if selection < 0:
+            raise UserCancelledSelection
+        return folder_details[selection]
 
     def _finalize_resolving(self, item_information, torrent, identified_file, folder_details):
         if identified_file is None:
@@ -122,7 +129,7 @@ class TorrentResolverBase(ApiBase):
         folder_details = self._sort_and_filter_files(folder_details, item_information)
         if len(folder_details) == 1:
             return self._finalize_resolving(item_information, torrent, folder_details[0], folder_details)
-        best_match = source_utils.get_best_episode_match("path", folder_details, item_information)
+        best_match = source_utils.get_best_episode_match_cloud("path", folder_details, item_information)
         return self._finalize_resolving(item_information, torrent, best_match, folder_details)
 
     @staticmethod

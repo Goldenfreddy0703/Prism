@@ -309,6 +309,7 @@ def dispatch(params):
                         background.close()
                     finally:
                         del background
+                    helpers.clear_persistent_background()
                 del prism_player
 
         except NoPlayableSourcesException:
@@ -317,6 +318,7 @@ def dispatch(params):
                 del background
             except (UnboundLocalError, AttributeError):
                 pass
+            helpers.clear_persistent_background()
 
             g.cancel_playback()
 

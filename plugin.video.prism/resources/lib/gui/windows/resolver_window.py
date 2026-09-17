@@ -1,6 +1,10 @@
+import xbmc
+
 from . import set_info_properties
 from resources.lib.common import tools
 from resources.lib.gui.windows.single_item_window import SingleItemWindow
+from resources.lib.modules.exceptions import NoFileSelectionAvailable
+from resources.lib.modules.exceptions import UserCancelledSelection
 from resources.lib.modules.globals import g
 from resources.lib.modules.resolver import Resolver
 
@@ -17,46 +21,75 @@ class ResolverWindow(SingleItemWindow):
         self.resolver = None
         self.sources = None
         self.pack_select = False
+        self.resolve_finished = False
+        self.user_cancelled = False
+        self._resolve_ran = False
+        self._close_requested = False
         self.item_information = item_information
         self.close_callback = close_callback
 
+    def handle_action(self, action_id, control_id=None):
+        if control_id == 9999:
+            self.close()
+
+    def _request_close(self):
+        if self._close_requested:
+            return
+        self._close_requested = True
+        try:
+            xbmc.executebuiltin(f"SendClick({self.getId()},9999)")
+        except Exception:
+            g.log_stacktrace()
+        if not g.wait_for_abort(0.05):
+            try:
+                self.close()
+            except Exception:
+                g.log_stacktrace()
+
     def onInit(self):
         """
-        Callback method from Kodi to trigger background threads to process resolving
-        :param test: Used for Unit testing purposes only
-        :type test: bool
-        :return: None
-        :rtype: None
+        Show resolver UI first, then resolve on the main thread so dialogs stack correctly.
         """
         super().onInit()
+        if self._resolve_ran or not self.sources:
+            return
+        self._resolve_ran = True
+        self._resolve_source()
+        self._request_close()
 
     def _resolve_source(self):
         stream_link = None
         release_title = None
         total = len(self.sources)
 
-        for index, source in enumerate(self.sources, start=1):
-            if self.canceled:
-                return None, None
-            self._update_window_properties(source)
-            provider = source.get("debrid_provider") or source.get("provider") or "source"
-            self.setProperty(
-                "notification_text",
-                f"{g.get_language_string(30603)} {index}/{total} — {provider}",
-            )
-            try:
-                stream_link, release_title = self.resolver.resolve_single_source(
-                    source, self.item_information, self.pack_select
+        try:
+            for index, source in enumerate(self.sources, start=1):
+                if self.canceled:
+                    return None, None
+                self._update_window_properties(source)
+                provider = source.get("debrid_provider") or source.get("provider") or "source"
+                self.setProperty(
+                    "notification_text",
+                    f"{g.get_language_string(30603)} {index}/{total} — {provider}",
                 )
-                if stream_link:
+                try:
+                    stream_link, release_title = self.resolver.resolve_single_source(
+                        source, self.item_information, self.pack_select
+                    )
+                    if stream_link:
+                        break
+                except (UserCancelledSelection, NoFileSelectionAvailable):
+                    self.user_cancelled = True
                     break
-            except Exception:
-                g.log_stacktrace()
-                continue
-        if stream_link is None:
-            self.return_data = None, None
-        else:
-            self.return_data = stream_link, release_title
+                except Exception:
+                    g.log_stacktrace()
+                    continue
+            if stream_link is None:
+                self.return_data = None, None
+            else:
+                self.return_data = stream_link, release_title
+        finally:
+            self.resolve_finished = True
 
     def get_return_data(self):
         return (None, None) if self.canceled else self.return_data
@@ -84,28 +117,22 @@ class ResolverWindow(SingleItemWindow):
         pack_select=False,
     ):
         """
-        Opens window in an intractable mode and runs background scripts
-        :param sources: List of sources to attempt to resolve
-        :type sources: list
-        :param pack_select: Set to True to enable manual file selection
-        :type pack_select: bool
-        :return: Stream link
-        :rtype: str
+        Opens resolver UI, runs resolve work in onInit, then closes before returning.
         """
         self.sources = sources or []
         self.pack_select = pack_select
+        self.resolve_finished = False
+        self.user_cancelled = False
+        self._resolve_ran = False
+        self.return_data = None, None
 
         if not self.sources:
             return None, None
 
         self.resolver = Resolver()
-
         self._update_window_properties(self.sources[0])
-        self._resolve_source()
-
         super().doModal()
+        return self.get_return_data()
 
     def close(self):
         super().close()
-        if self.close_callback:
-            self.close_callback

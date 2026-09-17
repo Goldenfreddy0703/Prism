@@ -193,5 +193,13 @@
 				</control>
 			</control>
 		</control>
+
+		<!-- Hidden control: worker thread triggers SendClick to close on main thread -->
+		<control type="button" id="9999">
+			<visible>false</visible>
+			<width>1</width>
+			<height>1</height>
+			<label></label>
+		</control>
     </controls>
 </window>

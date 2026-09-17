@@ -831,13 +831,20 @@ class _AllDebridDownloader(_DebridDownloadBase):
         super().__init__(source, item_information)
         self.debrid_module = AllDebrid()
         self.available_files = []
+        self.magnet_id = None
 
     def _fetch_available_files(self):
-        self.magnet_id = self.debrid_module.upload_magnet(self.source['hash'])["magnets"][0]["id"]
-        status = self.debrid_module.magnet_status(self.magnet_id)['magnets']
-        if status["status"] != "Ready":
-            raise UnexpectedResponse(status)
-        return [{'path': i['filename'], 'url': i['link']} for i in status['links']]
+        magnet_ref = self.source.get("magnet") or self.source.get("hash")
+        self.magnet_id, links = self.debrid_module.fetch_magnet_file_links(magnet_ref)
+        return [
+            {
+                "path": link.get("path") or link.get("filename") or "",
+                "url": link.get("link"),
+                "bytes": link.get("size"),
+            }
+            for link in links
+            if link.get("link")
+        ]
 
     def _get_single_item_info(self, source):
         source = super()._get_single_item_info(source)

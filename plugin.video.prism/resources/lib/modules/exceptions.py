@@ -37,6 +37,14 @@ class PreemptiveCancellation(Exception):
     pass
 
 
+class UserCancelledSelection(Exception):
+    """Raised when the user dismisses a manual file-selection dialog."""
+
+
+class NoFileSelectionAvailable(Exception):
+    """Raised when manual file selection was requested but only one playable file exists."""
+
+
 class UnsupportedProviderType(StackTraceException):
     pass
 

@@ -489,6 +489,23 @@ def build_cloud_match_title(item: dict) -> str:
     return clean_title(" ".join(parts))
 
 
+def build_torrent_match_title(file_item: dict) -> str:
+    """Combine torrent file path segments for episode matching inside season packs."""
+    if not isinstance(file_item, dict):
+        return ""
+    path = file_item.get("path")
+    if isinstance(path, str) and path.strip():
+        return clean_title(path.replace("\\", "/").replace("/", " "))
+    return build_cloud_match_title(file_item)
+
+
+def _torrent_episode_file_matches(match_title: str, episode_regex, simple_info: dict) -> bool:
+    """Episode-only matching for files inside torrent season packs."""
+    if episode_regex(match_title):
+        return True
+    return cloud_loose_episode_match(match_title, simple_info)
+
+
 def _show_titles_from_simple_info(simple_info: dict) -> list[str]:
     titles = [simple_info.get("show_title") or ""]
     titles.extend(simple_info.get("show_aliases") or [])
@@ -1003,6 +1020,44 @@ def get_best_episode_match(dict_key, dictionary_list, item_information):
     files = sorted(files, key=lambda x: len(" ".join(x["regex_matches"])), reverse=True)
 
     return files[0]
+
+
+def get_best_episode_match_cloud(dict_key, dictionary_list, item_information, simple_info=None):
+    """
+    Cloud-style episode matching for torrent season packs (full path + anime loose matching).
+    Falls back to legacy basename regex when no cloud-style matches are found.
+    """
+    if not dictionary_list:
+        return None
+
+    if simple_info is None:
+        from resources.lib.modules.getSources import Sources
+
+        simple_info = Sources._build_simple_show_info(item_information)
+
+    try:
+        episode_regex = get_filter_single_episode_fn(simple_info)
+    except CannotGenerateRegexFilterException:
+        return get_best_episode_match(dict_key, dictionary_list, item_information)
+
+    matches = []
+    for item in dictionary_list:
+        if dict_key == "path":
+            match_title = build_torrent_match_title(item)
+        else:
+            value = item.get(dict_key, "")
+            match_title = build_torrent_match_title({"path": value}) if value else ""
+
+        if match_title and _torrent_episode_file_matches(match_title, episode_regex, simple_info):
+            matches.append(item)
+
+    if not matches:
+        return get_best_episode_match(dict_key, dictionary_list, item_information)
+
+    if len(matches) == 1:
+        return matches[0]
+
+    return sorted(matches, key=lambda x: int(x.get("size", 0) or 0), reverse=True)[0]
 
 
 def clear_extras_by_string(args, extra_string, folder_details):

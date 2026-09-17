@@ -63,12 +63,9 @@ class Resolverhelper:
                 item_information=item_information,
                 close_callback=self.close_window,
             )
-            tools.run_threaded(self.window.doModal, sources, pack_select)
-            while not g.wait_for_abort(0.30):
-                stream_link, release_title = self.window.get_return_data()
-                if _valid_stream_link(stream_link):
-                    resolved_source = _resolved_source_from_list(sources, release_title)
-                    break
+            stream_link, release_title = self.window.doModal(sources, pack_select)
+            if _valid_stream_link(stream_link):
+                resolved_source = _resolved_source_from_list(sources, release_title)
 
         if not _valid_stream_link(stream_link):
             stream_link = None
@@ -87,10 +84,7 @@ class Resolverhelper:
         return stream_link
 
     def close_window(self):
-        if self.window:
-            self.window.close()
-            del self.window
-            self.window = None
+        self.window = None
 
 
 class SourcesHelper:
@@ -164,6 +158,33 @@ class SourcesHelper:
         return sources
 
 
+_persistent_background_window = None
+
+
+def register_persistent_background(window):
+    global _persistent_background_window
+    _persistent_background_window = window
+
+
+def clear_persistent_background():
+    global _persistent_background_window
+    _persistent_background_window = None
+
+
+def set_persistent_background_visible(visible):
+    """Hide/show the scrape persistent layer so nested modals do not bleed through."""
+    window = _persistent_background_window
+    if window is None:
+        return
+    try:
+        if visible:
+            window.show()
+        else:
+            window.hide()
+    except Exception:
+        g.log_stacktrace()
+
+
 def show_persistent_window_if_required(item_information):
     """
     Displays a constant window in the background, used to fill in gaps between windows dropping and opening
@@ -180,4 +201,5 @@ def show_persistent_window_if_required(item_information):
     )
     background.set_text(g.get_language_string(30030))
     background.show()
+    register_persistent_background(background)
     return background

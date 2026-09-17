@@ -4,9 +4,13 @@ from resources.lib.database.skinManager import SkinManager
 from resources.lib.gui.windows.manual_caching import ManualCacheWindow
 from resources.lib.gui.windows.source_window import SourceWindow
 from resources.lib.modules.download_manager import create_task as download_file
+from resources.lib.modules.exceptions import GeneralCachingFailure
 from resources.lib.modules.exceptions import InvalidSourceType
+from resources.lib.modules.exceptions import SourceNotAvailable
+from resources.lib.modules.exceptions import UnexpectedResponse
 from resources.lib.modules.globals import g
 from resources.lib.modules.helpers import Resolverhelper
+from resources.lib.modules.helpers import set_persistent_background_visible
 
 
 class SourceSelect(SourceWindow):
@@ -59,6 +63,9 @@ class SourceSelect(SourceWindow):
                             g.ADDON_NAME,
                             g.get_language_string(30641).format(ist.source_type),
                         )
+                    except (UnexpectedResponse, GeneralCachingFailure, SourceNotAvailable) as exc:
+                        g.log(f"Download failed: {exc}", "error")
+                        g.notification(g.ADDON_NAME, g.get_language_string(30032), time=5000)
 
             elif response == 2:
                 self._resolve_item(True)
@@ -78,18 +85,28 @@ class SourceSelect(SourceWindow):
             sources = [self.sources[self.position]]
 
         resolver_helper = Resolverhelper()
+        set_persistent_background_visible(False)
         self.setProperty("resolving", "true")
-        self.stream_link = resolver_helper.resolve_silent_or_visible(
-            sources,
-            self.item_information,
-            pack_select,
-            overwrite_cache=pack_select,
+        try:
+            self.stream_link = resolver_helper.resolve_silent_or_visible(
+                sources,
+                self.item_information,
+                pack_select,
+                overwrite_cache=pack_select,
+            )
+        finally:
+            self.setProperty("resolving", "false")
+            set_persistent_background_visible(True)
+
+        resolve_aborted = bool(
+            resolver_helper.window and getattr(resolver_helper.window, "user_cancelled", False)
         )
 
         if self.stream_link is None or self.stream_link == "none":
-            self.setProperty("resolving", "false")
             resolver_helper.close_window()
-            g.notification(g.ADDON_NAME, g.get_language_string(30032), time=2000)
+            self.setFocusId(1000)
+            if not resolve_aborted:
+                g.notification(g.ADDON_NAME, g.get_language_string(30032), time=2000)
         else:
             self.setProperty("instant_close", "true")
             self.close()

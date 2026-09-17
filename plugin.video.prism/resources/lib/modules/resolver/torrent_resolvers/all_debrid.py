@@ -16,19 +16,24 @@ class AllDebridResolver(TorrentResolverBase):
         self.debrid_module = AllDebrid()
         self._source_normalization = (
             ("size", "size", lambda k: (k / 1024) / 1024),
-            ("filename", ["release_title", "path"], None),
+            ("path", "path", None),
+            ("filename", "release_title", None),
             ("id", "id", None),
             ("link", "link", None),
         )
         self.magnet_id = None
 
     def _fetch_source_files(self, torrent, item_information):
-        self.magnet_id = self.debrid_module.upload_magnet(torrent['hash'])["magnets"][0]["id"]
-        status = self.debrid_module.magnet_status(self.magnet_id)["magnets"]
-        if status["status"] != "Ready":
-            self.debrid_module.delete_magnet(self.magnet_id)
-            raise GeneralCachingFailure(status)
-        return status['links']
+        magnet_ref = torrent.get("magnet") or torrent.get("hash")
+        try:
+            self.magnet_id, links = self.debrid_module.fetch_magnet_file_links(magnet_ref)
+        except GeneralCachingFailure as exc:
+            status = exc.args[0] if exc.args else {}
+            failed_id = self.magnet_id or (status.get("id") if isinstance(status, dict) else None)
+            if failed_id:
+                self.debrid_module.delete_magnet(failed_id)
+            raise exc
+        return links
 
     def resolve_stream_url(self, file_info):
         """

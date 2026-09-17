@@ -18,6 +18,8 @@ from resources.lib.debrid.torbox import TorBox
 from resources.lib.modules.exceptions import FileIdentification
 from resources.lib.modules.exceptions import ResolverFailure
 from resources.lib.modules.exceptions import UnexpectedResponse
+from resources.lib.modules.exceptions import NoFileSelectionAvailable
+from resources.lib.modules.exceptions import UserCancelledSelection
 from resources.lib.modules.globals import g
 from resources.lib.modules.resolver.torrent_resolvers import AllDebridResolver
 from resources.lib.modules.resolver.torrent_resolvers import PremiumizeResolver
@@ -57,19 +59,34 @@ class Resolver:
         release_title = None
         resolved_source = None
 
+        manual_prompt_shown = False
         for source in sources:
             try:
-                stream_link, release_title = self.resolve_single_source(source, item_information, pack_select, silent)
+                allow_manual_prompt = not manual_prompt_shown
+                stream_link, release_title = self.resolve_single_source(
+                    source, item_information, pack_select, silent, allow_manual_prompt=allow_manual_prompt
+                )
+                if (
+                    not stream_link
+                    and source.get("type") == "torrent"
+                    and self.torrent_resolve_failure_style == 1
+                    and not pack_select
+                    and not silent
+                    and allow_manual_prompt
+                ):
+                    manual_prompt_shown = True
                 if stream_link:
                     resolved_source = source
                     break
+            except (UserCancelledSelection, NoFileSelectionAvailable):
+                break
             except Exception:
                 g.log_stacktrace()
                 continue
 
         return stream_link, release_title, resolved_source
 
-    def resolve_single_source(self, source, item_information, pack_select=False, silent=False):
+    def resolve_single_source(self, source, item_information, pack_select=False, silent=False, allow_manual_prompt=True):
         """
         Resolves source to a streamable object
         :param source: Item to attempt to resolve
@@ -98,6 +115,7 @@ class Resolver:
                     and self.torrent_resolve_failure_style == 1
                     and not pack_select
                     and not silent
+                    and allow_manual_prompt
                     and xbmcgui.Dialog().yesno(g.ADDON_NAME, g.get_language_string(30490))
                 ):
                     stream_link = self._resolve_debrid_source(
@@ -114,6 +132,8 @@ class Resolver:
                 return stream_link, source['release_title']
             g.log(f"Failed to resolve source: {source}", "error")
             return None, None
+        except (UserCancelledSelection, NoFileSelectionAvailable):
+            raise
         except ResolverFailure as e:
             g.log(f'Failed to resolve source: {e}')
             return None, None
@@ -252,6 +272,8 @@ class Resolver:
         if source["type"] == "torrent":
             try:
                 stream_link = api.resolve_magnet(item_information, source, pack_select)
+            except (UserCancelledSelection, NoFileSelectionAvailable):
+                raise
             except (UnexpectedResponse, FileIdentification) as e:
                 g.log(e, "error")
                 return None

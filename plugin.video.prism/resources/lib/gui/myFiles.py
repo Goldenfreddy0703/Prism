@@ -236,6 +236,67 @@ class AllDebridWalker(BaseDebridWalker):
 
         return AllDebrid()
 
+    @staticmethod
+    def _is_video_name(name):
+        return (name or "").lower().endswith(tuple(g.common_video_extensions))
+
+    @staticmethod
+    def _tree_nodes_at_path(tree, tree_path):
+        nodes = tree or []
+        for part in tree_path or []:
+            match = next((entry for entry in nodes if entry.get("n") == part and entry.get("e")), None)
+            if not match:
+                return []
+            nodes = match.get("e") or []
+        return nodes
+
+    @staticmethod
+    def _resolve_tree_path(tree, tree_path):
+        """
+        AllDebrid magnet/files trees usually wrap all entries in one root folder.
+        Skip that wrapper when opening a torrent so users don't click the same name twice.
+        """
+        tree_path = list(tree_path or [])
+        if tree_path:
+            return tree_path
+        nodes = AllDebridWalker._tree_nodes_at_path(tree, tree_path)
+        if len(nodes) == 1 and nodes[0].get("e") and not nodes[0].get("l"):
+            tree_path.append(nodes[0].get("n") or "")
+        return tree_path
+
+    def _count_video_files(self, nodes):
+        count = 0
+        for entry in nodes or []:
+            if entry.get("e"):
+                count += self._count_video_files(entry["e"])
+            elif entry.get("l") and self._is_video_name(entry.get("n")):
+                count += 1
+        return count
+
+    def _format_tree_listing(self, magnet_id, tree_path):
+        tree = self.all_debrid.get_magnet_files_tree(magnet_id)
+        tree_path = AllDebridWalker._resolve_tree_path(tree, tree_path)
+        nodes = AllDebridWalker._tree_nodes_at_path(tree, tree_path)
+        items = []
+
+        for entry in nodes:
+            name = entry.get("n") or ""
+            if entry.get("e"):
+                items.append(
+                    {
+                        "id": magnet_id,
+                        "name": name,
+                        "folder": True,
+                        "tree_path": (tree_path or []) + [name],
+                    }
+                )
+                continue
+            if not entry.get("l") or not self._is_video_name(name):
+                continue
+            items.append({"name": name, "link": entry.get("l"), "size": entry.get("s", 0)})
+
+        return sorted(items, key=lambda x: x["name"].lower())
+
     def get_init_list(self):
         root = self.all_debrid.magnet_status(None).get("magnets", [])
         items = []
@@ -243,50 +304,33 @@ class AllDebridWalker(BaseDebridWalker):
         for i in root:
             if not (isinstance(i, dict) and i.get('status') == "Ready"):
                 continue
+            tree = self.all_debrid.get_magnet_files_tree(i['id'])
+            video_count = self._count_video_files(tree)
+            if video_count == 0:
+                continue
             item = {
                 "id": i['id'],
                 "name": i['filename'],
-                "links": sorted(
-                    [
-                        link
-                        for link in i['links']
-                        if (
-                            len(filenames := self._get_lowest_level_filename_for_link_files(link.get("files", []))) == 1
-                            and filenames[0].endswith(g.common_video_extensions)
-                        )
-                    ],
-                    key=lambda x: x['filename'],
-                ),
             }
-            if item.get("links"):
-                items.append(item)
+            if video_count > 1:
+                item["folder"] = True
+                item["tree_path"] = []
+            else:
+                for entry in self._format_tree_listing(i['id'], []):
+                    if entry.get("link"):
+                        item.update(entry)
+                        break
+            items.append(item)
 
         self._format_items(items)
 
     def _is_folder(self, list_item):
-        return bool(list_item.get("links"))
+        return bool(list_item.get("links")) or list_item.get("folder", False)
 
     def get_folder(self, list_item):
-        links = self.all_debrid.magnet_status(list_item['id']).get("magnets", []).get("links", [])
-        items = []
-
-        for l in links:
-            filenames = self._get_lowest_level_filename_for_link_files(l.get("files", []))
-            if not (len(filenames) == 1 and filenames[0].endswith(tuple(g.common_video_extensions))):
-                continue
-            item = {"name": filenames[0], "link": l.get("link"), "size": l.get("size", 0)}
-            items.append(item)
-
-        self._format_items(sorted(items, key=lambda x: x['name']))
-
-    def _get_lowest_level_filename_for_link_files(self, files_item):
-        files = []
-        for file in files_item if isinstance(files_item, list) else [files_item]:
-            if entities := file.get("e"):
-                files.extend(self._get_lowest_level_filename_for_link_files(entities))
-            else:
-                files.append(file.get("n"))
-        return files
+        magnet_id = list_item['id']
+        tree_path = list_item.get('tree_path', [])
+        self._format_items(self._format_tree_listing(magnet_id, tree_path))
 
     def resolve_link(self, list_item):
         return self.all_debrid.resolve_hoster(list_item['link'])
