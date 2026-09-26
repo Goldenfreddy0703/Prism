@@ -63,6 +63,7 @@ def refresh_apis():
     :rtype: None
     """
     if g.get_setting("simkl.auth"):
+        SimklAPI().try_refresh_token()
         from resources.lib.simkl.remote_activities import get_activities_payload
 
         get_activities_payload(force=True)

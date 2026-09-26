@@ -812,6 +812,8 @@ def try_fast_paint_list(
 
     if media_type == "movie":
         rows = overlay_page_watch_fields(rows, db)
+    elif media_type == "tvshow":
+        rows = overlay_page_watch_fields(rows, db)
 
     prepared, enrichment_refs, prepare_skipped = paint_rows_fast_or_prepare(
         rows, media_type, db, profile=profile

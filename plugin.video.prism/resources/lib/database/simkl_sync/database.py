@@ -2395,9 +2395,56 @@ class SimklSyncDatabase(Database):
                 return "anime"
         return "tv"
 
+    def _catalog_from_catalog_items(self, show_id: int) -> str | None:
+        """Browse/search stores the list catalog on catalog_items; trust it over sparse show rows."""
+        from resources.lib.discover.catalog_store import ensure_catalog_tables
+
+        ensure_catalog_tables(self)
+        rows = self.fetchall(
+            """
+            SELECT catalog FROM catalog_items
+            WHERE simkl_id = ? AND catalog IN ('tv', 'anime')
+            """,
+            (int(show_id),),
+        )
+        if not rows:
+            return None
+        catalogs = {str(row.get("catalog") or "") for row in rows}
+        if "anime" in catalogs:
+            return "anime"
+        if "tv" in catalogs:
+            return "tv"
+        return None
+
+    def _anime_tvdb_menu_seasons(self, show_id: int) -> set[int]:
+        from resources.lib.database.simkl_sync.milling import fetch_raw_show_episodes
+        from resources.lib.simkl.field_map import anime_menu_season
+
+        slug = self._meta_slug(show_id, "shows")
+        raw_episodes = fetch_raw_show_episodes(int(show_id), "anime", slug=slug)
+        return {anime_menu_season(ep) for ep in raw_episodes if isinstance(ep, dict)}
+
+    def _anime_season_tree_outdated(self, show_id: int) -> bool:
+        """True when local season folders don't match TVDB-menu buckets from /anime/episodes."""
+        if self.show_catalog(int(show_id)) != "anime":
+            return False
+        expected = self._anime_tvdb_menu_seasons(int(show_id))
+        if not expected:
+            return False
+        rows = self.fetchall(
+            "SELECT season FROM seasons WHERE simkl_show_id = ?",
+            (int(show_id),),
+        )
+        local = {int(row["season"]) for row in rows or [] if row.get("season") is not None}
+        return local != expected
+
     def _infer_show_catalog(self, show_id):
         if show_id is None:
             return "tv"
+        sid = int(show_id)
+        from_items = self._catalog_from_catalog_items(sid)
+        if from_items:
+            return from_items
         row = self.fetchone(
             """
             SELECT m.value AS simkl_object, s.info AS show_info
@@ -2405,7 +2452,7 @@ class SimklSyncDatabase(Database):
             LEFT JOIN shows_meta AS m ON m.id = s.simkl_id AND m.type = 'simkl'
             WHERE s.simkl_id = ?
             """,
-            (int(show_id),),
+            (sid,),
         )
         return self._catalog_from_show_row(row)
 
@@ -2518,11 +2565,7 @@ class SimklSyncDatabase(Database):
             item = {}
         if simkl_object(item) is None or simkl_object(item) == {}:
             catalog = {"shows": "tv", "movies": "movie"}.get(media_type, media_type)
-            new_object = self.simkl_api.get_json(
-                api_url,
-                authorized=False,
-                client_id=self.simkl_api.client_id,
-            )
+            new_object = self.simkl_api.get_catalog_json(api_url)
             if not new_object:
                 g.log(f"Simkl meta fetch failed: {api_url}", "warning")
                 return item

@@ -72,7 +72,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         else:
             self.set_list_enrichment_refs([], "movie")
         rows = MetadataHandler.sort_list_items(rows, media_list)
-        return rows
+        return [row for row in (rows or []) if isinstance(row, dict)]
 
     @guard_against_none(list)
     def get_watched_movies(self, page):
@@ -157,8 +157,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
 
         return self.simkl_api.get_json_cached(
             movie_api_path(int(simkl_id)),
-            authorized=False,
-            client_id=self.simkl_api.client_id,
+            catalog=True,
         )
 
     @guard_against_none(list)

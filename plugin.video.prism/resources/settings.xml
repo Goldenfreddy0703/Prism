@@ -292,6 +292,53 @@
 						<heading/>
 					</control>
 				</setting>
+				<setting id="simkl.refresh" type="string" help="">
+					<level>4</level>
+					<default/>
+					<constraints>
+						<allowempty>true</allowempty>
+					</constraints>
+					<control type="edit" format="string">
+						<heading/>
+					</control>
+				</setting>
+				<setting id="simkl.token_expires" type="string" help="">
+					<level>4</level>
+					<default>0</default>
+					<control type="edit" format="string">
+						<heading/>
+					</control>
+				</setting>
+				<setting id="simkl.user_id" type="string" help="">
+					<level>4</level>
+					<default/>
+					<constraints>
+						<allowempty>true</allowempty>
+					</constraints>
+					<control type="edit" format="string">
+						<heading/>
+					</control>
+				</setting>
+				<setting id="simkl.scope" type="string" help="">
+					<level>4</level>
+					<default/>
+					<constraints>
+						<allowempty>true</allowempty>
+					</constraints>
+					<control type="edit" format="string">
+						<heading/>
+					</control>
+				</setting>
+				<setting id="simkl.auth_version" type="string" help="">
+					<level>4</level>
+					<default/>
+					<constraints>
+						<allowempty>true</allowempty>
+					</constraints>
+					<control type="edit" format="string">
+						<heading/>
+					</control>
+				</setting>
 				<setting id="simkl.activities" type="string" help="">
 					<level>4</level>
 					<default>{}</default>
@@ -3584,6 +3631,16 @@
 					</constraints>
 					<control type="edit" format="string">
 						<heading>30145</heading>
+					</control>
+				</setting>
+				<setting id="simkl.public_client_id" type="string" help="">
+					<level>4</level>
+					<default/>
+					<constraints>
+						<allowempty>true</allowempty>
+					</constraints>
+					<control type="edit" format="string">
+						<heading/>
 					</control>
 				</setting>
 				<setting id="tmdb.apikey" type="string" label="30144" help="">

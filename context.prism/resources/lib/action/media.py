@@ -4,7 +4,6 @@ from urllib.parse import urlencode
 
 from resources.lib.action import ContextAction
 from resources.lib.action import PRISM_ADDON_ID
-from resources.lib.tools import get_query_params
 from resources.lib.tools import url_quoted_action_args
 
 
@@ -40,11 +39,6 @@ class SourceSelect(ContextMediaAction):
 class RescrapeItem(SourceSelect):
     def __init__(self):
         super().__init__(reload="true", source_select="false")
-        self.action_query = get_query_params(self.action_path).get("action")
-
-    @property
-    def action(self):
-        return self.action_query
 
 
 class RescrapeAndSourceSelect(SourceSelect):

@@ -18,7 +18,10 @@ _SETTING_API_KEYS = {
 }
 _SETTING_CLIENT_IDS = {
     "Simkl": "simkl.client_id",
+    "Simkl-Public": "simkl.public_client_id",
 }
+
+SIMKL_PUBLIC_API_NAME = "Simkl-Public"
 
 
 def _info_db_path() -> str:

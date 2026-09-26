@@ -90,6 +90,51 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
     @guard_against_none()
     def _update_shows_statistics_from_show_id(self, simkl_show_id):
         self._refresh_show_and_season_statistics(simkl_show_id)
+        self._sync_show_watch_counters_from_episodes(int(simkl_show_id))
+
+    def _sync_show_watch_counters_from_episodes(self, simkl_show_id: int) -> None:
+        """Write shows.watched/unwatched from episode rows (local edits); keep Simkl summary only when eps are still unwatched."""
+        totals = self._episode_aired_watch_totals_for_shows([int(simkl_show_id)])
+        stats = totals.get(int(simkl_show_id))
+        if not stats or int(stats.get("aired") or 0) <= 0:
+            return
+        aired = int(stats["aired"])
+        watched = int(stats.get("watched") or 0)
+        row = self.fetchone(
+            "SELECT episode_count, watched_episodes, unwatched_episodes FROM shows WHERE simkl_id=?",
+            (int(simkl_show_id),),
+        ) or {}
+        try:
+            sync_watched = int(row.get("watched_episodes") or 0)
+            sync_unwatched = row.get("unwatched_episodes")
+            sync_unwatched = int(sync_unwatched) if sync_unwatched is not None else None
+        except (TypeError, ValueError):
+            sync_watched = 0
+            sync_unwatched = None
+        if (
+            watched == 0
+            and sync_watched > 0
+            and sync_unwatched is not None
+            and sync_unwatched == 0
+            and sync_watched >= aired - 1
+        ):
+            watched = sync_watched
+        unwatched = max(0, aired - watched)
+        try:
+            stored_aired = int(row.get("episode_count") or 0)
+        except (TypeError, ValueError):
+            stored_aired = 0
+        aired = max(aired, stored_aired)
+        self.execute_sql(
+            """
+            UPDATE shows
+            SET episode_count = ?,
+                watched_episodes = ?,
+                unwatched_episodes = ?
+            WHERE simkl_id = ?
+            """,
+            (aired, watched, unwatched, int(simkl_show_id)),
+        )
 
     @guard_against_none()
     def mark_show_watched(self, show_id, watched):
@@ -360,9 +405,142 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 totals[int(row["id"])] = count
         return totals
 
+    def _episode_aired_watch_totals_for_shows(self, show_ids: list[int]) -> dict[int, dict[str, int]]:
+        """Per-show aired episode and watched counts from sync DB episode rows."""
+        if not show_ids:
+            return {}
+        ids_sql = ",".join(str(int(sid)) for sid in show_ids)
+        aired_cutoff = self._get_aired_cutoff()
+        rows = self.fetchall(
+            f"""
+            SELECT simkl_show_id,
+                   SUM(
+                       CASE
+                           WHEN air_date IS NULL OR Datetime(air_date) < Datetime('{aired_cutoff}')
+                               THEN 1
+                           ELSE 0
+                       END
+                   ) AS aired_total,
+                   SUM(
+                       CASE
+                           WHEN COALESCE(watched, 0) > 0
+                               AND (air_date IS NULL OR Datetime(air_date) < Datetime('{aired_cutoff}'))
+                               THEN 1
+                           ELSE 0
+                       END
+                   ) AS watched_total
+            FROM episodes
+            WHERE simkl_show_id IN ({ids_sql}) AND season > 0
+            GROUP BY simkl_show_id
+            """
+        ) or []
+        out: dict[int, dict[str, int]] = {}
+        for row in rows:
+            if row.get("simkl_show_id") is None:
+                continue
+            sid = int(row["simkl_show_id"])
+            aired = int(row.get("aired_total") or 0)
+            watched = int(row.get("watched_total") or 0)
+            if aired > 0:
+                out[sid] = {"aired": aired, "watched": watched}
+        return out
+
+    @staticmethod
+    def _expected_aired_episode_total(
+        sid: int,
+        row: dict,
+        info: dict,
+        *,
+        season_totals: dict[int, int],
+        meta_totals: dict[int, int],
+        effective: int,
+    ) -> int:
+        try:
+            sync_aired = int(row.get("episode_count") or 0)
+        except (TypeError, ValueError):
+            sync_aired = 0
+        season_aired = int(season_totals.get(sid, 0) or 0)
+        meta_aired = int(meta_totals.get(sid, 0) or 0)
+        return max(sync_aired, season_aired, meta_aired, int(effective or 0))
+
+    @staticmethod
+    def _episode_counters_trustworthy(ep_aired: int, expected_aired: int) -> bool:
+        if ep_aired <= 0:
+            return False
+        if expected_aired <= 0:
+            return True
+        return ep_aired >= expected_aired or ep_aired >= expected_aired - 1
+
+    @staticmethod
+    def _episode_watch_flags_lag_simkl_sync(
+        row: dict,
+        info: dict,
+        ep_watched: int,
+        ep_aired: int,
+    ) -> bool:
+        """Episode rows exist but per-episode watched flags are not synced yet (Simkl summary is ahead)."""
+        try:
+            sync_aired = int(row.get("episode_count") or 0)
+            sync_watched = int(row.get("watched_episodes") or 0)
+        except (TypeError, ValueError):
+            sync_aired = 0
+            sync_watched = 0
+        if isinstance(info, dict):
+            try:
+                sync_aired = max(
+                    sync_aired,
+                    int(info.get("aired_episodes") or info.get("episode_count") or 0),
+                )
+                sync_watched = max(sync_watched, int(info.get("watched_episodes_count") or 0))
+            except (TypeError, ValueError):
+                pass
+        if sync_aired <= 0:
+            return False
+        if sync_watched <= ep_watched:
+            return False
+        if ep_watched == 0 and sync_watched > 0:
+            return True
+        try:
+            sync_unwatched = row.get("unwatched_episodes")
+            if sync_unwatched is None and isinstance(info, dict):
+                sync_unwatched = info.get("unwatched_episodes")
+            if sync_unwatched is not None and int(sync_unwatched) == 0 and ep_watched < sync_watched:
+                return True
+        except (TypeError, ValueError):
+            pass
+        return False
+
+    def _apply_simkl_sync_show_counters(self, row: dict, info: dict) -> bool:
+        """Use shows-table totals from Simkl all-items sync when episode rows are missing or partial."""
+        try:
+            aired = int(row.get("episode_count") or 0)
+            watched = int(row.get("watched_episodes") or 0)
+        except (TypeError, ValueError):
+            return False
+        if aired <= 0:
+            return False
+        unwatched_raw = row.get("unwatched_episodes")
+        if unwatched_raw is not None:
+            try:
+                unwatched = max(0, int(unwatched_raw))
+            except (TypeError, ValueError):
+                unwatched = max(0, aired - watched)
+        else:
+            unwatched = max(0, aired - watched)
+        row["episode_count"] = aired
+        row["watched_episodes"] = watched
+        row["unwatched_episodes"] = unwatched
+        info.setdefault("episode_count", aired)
+        info["aired_episodes"] = aired
+        info["watched_episodes_count"] = watched
+        info["unwatched_episodes"] = unwatched
+        info.pop("watch_counters_from_episodes", None)
+        return True
+
     def _enrich_show_episode_counts(self, rows: list[dict] | None) -> list[dict] | None:
         if not rows:
             return rows
+        rows = [row for row in rows if isinstance(row, dict)]
 
         show_ids = [int(row["simkl_id"]) for row in rows if row.get("simkl_id") is not None]
         if not show_ids:
@@ -370,6 +548,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
 
         season_totals = self._season_episode_totals_for_shows(show_ids)
         meta_totals = self._show_meta_episode_totals(show_ids)
+        episode_totals = self._episode_aired_watch_totals_for_shows(show_ids)
 
         for row in rows:
             sid = row.get("simkl_id")
@@ -408,6 +587,40 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             if effective <= 0:
                 continue
 
+            expected_aired = self._expected_aired_episode_total(
+                sid,
+                row,
+                info,
+                season_totals=season_totals,
+                meta_totals=meta_totals,
+                effective=effective,
+            )
+            ep_stats = episode_totals.get(sid)
+            ep_aired = int(ep_stats.get("aired") or 0) if ep_stats else 0
+
+            if ep_aired > 0 and self._episode_counters_trustworthy(ep_aired, expected_aired):
+                aired = ep_aired
+                watched = int(ep_stats.get("watched") or 0)
+                if self._episode_watch_flags_lag_simkl_sync(row, info, watched, ep_aired):
+                    if self._apply_simkl_sync_show_counters(row, info):
+                        continue
+                unwatched = max(0, aired - watched)
+                row["episode_count"] = aired
+                row["watched_episodes"] = watched
+                row["unwatched_episodes"] = unwatched
+                info.setdefault("episode_count", aired)
+                info["aired_episodes"] = aired
+                info["watched_episodes_count"] = watched
+                info["unwatched_episodes"] = unwatched
+                info["watch_counters_from_episodes"] = True
+                continue
+
+            if ep_aired > 0 and self._apply_simkl_sync_show_counters(row, info):
+                continue
+
+            if self._apply_simkl_sync_show_counters(row, info):
+                continue
+
             try:
                 watched = int(row.get("watched_episodes") or 0)
             except (TypeError, ValueError):
@@ -433,7 +646,18 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 not_aired = effective - season_aired
 
             aired = season_aired if season_aired > 0 else airable_episode_count(effective, not_aired)
-            unwatched = max(0, aired - watched)
+            derived_unwatched = max(0, aired - watched)
+            if unwatched is not None:
+                try:
+                    stored_unwatched = max(0, int(unwatched))
+                    if stored_unwatched > 0:
+                        unwatched = stored_unwatched
+                    else:
+                        unwatched = derived_unwatched
+                except (TypeError, ValueError):
+                    unwatched = derived_unwatched
+            else:
+                unwatched = derived_unwatched
             if unwatched == 0 and watched < effective and not_aired > 0:
                 unwatched = airable_unwatched(effective, watched, not_aired)
 
@@ -505,6 +729,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         else:
             self.set_list_enrichment_refs([], "tvshow")
         rows = MetadataHandler.sort_list_items(rows, media_list)
+        rows = [row for row in (rows or []) if isinstance(row, dict)]
         return self._enrich_show_episode_counts(rows)
 
     def _has_season_rows(self, simkl_show_id, *, season=None, simkl_id=None) -> bool:
@@ -642,7 +867,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         return rows
 
     def _enrich_season_watch_counts(self, show_id: int, rows: list[dict] | None) -> list[dict] | None:
-        """Align season watch counters with show-level SimKL totals when local episode flags are empty."""
+        """Align season watch counters from per-episode rows in the sync DB (not show-level spreading)."""
         if not rows:
             return rows
 
@@ -691,12 +916,10 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             )
         )
         show_effective = 0
-        show_watched = 0
         show_unwatched = 0
         if show_rows and isinstance(show_rows[0], dict):
             show_stub = show_rows[0]
             show_effective = int(show_stub.get("episode_count") or 0)
-            show_watched = int(show_stub.get("watched_episodes") or 0)
             show_unwatched = int(show_stub.get("unwatched_episodes") or 0)
 
         visible: list[dict] = []
@@ -714,12 +937,20 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
 
         visible_ep_sum = 0
         for row in visible:
+            info = row.get("info") if isinstance(row.get("info"), dict) else {}
             try:
-                visible_ep_sum += int(row.get("episode_count") or 0)
+                season_key = int(row.get("season") or info.get("season") or 0)
             except (TypeError, ValueError):
-                pass
+                season_key = 0
+            stats = ep_stats.get(season_key, {"total": 0})
+            try:
+                ep_total = int(row.get("episode_count") or 0)
+            except (TypeError, ValueError):
+                ep_total = 0
+            if ep_total <= 0:
+                ep_total = int(stats.get("total") or 0)
+            visible_ep_sum += ep_total
 
-        allocated_watched = 0
         for visible_idx, row in enumerate(visible):
             info = row.get("info")
             if not isinstance(info, dict):
@@ -741,15 +972,8 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             if stats["watched"] > watched:
                 watched = stats["watched"]
 
-            if stats["watched"] == 0 and watched == 0 and show_watched > 0 and ep_count > 0:
-                if len(visible) == 1:
-                    watched = min(ep_count, show_watched)
-                elif visible_ep_sum > 0:
-                    if visible_idx == len(visible) - 1:
-                        watched = min(ep_count, max(0, show_watched - allocated_watched))
-                    else:
-                        watched = min(ep_count, (show_watched * ep_count) // visible_ep_sum)
-                allocated_watched += watched
+            # Never spread show-level watched totals onto seasons that have per-episode data.
+            # (Previously the last season absorbed the remainder → false "fully watched" seasons.)
 
             unwatched = row.get("unwatched_episodes")
             if unwatched is None:
@@ -1725,6 +1949,9 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         season_row_id=None,
     ) -> bool:
         """True when season folder rows are missing or unformatted (no episode mill)."""
+        if season_num is None and season_row_id is None:
+            if self._anime_season_tree_outdated(simkl_show_id):
+                return True
         if not self._has_season_rows(
             simkl_show_id,
             season=season_num,
@@ -1763,6 +1990,8 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             mill_episodes=False,
             skip_provider_episode_updates=True,
         )
+        if self.show_catalog(int(simkl_show_id)) == "anime":
+            self.prune_orphan_anime_seasons(int(simkl_show_id))
         return True
 
     def _mill_season_filter(

@@ -351,6 +351,50 @@ def record_library_sync_watermark(db=None, catalog: str | None = None) -> None:
         )
 
 
+def _attach_library_watch_fields(items: list[dict], full_rows: list[dict]) -> list[dict]:
+    """Keep Simkl sync watch counters on library SyncRows (rows_to_sync_items drops them)."""
+    by_id = {
+        int(row["simkl_id"]): row
+        for row in full_rows
+        if isinstance(row, dict) and row.get("simkl_id") is not None
+    }
+    if not by_id:
+        return items
+    watch_keys = ("episode_count", "watched_episodes", "unwatched_episodes")
+    info_watch_keys = (
+        "episode_count",
+        "aired_episodes",
+        "watched_episodes_count",
+        "unwatched_episodes",
+        "not_aired_episodes_count",
+        "watch_counters_from_episodes",
+    )
+    merged_items: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict) or item.get("simkl_id") is None:
+            merged_items.append(item)
+            continue
+        full = by_id.get(int(item["simkl_id"]))
+        if not full:
+            merged_items.append(item)
+            continue
+        merged = dict(item)
+        for key in watch_keys:
+            if full.get(key) is not None:
+                merged[key] = full[key]
+        finfo = full.get("info") if isinstance(full.get("info"), dict) else {}
+        simkl_object = merged.get("simkl_object")
+        if isinstance(simkl_object, dict) and isinstance(simkl_object.get("info"), dict) and finfo:
+            info = dict(simkl_object["info"])
+            for key in info_watch_keys:
+                if finfo.get(key) is not None:
+                    info[key] = finfo[key]
+            simkl_object["info"] = info
+            merged["simkl_object"] = simkl_object
+        merged_items.append(merged)
+    return merged_items
+
+
 def library_status_items_from_db(catalog: str, status: str) -> list[dict]:
     """Load sorted library SyncRows from simkl_sync for one status bucket."""
     from resources.lib.meta.list_paint import rows_to_sync_items
@@ -366,6 +410,7 @@ def library_status_items_from_db(catalog: str, status: str) -> list[dict]:
         return []
     rows = sync_db_rows_for_refs(catalog, refs)
     items = rows_to_sync_items(rows, catalog) or list(rows)
+    items = _attach_library_watch_fields(items, rows)
     order = {int(ref["simkl_id"]): idx for idx, ref in enumerate(refs) if ref.get("simkl_id") is not None}
     items = [row for row in items if isinstance(row, dict) and row.get("simkl_id") is not None]
     items.sort(key=lambda row: order.get(int(row["simkl_id"]), 10**9))

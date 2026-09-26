@@ -1380,6 +1380,9 @@ class ListBuilder:
             ensure_episode_title(info)
             name = info.get("title") or item.get("name")
 
+        if library_status and info.get("mediatype") in ("tvshow", "movie"):
+            info["library_list_status"] = library_status
+
         if info.get("mediatype") == "tvshow":
             from resources.lib.simkl.watch_counters import apply_show_watch_fields
 

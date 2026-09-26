@@ -83,6 +83,16 @@ class PaginatedListStore:
         _ITEMS_RAM_CACHE[key] = (time.time(), list(sync_items))
         return sync_items
 
+    def forget_items(self, catalog: str, list_id: str | None = None) -> None:
+        """Drop cached list payloads so the next open reloads from sync DB."""
+        if list_id is not None:
+            _ITEMS_RAM_CACHE.pop(self._key(catalog, list_id), None)
+            return
+        prefix = (self.namespace, catalog)
+        for key in list(_ITEMS_RAM_CACHE.keys()):
+            if key[:2] == prefix:
+                _ITEMS_RAM_CACHE.pop(key, None)
+
     def load_page_items(
         self,
         catalog: str,

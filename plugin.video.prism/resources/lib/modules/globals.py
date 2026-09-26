@@ -1636,13 +1636,16 @@ class GlobalVariables:
             ep_count = int(menu_item["episode_count"])
             watched_eps = int(menu_item.get("watched_episodes") or 0)
             unwatched_eps = menu_item.get("unwatched_episodes")
-            if is_caught_up(
+            # Aired-only caught up: full watched indicator when every aired episode is watched
+            # (including shows still in Simkl "Watching" while the series is ongoing).
+            caught_up = is_caught_up(
                 watched_eps,
                 total_for_watch_math(menu_item, info) or ep_count,
                 not_aired=not_aired_count(info),
                 unwatched=unwatched_eps,
                 aired_episode_count=ep_count,
-            ):
+            )
+            if caught_up:
                 if mediatype == "season" and ep_count <= 1:
                     info["playcount"] = 0
                 else:

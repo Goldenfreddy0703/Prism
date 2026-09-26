@@ -174,6 +174,12 @@ SIMKL_GENRE_SLUGS = {
 
 ADULT_BLOCKED_SIMKL_GENRE_SLUGS = frozenset({"erotica"})
 
+# Simkl genre browse wildcards (``all`` in docs; API expects these literal segments).
+SIMKL_GENRE_ALL_TYPES = "all-types"
+SIMKL_GENRE_ALL_COUNTRIES = "all-countries"
+SIMKL_GENRE_ALL_NETWORKS = "all-networks"
+SIMKL_GENRE_ALL_YEARS = "all-years"
+
 TENRAI_ANIME_GENRE_BUCKET_FILTERS = ("genres",)
 TENRAI_ANIME_TAG_BUCKET_FILTERS = ("themes", "demographics")
 TENRAI_ANIME_EXPLICIT_GENRE_FILTER = "explicit_genres"
@@ -279,6 +285,24 @@ def _simkl_genre_row_to_sync(row: dict, catalog: str) -> dict | None:
     return normalized
 
 
+def _simkl_genre_browse_path(catalog: str, genre_slug: str, sort: str) -> str:
+    """Build Simkl genre browse path with documented wildcard segment names."""
+    if catalog == "movie":
+        return (
+            f"/movies/genres/{genre_slug}/movies/"
+            f"{SIMKL_GENRE_ALL_TYPES}/{SIMKL_GENRE_ALL_COUNTRIES}/{SIMKL_GENRE_ALL_YEARS}/{sort}"
+        )
+    if catalog == "anime":
+        return (
+            f"/anime/genres/{genre_slug}/"
+            f"{SIMKL_GENRE_ALL_TYPES}/{SIMKL_GENRE_ALL_NETWORKS}/{SIMKL_GENRE_ALL_YEARS}/{sort}"
+        )
+    return (
+        f"/tv/genres/{genre_slug}/"
+        f"{SIMKL_GENRE_ALL_TYPES}/{SIMKL_GENRE_ALL_COUNTRIES}/{SIMKL_GENRE_ALL_YEARS}/{sort}"
+    )
+
+
 def _simkl_genre_browse_page(
     catalog: str,
     genre_slug: str,
@@ -289,20 +313,13 @@ def _simkl_genre_browse_page(
 
     sort = genre_sort_segment(catalog)
     api = SimklAPI()
-    if catalog == "movie":
-        path = f"/movies/genres/{genre_slug}/movies/all/all/{sort}"
-    elif catalog == "anime":
-        path = f"/anime/genres/{genre_slug}/all/all/all/{sort}"
-    else:
-        path = f"/tv/genres/{genre_slug}/all/all/all/all/{sort}"
+    path = _simkl_genre_browse_path(catalog, genre_slug, sort)
 
     request_limit = min(page_limit, 60)
-    payload, pagination = api.get_json_with_pagination(
+    payload, pagination = api.get_public_json_with_pagination(
         path,
         page=page,
         limit=request_limit,
-        authorized=False,
-        client_id=api.client_id,
     )
     if payload is None:
         return GenreBrowsePage([], False)
@@ -816,10 +833,8 @@ def _simkl_search_id_match(tmdb_id: int, catalog: str) -> tuple[int, str] | None
     """Resolve TMDB id via GET /search/id; return (simkl_id, catalog) or None."""
     api = SimklAPI()
     lookup_type = "movie" if catalog == "movie" else "tv"
-    payload = api.get_json(
+    payload = api.get_public_json(
         "/search/id",
-        authorized=False,
-        client_id=api.client_id,
         tmdb=int(tmdb_id),
         type=lookup_type,
     )
@@ -1013,10 +1028,8 @@ def combined_credits_by_person(person_id: int, page: int, page_limit: int) -> li
 def _simkl_search_mal_match(mal_id: int) -> tuple[int, str] | None:
     """Resolve MAL id via GET /search/id; return (simkl_id, catalog) or None."""
     api = SimklAPI()
-    payload = api.get_json(
+    payload = api.get_public_json(
         "/search/id",
-        authorized=False,
-        client_id=api.client_id,
         mal=int(mal_id),
         type="anime",
     )
@@ -1121,7 +1134,7 @@ def discover_by_year(catalog: str, year: int, page: int, page_limit: int) -> lis
 def airing_episodes(date: str = "today") -> list[dict]:
     """Return mixed-episode shaped rows from Simkl /tv/airing."""
     api = SimklAPI()
-    rows = api.get_json("/tv/airing", authorized=False, client_id=api.client_id, date=date, sort="time")
+    rows = api.get_catalog_json("/tv/airing", date=date, sort="time")
     if not rows:
         return []
 

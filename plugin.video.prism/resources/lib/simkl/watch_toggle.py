@@ -23,6 +23,10 @@ def finish_library_action(item_information: dict, *, refresh_container: bool = T
     info = _library_info(item_information)
     hub_catalog = library_hub_catalog(info)
     mark_library_catalog_verified(hub_catalog)
+    if hub_catalog in ("tv", "anime", "movie"):
+        from resources.lib.meta.list_pipeline import get_list_store
+
+        get_list_store("library").forget_items(hub_catalog if hub_catalog != "movie" else "movie")
     if info.get("simkl_id") is not None:
         clear_session_page_paint_for_item(int(info["simkl_id"]), info.get("mediatype"))
         if (info.get("mediatype") or "").lower() in ("movie", "movies"):
@@ -59,9 +63,17 @@ def _remove_success(response, key: str) -> bool:
     if not response:
         return False
     deleted = response.get("deleted") or response.get("removed") or {}
+    if not isinstance(deleted, dict):
+        return False
     if isinstance(deleted.get(key), int) and deleted[key] > 0:
         return True
-    return bool(deleted)
+    for bucket in ("episodes", "shows", "movies", "anime"):
+        val = deleted.get(bucket)
+        if isinstance(val, int) and val > 0:
+            return True
+        if isinstance(val, list) and val:
+            return True
+    return False
 
 
 def _get_show_id(item_information: dict) -> int | None:

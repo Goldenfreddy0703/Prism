@@ -323,7 +323,6 @@ def _fetch_search_page_uncached(
     simkl_type = _SEARCH_SIMKL_TYPE.get(catalog, "tv")
     api = SimklAPI()
     params: dict[str, Any] = {
-        "client_id": api.client_id,
         "q": query,
         "page": page,
         "limit": page_limit,
@@ -331,11 +330,7 @@ def _fetch_search_page_uncached(
     }
     if exact:
         params["exact"] = "true"
-    results = api.get_json(
-        f"/search/{simkl_type}",
-        authorized=False,
-        **params,
-    )
+    results = api.get_public_json(f"/search/{simkl_type}", **params)
     if not results:
         return []
 

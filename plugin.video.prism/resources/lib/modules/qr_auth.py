@@ -114,11 +114,18 @@ def wait_auth_interval(seconds: int, progress) -> bool:
     return not progress.iscanceled()
 
 
-def open_auth_dialog(heading: str, verification_url: str, user_code: str | None = None, percent: int = 100):
+def open_auth_dialog(
+    heading: str,
+    verification_url: str,
+    user_code: str | None = None,
+    percent: int = 100,
+    *,
+    qr_url: str | None = None,
+):
     from resources.lib.database.skinManager import SkinManager
     from resources.lib.gui.windows.auth_progress import AuthProgressDialog
 
-    qr_path = generate_qr_png(verification_url)
+    qr_path = generate_qr_png(qr_url or verification_url)
     dialog = AuthProgressDialog(
         *SkinManager().confirm_skin_path("auth_progress.xml"),
         heading=heading,

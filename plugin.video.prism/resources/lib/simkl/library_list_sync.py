@@ -319,6 +319,11 @@ def prepare_library_browse_page(catalog: str, items: list[dict]) -> list[dict]:
             for row in hydrated
         ]
 
+    if catalog != "movie":
+        from resources.lib.meta.paint_cache import overlay_page_watch_fields
+
+        hydrated = overlay_page_watch_fields(hydrated)
+
     return seed_browse_page(catalog, hydrated)
 
 

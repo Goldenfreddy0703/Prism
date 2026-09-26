@@ -28,6 +28,7 @@ def is_caught_up(
     unwatched: int | None = None,
     aired_episode_count: int | None = None,
 ) -> bool:
+    """True when the user has watched all aired episodes (Simkl caught-up, not Completed-list)."""
     if aired_episode_count is not None:
         aired = _int_or(aired_episode_count)
     else:
@@ -38,7 +39,8 @@ def is_caught_up(
         return True
     if unwatched is not None:
         try:
-            return int(unwatched) <= 0
+            # Do not treat unwatched=0 alone as caught up when watched < aired (stale show totals).
+            return int(unwatched) <= 0 and int(watched) >= aired
         except (TypeError, ValueError):
             pass
     return False
@@ -65,6 +67,24 @@ def total_for_watch_math(item: dict, info: dict) -> int:
 
 def apply_show_watch_fields(item: dict, info: dict, *, aired_episode_count: int | None = None) -> None:
     """Normalize tvshow counters for Kodi skins (aired-only totals)."""
+    if info.get("watch_counters_from_episodes"):
+        aired = _int_or(item.get("episode_count"), _int_or(info.get("aired_episodes")))
+        watched = _int_or(item.get("watched_episodes"), _int_or(info.get("watched_episodes_count")))
+        unwatched = item.get("unwatched_episodes")
+        if unwatched is None:
+            unwatched = info.get("unwatched_episodes")
+        unwatched = max(0, _int_or(unwatched, max(0, aired - watched)))
+        if aired <= 0:
+            return
+        item["episode_count"] = aired
+        item["watched_episodes"] = watched
+        item["unwatched_episodes"] = unwatched
+        info["episode_count"] = aired
+        info["aired_episodes"] = aired
+        info["watched_episodes_count"] = watched
+        info["unwatched_episodes"] = unwatched
+        return
+
     total = total_for_watch_math(item, info)
     watched = _int_or(item.get("watched_episodes"), _int_or(info.get("watched_episodes_count")))
     not_aired = not_aired_count(info)

@@ -60,7 +60,6 @@ def _fetch_detail(catalog: str, simkl_id: int, *, prefer_anime: bool = False) ->
     from resources.lib.simkl.ids import anime_api_path, movie_api_path, show_api_path
 
     api = SimklAPI()
-    params = {"client_id": api.client_id}
     paths = []
     if catalog == "movie":
         paths.append(movie_api_path(simkl_id))
@@ -72,7 +71,7 @@ def _fetch_detail(catalog: str, simkl_id: int, *, prefer_anime: bool = False) ->
         paths.append(anime_api_path(simkl_id))
 
     for path in paths:
-        data = api.get_json(path, authorized=False, **params)
+        data = api.get_catalog_json(path)
         if isinstance(data, dict) and not data.get("error"):
             return data
     return None

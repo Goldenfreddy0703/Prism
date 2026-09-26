@@ -575,6 +575,9 @@ def _reconcile_show_watch_entry(
 
 def refresh_show_episode_watch_state(db: "SimklSyncDatabase", simkl_show_id: int, *, force: bool = False) -> bool:
     """Validate per-show watch state against Simkl; reconcile only when local data drifted."""
+    if not db.simkl_api.is_authenticated():
+        return False
+
     show_id = int(simkl_show_id)
     row = db.fetchone(
         "SELECT simkl_status, watched_episodes, episode_count FROM shows WHERE simkl_id=?",
