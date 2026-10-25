@@ -201,10 +201,16 @@ class ImdbAPI:
             return None
         self._wait_rate_limit()
         payload = json.dumps(body)
+        from resources.lib.net.sync_bridge import sync_http_request
+
         with _graphql_lock:
             try:
-                response = self.session.post(
+                response = sync_http_request(
+                    "imdb",
+                    "POST",
                     GRAPHQL_URL,
+                    kind="graphql",
+                    session=self.session,
                     data=payload,
                     headers=_auth_headers(),
                     cookies=_auth_cookies(),
@@ -212,6 +218,8 @@ class ImdbAPI:
                 )
             except Exception:
                 g.log_stacktrace()
+                return None
+            if response is None:
                 return None
         if response.status_code == 429:
             self._set_rate_limit(15.0)

@@ -48,22 +48,27 @@ def insert_discover_page(
         upsert_sync_items(items, catalog_hint=catalog)
         return simkl_refs(items)
 
-    movies = [i for i in items if i.get("catalog") == "movie"]
-    shows = [i for i in items if i.get("catalog") in ("tv", "anime")]
-
     from resources.lib.database.session import get_sync_database
+    from resources.lib.simkl.media_ref import partition_by_catalog
+
+    movie_rows, tv_rows, anime_rows = partition_by_catalog(items)
+    serial_rows = tv_rows + anime_rows
 
     db = get_sync_database()
-    if movies:
-        db.insert_simkl_movies(movies, force_meta=force_simkl_meta)
+    if movie_rows:
+        db.insert_simkl_movies(movie_rows, force_meta=force_simkl_meta)
 
-    if shows:
-        db.insert_simkl_shows(shows, force_meta=force_simkl_meta)
+    if serial_rows:
+        db.insert_simkl_shows(serial_rows, force_meta=force_simkl_meta)
 
     upsert_sync_items(items, catalog_hint=catalog)
 
-    if catalog == "anime" and movies:
-        g.log(f"Discover anime page: {len(movies)} movie(s), {len(shows)} series", "debug")
+    if catalog == "anime" and (movie_rows or anime_rows):
+        g.log(
+            f"Discover anime page: {len(movie_rows)} live-action movie(s), "
+            f"{len(anime_rows)} anime title(s), {len(tv_rows)} tv",
+            "debug",
+        )
 
     # Preserve discovery order (Tenrai/TMDB/Simkl page order). Do not group movies before shows.
     return simkl_refs(items)

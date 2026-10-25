@@ -368,10 +368,11 @@ class KodiMyVideosReadConnection(_connection):
 
 
 class SQLiteConnection(_connection):
-    def __init__(self, path, max_lock_retries=50):
+    def __init__(self, path, max_lock_retries=50, *, log_lock_failures=True):
         super().__init__()
         self.path = path
         self.max_lock_retries = max_lock_retries
+        self.log_lock_failures = log_lock_failures
         self._create_db_path()
 
     def _create_connection(self):
@@ -409,7 +410,8 @@ class SQLiteConnection(_connection):
                 break
             retries += 1
 
-        g.log(f"Unable to connect to database '{self.path}' after {retries} attempts: {exception}", "error")
+        if self.log_lock_failures:
+            g.log(f"Unable to connect to database '{self.path}' after {retries} attempts: {exception}", "error")
         if exception is not None:
             raise exception
         raise last_lock_error or sqlite3.OperationalError(  # pylint: disable=no-member
@@ -420,10 +422,11 @@ class SQLiteConnection(_connection):
         if isinstance(exception, sqlite3.OperationalError) and (  # pylint: disable=no-member
             "database is locked" in str(exception) or "unable to open database" in str(exception)
         ):
-            g.log(
-                f"database is locked waiting: {self.path}",
-                "debug",
-            )
+            if self.log_lock_failures:
+                g.log(
+                    f"database is locked waiting: {self.path}",
+                    "debug",
+                )
             g.wait_for_abort(0.1)
         else:
             super()._retry_handler(exception)
@@ -440,9 +443,15 @@ class SQLiteConnection(_connection):
         }
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA page_size = 32768")  # no-translate
-        # Match POV/Fenom: OFF journal avoids WAL side-files and SMB edge cases.
-        connection.execute("PRAGMA journal_mode = OFF")
-        connection.execute("PRAGMA synchronous = OFF")
+        from resources.lib.modules.globals import g
+
+        if g.get_bool_setting("general.db.wal_mode", False):
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = NORMAL")
+        else:
+            # Default OFF avoids WAL side-files and SMB edge cases.
+            connection.execute("PRAGMA journal_mode = OFF")
+            connection.execute("PRAGMA synchronous = OFF")
         connection.execute("PRAGMA temp_store = memory")
         connection.execute("PRAGMA mmap_size = 268435456")
         connection.execute("PRAGMA busy_timeout = 15000")

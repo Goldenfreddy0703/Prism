@@ -78,18 +78,27 @@ def page_refs_display_stamped(refs: list[dict[str, Any]]) -> bool:
         for ref in refs
         if isinstance(ref, dict) and ref.get("simkl_id") is not None and ref.get("catalog") == "movie"
     ]
-    show_ids = [
+    tv_ids = [
         int(ref["simkl_id"])
         for ref in refs
-        if isinstance(ref, dict) and ref.get("simkl_id") is not None and ref.get("catalog") in ("tv", "anime")
+        if isinstance(ref, dict) and ref.get("simkl_id") is not None and ref.get("catalog") == "tv"
+    ]
+    anime_ids = [
+        int(ref["simkl_id"])
+        for ref in refs
+        if isinstance(ref, dict) and ref.get("simkl_id") is not None and ref.get("catalog") == "anime"
     ]
     if movie_ids:
         hits = store.get_batch("movie", movie_ids)
         if not all(row_has_trusted_paint_stamp(hits.get(sid)) for sid in movie_ids):
             return False
-    if show_ids:
-        hits = store.get_batch("show", show_ids)
-        if not all(row_has_trusted_paint_stamp(hits.get(sid)) for sid in show_ids):
+    if tv_ids:
+        hits = store.get_batch("show", tv_ids, catalog="tv")
+        if not all(row_has_trusted_paint_stamp(hits.get(sid)) for sid in tv_ids):
+            return False
+    if anime_ids:
+        hits = store.get_batch("anime", anime_ids, catalog="anime")
+        if not all(row_has_trusted_paint_stamp(hits.get(sid)) for sid in anime_ids):
             return False
     return True
 

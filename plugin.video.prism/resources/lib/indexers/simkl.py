@@ -269,17 +269,25 @@ class SimklAPI:
         if send_bearer and retry_auth:
             self.try_refresh_token()
 
-        request = getattr(self.session, method)
-        response = request(
-            parse.urljoin(self.ApiUrl, url),
+        from resources.lib.net.sync_bridge import sync_http_request
+
+        full_url = parse.urljoin(self.ApiUrl, url)
+        timeout = kwargs.pop("timeout", 15)
+        response = sync_http_request(
+            "simkl",
+            method,
+            full_url,
+            session=self.session,
             params=params,
             headers=headers,
+            timeout=timeout,
             **kwargs,
         )
 
         if (
             retry_auth
             and send_bearer
+            and response is not None
             and self._should_retry_authorized(response)
             and self.try_refresh_token(force=True)
         ):
@@ -288,12 +296,20 @@ class SimklAPI:
                 api_key=api_key,
                 api_key_client_id=api_key_client_id,
             )
-            response = request(
-                parse.urljoin(self.ApiUrl, url),
+            response = sync_http_request(
+                "simkl",
+                method,
+                full_url,
+                kind=f"{method}_retry",
+                session=self.session,
                 params=params,
                 headers=headers,
+                timeout=timeout,
                 **kwargs,
             )
+
+        if response is None:
+            return None
 
         if response.status_code in (200, 201, 204):
             return response
@@ -419,8 +435,14 @@ class SimklAPI:
         headers = self._build_headers(authorized=authorized, api_key=api_key)
         headers["Content-Type"] = "application/x-www-form-urlencoded"
         try:
-            response = self.session.post(
+            from resources.lib.net.sync_bridge import sync_http_request
+
+            response = sync_http_request(
+                "simkl",
+                "POST",
                 parse.urljoin(self.ApiUrl, url),
+                kind="post_form",
+                session=self.session,
                 data=data,
                 headers=headers,
                 timeout=15,
@@ -449,8 +471,10 @@ class SimklAPI:
         if response is None or not response.text:
             return None
         try:
-            return response.json()
-        except json.JSONDecodeError:
+            from resources.lib.common.json_fast import loads as json_loads
+
+            return json_loads(response.text)
+        except (json.JSONDecodeError, ValueError):
             return None
 
     def get_catalog_json(self, url: str, **params):
@@ -898,9 +922,11 @@ class SimklAPI:
         imdb: str | None = None,
         type: str | None = None,
         tmdb: int | None = None,
+        mal: int | None = None,
+        tvdb: int | None = None,
     ) -> tuple[int, str] | None:
         """Resolve external id via GET /redirect (read Location header, do not follow)."""
-        import re
+        from resources.lib.simkl.id_resolve import parse_simkl_location
 
         params = dict(self._cdn_query())
         params["to"] = "simkl"
@@ -912,9 +938,13 @@ class SimklAPI:
                 params["imdb"] = normalized
         if tmdb is not None:
             params["tmdb"] = int(tmdb)
-        if type in ("movie", "tv"):
-            params["type"] = type
-        if not any(key in params for key in ("imdb", "tmdb")):
+        if mal is not None:
+            params["mal"] = int(mal)
+        if tvdb is not None:
+            params["tvdb"] = int(tvdb)
+        if type in ("movie", "tv", "anime", "show"):
+            params["type"] = "tv" if type == "show" else type
+        if not any(key in params for key in ("imdb", "tmdb", "mal", "tvdb")):
             return None
         try:
             response = self.session.get(
@@ -934,9 +964,4 @@ class SimklAPI:
         if response is None or response.status_code not in (301, 302, 303, 307, 308):
             return None
         location = response.headers.get("Location") or ""
-        match = re.search(r"/(movies|tv|anime)/(\d+)", location)
-        if not match:
-            return None
-        segment, simkl_id = match.group(1), int(match.group(2))
-        catalog = {"movies": "movie", "tv": "tv", "anime": "anime"}.get(segment, "tv")
-        return simkl_id, catalog
+        return parse_simkl_location(location)

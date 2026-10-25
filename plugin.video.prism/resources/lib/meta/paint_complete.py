@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from resources.lib.database.sync_meta_cache import row_has_display_meta
+from resources.lib.database.sync_meta_cache import row_has_display_meta, row_has_plot_meta
 
 _BLOCKING_SCOPE_PROFILES = frozenset({"browse", "related", "airing"})
 
@@ -11,17 +11,49 @@ _LIST_ART_GAP_KEYS = frozenset({"clearlogo", "clearart", "discart", "banner", "l
 _BLOCKING_ART_GAP_KEYS = frozenset({"fanart"})
 
 
+_FAST_OPEN_ART_DEFER_PROFILES = frozenset({"genre", "search", "actor", "library", "browse"})
+# POV-style: logos on first paint; defer fanart/discart/banner (heavy Fanart.tv batch).
+_FAST_OPEN_BLOCKING_ART_KEYS = frozenset({"clearlogo"})
+
+
 def gap_scope_for_profile(profile: str) -> str:
-    """Return gap scope for list paint. Always full so clearlogo/discart paint on menu open."""
-    _ = profile
+    """Return gap scope for list paint (fast-open profiles defer provider art to background)."""
+    lowered = str(profile).lower()
+    if lowered in _FAST_OPEN_ART_DEFER_PROFILES:
+        return lowered
     return "full"
 
 
 def art_gap_keys_for_scope(scope: str) -> frozenset[str]:
     """Art keys eligible for blocking provider HTTP on menu open."""
-    if str(scope).lower() == "blocking":
+    lowered = str(scope).lower()
+    if lowered in _FAST_OPEN_ART_DEFER_PROFILES:
+        return _FAST_OPEN_BLOCKING_ART_KEYS
+    if lowered == "blocking":
         return _BLOCKING_ART_GAP_KEYS
     return _LIST_ART_GAP_KEYS
+
+
+def row_menu_paint_complete(
+    row: dict[str, Any] | None,
+    media_type: str,
+    *,
+    handler=None,
+    art_profile: str | None = None,
+    paint_profile: str = "browse",
+    scope: str | None = None,
+) -> bool:
+    """True when a list row has top-level plot plus cast/art for first-focus paint."""
+    if not row_has_plot_meta(row):
+        return False
+    return row_paint_complete(
+        row,
+        media_type,
+        handler=handler,
+        art_profile=art_profile,
+        paint_profile=paint_profile,
+        scope=scope,
+    )
 
 
 def row_paint_complete(
@@ -36,10 +68,6 @@ def row_paint_complete(
     """True when a movie/show list row needs no provider HTTP for cast or art."""
     if not row_has_display_meta(row):
         return False
-    from resources.lib.meta.paint_stamp import row_has_trusted_paint_stamp
-
-    if row_has_trusted_paint_stamp(row):
-        return True
     if handler is None:
         from resources.lib.modules.metadataHandler import MetadataHandler
 
@@ -59,6 +87,14 @@ def row_paint_complete_drilldown(row: dict[str, Any] | None) -> bool:
         return False
     info = row.get("info") if isinstance(row.get("info"), dict) else {}
     mediatype = (info.get("mediatype") or "").lower()
+    if row.get("season") is not None and mediatype != "episode":
+        season_num = info.get("season", row.get("season"))
+        title = info.get("title")
+        tvshow_title = info.get("tvshowtitle")
+        if title and tvshow_title and str(title).strip() == str(tvshow_title).strip():
+            title = None
+        if mediatype != "season" or not title:
+            return False
     title = info.get("title") or info.get("tvshowtitle")
     if mediatype == "episode":
         if not title:
@@ -103,7 +139,7 @@ def partition_paint_rows(
         if drilldown:
             is_complete = row_paint_complete_drilldown(row)
         else:
-            is_complete = row_paint_complete(
+            is_complete = row_menu_paint_complete(
                 row,
                 media_type,
                 handler=handler,
@@ -117,6 +153,15 @@ def partition_paint_rows(
     return complete, incomplete
 
 
+def rows_page_menu_ready(
+    rows: list[dict[str, Any]],
+    *,
+    profile: str = "browse",
+) -> bool:
+    """True when every row can skip blocking menu finalize (plot + cast + art)."""
+    return rows_page_paint_ready(rows, profile=profile)
+
+
 def rows_page_paint_ready(
     rows: list[dict[str, Any]],
     *,
@@ -126,13 +171,18 @@ def rows_page_paint_ready(
     if not rows:
         return True
     movies = [row for row in rows if isinstance(row, dict) and row.get("catalog") == "movie"]
-    shows = [row for row in rows if isinstance(row, dict) and row.get("catalog") in ("tv", "anime")]
+    tv_rows = [row for row in rows if isinstance(row, dict) and row.get("catalog") == "tv"]
+    anime_rows = [row for row in rows if isinstance(row, dict) and row.get("catalog") == "anime"]
     if movies:
         _complete, incomplete = partition_paint_rows(movies, "movie", profile=profile)
         if incomplete:
             return False
-    if shows:
-        _complete, incomplete = partition_paint_rows(shows, "tvshow", profile=profile)
+    if tv_rows:
+        _complete, incomplete = partition_paint_rows(tv_rows, "tvshow", profile=profile)
+        if incomplete:
+            return False
+    if anime_rows:
+        _complete, incomplete = partition_paint_rows(anime_rows, "anime", profile=profile)
         if incomplete:
             return False
     return True

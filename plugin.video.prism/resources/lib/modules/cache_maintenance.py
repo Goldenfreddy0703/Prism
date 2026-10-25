@@ -297,13 +297,15 @@ def prune_non_library_provider_blobs() -> int:
                 """
                 id IN (
                     SELECT s.tmdb_id FROM shows AS s
-                    WHERE s.tmdb_id IS NOT NULL
+                    WHERE s.catalog IN ('tv', 'anime')
+                      AND s.tmdb_id IS NOT NULL
                       AND COALESCE(s.watched_episodes, 0) = 0
                       AND s.simkl_id NOT IN (SELECT simkl_id FROM bookmarks WHERE simkl_id IS NOT NULL)
                 )
                 OR id IN (
                     SELECT s.tvdb_id FROM shows AS s
-                    WHERE s.tvdb_id IS NOT NULL
+                    WHERE s.catalog IN ('tv', 'anime')
+                      AND s.tvdb_id IS NOT NULL
                       AND COALESCE(s.watched_episodes, 0) = 0
                       AND s.simkl_id NOT IN (SELECT simkl_id FROM bookmarks WHERE simkl_id IS NOT NULL)
                 )

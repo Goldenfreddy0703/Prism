@@ -1,10 +1,14 @@
-"""Build a4kScrapers simple_info fields for anime from Simkl episode/show metadata."""
+"""Anime torrent scraper context for a4kScrapers."""
 from __future__ import annotations
 
 from typing import Any
 
 from resources.lib.discover.normalize import _int_or_none
-from resources.lib.simkl.field_map import tvdb_from_episode
+from resources.lib.simkl.field_map import (
+    anime_menu_episode_number,
+    anime_menu_season,
+    tvdb_from_episode,
+)
 
 
 def is_anime_item(ep_info: dict[str, Any], item_info: dict[str, Any] | None) -> bool:
@@ -78,60 +82,44 @@ def build_anime_simple_info_fields(
             elif flat_key == "simkl_id":
                 value = source.get("simkl_id") or source.get("simkl")
             else:
-                id_key = flat_key.replace("_id", "")
-                value = source.get(flat_key) or source.get(id_key)
+                value = source.get(flat_key)
             if value is not None:
                 break
         if value is not None:
-            if flat_key == "simkl_id":
-                fields[flat_key] = value
-            else:
-                parsed = _int_or_none(value)
-                if parsed is not None:
-                    fields[flat_key] = parsed
-
-    if fields.get("tvdb_id") is not None:
-        fields["thetvdb_id"] = fields["tvdb_id"]
+            fields[flat_key] = value
 
     status = _status_value(ep_info, show_info)
     if status:
         fields["status"] = status
 
-    menu_season = _first_int(ep_info.get("season"))
-    menu_episode = _first_int(ep_info.get("episode"), ep_info.get("number"))
-    anime_season = _first_int(ep_info.get("anime_season"))
-    anime_episode = _first_int(ep_info.get("anime_episode"))
+    duration = ep_info.get("duration") or show_info.get("duration")
+    if duration is not None:
+        fields["duration"] = duration
 
-    tvdb_season = ep_info.get("tvdb_season")
-    if tvdb_season is not None:
-        if int(tvdb_season) == 0:
-            fields["thetvdb_season"] = "0"
-        else:
-            fields["thetvdb_season"] = tvdb_season
+    menu_season = anime_menu_season(ep_info)
+    fallback_ep = _first_int(ep_info.get("episode"), ep_info.get("number"))
+    menu_episode = anime_menu_episode_number(ep_info, menu_season, fallback_ep)
 
-    if anime_season is not None and anime_episode is not None:
-        if menu_season is None:
-            menu_season = anime_season
-        if menu_episode is None:
-            menu_episode = anime_episode
-        if anime_season != menu_season or anime_episode != menu_episode:
-            fields["alternative_season"] = str(anime_season)
-            fields["alternative_episode"] = str(anime_episode)
-
-        if anime_season > 1:
-            tvdb_bucket = _first_int(tvdb_season, menu_season)
-            if tvdb_bucket is not None and anime_season != tvdb_bucket:
-                fields["thetvdb_part"] = anime_season
-
-    # Explicit scrape coordinates for cloud / torrent matchers.
-    tvdb_bucket, tvdb_ep = tvdb_from_episode(ep_info)
-    if tvdb_bucket is not None:
-        fields["tvdb_season_number"] = str(1 if int(tvdb_bucket) == 0 else tvdb_bucket)
-    if tvdb_ep is not None:
-        fields["tvdb_episode_number"] = str(tvdb_ep)
-
-    simkl_episode = _first_int(ep_info.get("anime_episode"), ep_info.get("episode"))
+    simkl_season = _first_int(ep_info.get("season"))
+    simkl_episode = _first_int(ep_info.get("episode"), ep_info.get("number"))
+    if simkl_season is not None:
+        fields["alternative_season"] = str(simkl_season)
     if simkl_episode is not None:
+        fields["alternative_episode"] = str(simkl_episode)
         fields["simkl_episode_number"] = str(simkl_episode)
 
+    tvdb_bucket, tvdb_ep = tvdb_from_episode(ep_info)
+    if tvdb_bucket is not None:
+        fields["thetvdb_season"] = str(tvdb_bucket)
+    if tvdb_ep is not None:
+        fields["thetvdb_part"] = str(tvdb_ep)
+
+    if menu_season is not None and "alternative_season" not in fields:
+        fields["alternative_season"] = str(menu_season)
+    if menu_episode is not None and "alternative_episode" not in fields:
+        fields["alternative_episode"] = str(menu_episode)
+
     return fields
+
+
+__all__ = ["build_anime_simple_info_fields", "is_anime_item"]

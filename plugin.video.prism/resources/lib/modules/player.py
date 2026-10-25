@@ -199,9 +199,7 @@ class PrismPlayer(xbmc.Player):
         if self.item_information.get("resume", "false") == "true":
             self._try_get_bookmark()
 
-        from resources.lib.common import tools
-
-        tools.run_threaded(g.clear_kodi_bookmarks)
+        # Do not clear MyVideos before setResolvedUrl — sync lock retries blocked playback.
         self._handle_bookmark(clear_kodi=False)
         self._add_support_for_external_simkl_scrobbling()
 
@@ -221,6 +219,10 @@ class PrismPlayer(xbmc.Player):
             self._locale_backup = locale_backup
 
             xbmcplugin.setResolvedUrl(g.PLUGIN_HANDLE, True, self._create_list_item(stream_link))
+
+            from resources.lib.common import tools
+
+            tools.run_threaded(g.clear_kodi_bookmarks)
 
             self._keep_alive()
         finally:
@@ -763,6 +765,26 @@ class PrismPlayer(xbmc.Player):
         segments.sort(key=lambda s: (s["start"] if s.get("start") is not None else 0))
         return segments
 
+    def _episode_duration_seconds(self):
+        total = float(self.total_time or 0)
+        if total > 0:
+            return total
+        info = (self.item_information or {}).get("info") or {}
+        return float(info.get("duration") or 0)
+
+    def _credits_segment_is_plausible_outro(self, segment):
+        """IntroDB can return credits at t=0; only treat credits in the latter half as outro."""
+        start = segment.get("start")
+        if start is None:
+            return False
+        total = self._episode_duration_seconds()
+        if total <= 0:
+            return False
+        min_start = max(float(self.ignoreSecondsAtStart), total * 0.5)
+        if float(start) < min_start:
+            return False
+        return True
+
     def _publish_outro_property(self):
         """Expose the credits/outro end time so the Playing Next dialog can offer a Skip Outro button.
 
@@ -774,6 +796,8 @@ class PrismPlayer(xbmc.Player):
         for segment in self.introdb_segments:
             if segment.get("type") != "credits":
                 continue
+            if not self._credits_segment_is_plausible_outro(segment):
+                break
             end = segment.get("end")
             g.HOME_WINDOW.setProperty("prism.outro.end", str(int(end) if end else 0))
             break
@@ -795,10 +819,10 @@ class PrismPlayer(xbmc.Player):
             # If we are already past the segment (e.g. user seeked), don't act.
             if end is not None and current > end:
                 continue
-            self._trigger_introdb_segment(seg_type, end)
+            self._trigger_introdb_segment(seg_type, start, end)
             break
 
-    def _trigger_introdb_segment(self, seg_type, end):
+    def _trigger_introdb_segment(self, seg_type, start, end):
         if not g.get_bool_setting(f"introdb.{seg_type}"):
             return
 
@@ -808,7 +832,10 @@ class PrismPlayer(xbmc.Player):
             and self.dialogs_enabled
             and self._has_next_item()
         ):
-            if not self.dialogs_triggered:
+            plausible = self._credits_segment_is_plausible_outro(
+                {"start": start, "end": end, "type": "credits"}
+            )
+            if plausible and not self.dialogs_triggered:
                 xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=runPlayerDialogs")')
                 self.dialogs_triggered = True
             return

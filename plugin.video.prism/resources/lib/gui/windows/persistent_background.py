@@ -14,3 +14,7 @@ class PersistentBackground(SingleItemWindow):
     def show(self):
         self.setProperty('process_started', 'false')
         super().show()
+
+    def hide(self):
+        """Kodi 21 dialogs have no hide(); close so nested prompts are not covered."""
+        self.close()

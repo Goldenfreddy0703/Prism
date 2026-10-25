@@ -55,6 +55,10 @@ def episode_warm_enabled() -> bool:
     return g.get_bool_setting("simkl.syncEpisodeWarm", True)
 
 
+def episode_warm_uses_raw_endpoint() -> bool:
+    return g.get_bool_setting("simkl.syncEpisodeWarmFast", True)
+
+
 def show_ids_from_payload(payload) -> set[int]:
     ids: set[int] = set()
     if not payload:
@@ -111,11 +115,15 @@ def fetch_catalog_change_ids(db: "SimklSyncDatabase", *, force: bool = False) ->
 
 
 def _show_row(db: "SimklSyncDatabase", simkl_id: int) -> dict | None:
+    from resources.lib.database.simkl_sync.serial_sync import serial_tables
+
+    catalog = db.show_catalog(int(simkl_id))
+    st = serial_tables("anime" if catalog == "anime" else "tv")
     return db.fetchone(
-        """
+        f"""
         SELECT s.simkl_id, m.value AS simkl_object, s.tmdb_id, s.tvdb_id, s.needs_milling
-        FROM shows AS s
-                 LEFT JOIN shows_meta AS m ON m.id = s.simkl_id AND m.type = 'simkl'
+        FROM {st.show} AS s
+                 LEFT JOIN {st.show_meta} AS m ON m.id = s.simkl_id AND m.type = 'simkl'
         WHERE s.simkl_id = ?
         """,
         (int(simkl_id),),
@@ -123,11 +131,15 @@ def _show_row(db: "SimklSyncDatabase", simkl_id: int) -> dict | None:
 
 
 def show_catalog_is_warm(db: "SimklSyncDatabase", simkl_id: int) -> bool:
+    from resources.lib.database.simkl_sync.serial_sync import serial_tables
+
+    catalog = db.show_catalog(int(simkl_id))
+    st = serial_tables("anime" if catalog == "anime" else "tv")
     row = db.fetchone(
-        """
+        f"""
         SELECT 1 AS ok
-        FROM episodes AS e
-                 INNER JOIN episodes_meta AS em ON em.id = e.simkl_id AND em.type = 'simkl'
+        FROM {st.episode} AS e
+                 INNER JOIN {st.episode_meta} AS em ON em.id = e.simkl_id AND em.type = 'simkl'
         WHERE e.simkl_show_id = ?
         LIMIT 1
         """,
@@ -160,26 +172,25 @@ def resolve_warm_targets(
             SELECT simkl_id, watched_episodes, needs_milling
             FROM shows
             WHERE COALESCE(simkl_status, '') = 'watching'
-            """
+              AND catalog = ?
+            """,
+            (catalog,),
         )
         for row in rows or []:
             show_id = row.get("simkl_id")
             if show_id is None:
                 continue
-            if db.show_catalog(int(show_id)) != catalog:
+            sid = int(show_id)
+            if show_catalog_is_warm(db, sid) and not row.get("needs_milling"):
                 continue
-            if not row.get("needs_milling"):
-                continue
-            if int(row.get("watched_episodes") or 0) <= 0:
-                continue
-            watching_candidates.append(int(show_id))
+            watching_candidates.append(sid)
     add(set(watching_candidates[:WATCHING_WARM_CAP]), BUCKET_NEXT_UP)
 
     bookmark_rows = db.fetchall(
         """
-        SELECT DISTINCT e.simkl_show_id AS simkl_id
+        SELECT DISTINCT e.simkl_show_id AS simkl_id, e.catalog AS catalog
         FROM bookmarks AS b
-                 INNER JOIN episodes AS e ON e.simkl_id = b.simkl_id
+                 INNER JOIN episodes AS e ON e.simkl_id = b.simkl_id AND e.catalog = b.catalog
         WHERE b.type = 'episode'
         """
     )
@@ -187,9 +198,9 @@ def resolve_warm_targets(
 
     recent_rows = db.fetchall(
         f"""
-        SELECT DISTINCT simkl_show_id AS simkl_id
+        SELECT DISTINCT simkl_show_id AS simkl_id, catalog
         FROM episodes
-        WHERE watched > 0
+        WHERE watched > 0 AND catalog IN ('tv', 'anime')
         ORDER BY last_watched_at DESC
         LIMIT {RECENT_WATCHED_SHOW_LIMIT}
         """
@@ -200,7 +211,8 @@ def resolve_warm_targets(
         """
         SELECT simkl_id
         FROM shows
-        WHERE COALESCE(simkl_status, '') = 'completed'
+        WHERE catalog IN ('tv', 'anime')
+          AND COALESCE(simkl_status, '') = 'completed'
           AND COALESCE(watched_episodes, 0) > 0
         """
     )
@@ -237,6 +249,84 @@ def _show_title(show_row: dict) -> str:
     return f"Show {show_row.get('simkl_id')}"
 
 
+def _attach_show_ids_to_milled_tree(show_row: dict, milled: list[dict]) -> None:
+    from resources.lib.modules.metadataHandler import MetadataHandler
+
+    show_id = int(show_row.get("simkl_id"))
+    show_info = MetadataHandler.simkl_info(show_row) or {}
+    tmdb_id = show_row.get("tmdb_id")
+    tvdb_id = show_row.get("tvdb_id")
+    title = show_info.get("title") or show_info.get("name")
+    for season in milled:
+        MetadataHandler.simkl_info(season).update(
+            {
+                "simkl_show_id": show_id,
+                "tmdb_show_id": tmdb_id,
+                "tvdb_show_id": tvdb_id,
+                "tvshowtitle": title,
+            }
+        )
+        season.update(
+            {
+                "simkl_show_id": show_id,
+                "tmdb_show_id": tmdb_id,
+                "tvdb_show_id": tvdb_id,
+            }
+        )
+        catalog = season.get("catalog") or show_row.get("catalog")
+        for episode in season.get("episodes") or []:
+            MetadataHandler.simkl_info(episode).update(
+                {
+                    "simkl_show_id": show_id,
+                    "tmdb_show_id": tmdb_id,
+                    "tvdb_show_id": tvdb_id,
+                    "simkl_season_id": season.get("simkl_id"),
+                    "tvshowtitle": title,
+                }
+            )
+            episode.update(
+                {
+                    "simkl_show_id": show_id,
+                    "tmdb_show_id": tmdb_id,
+                    "tvdb_show_id": tvdb_id,
+                    "simkl_season_id": season.get("simkl_id"),
+                }
+            )
+            if catalog in ("movie", "tv", "anime"):
+                episode.setdefault("catalog", catalog)
+
+
+def warm_show_episodes_from_raw_api(db: "SimklSyncDatabase", show_row: dict) -> bool:
+    """Persist season/episode rows from GET /tv|anime/episodes/{id} (fast warm path)."""
+    from resources.lib.database.simkl_sync.milling import fetch_raw_show_episodes, pull_show_seasons
+
+    show_id = show_row.get("simkl_id")
+    if show_id is None:
+        return False
+    show_id = int(show_id)
+    catalog = db.show_catalog(show_id)
+    slug = db._meta_slug(show_id, "shows")
+    raw = fetch_raw_show_episodes(show_id, catalog, slug=slug, api=db.simkl_api)
+    if not raw:
+        g.log(f"Simkl episode warm: raw fetch empty show={show_id} — mill fallback", "debug")
+        return False
+
+    milled = pull_show_seasons(show_id, catalog, True, slug=slug)
+    if not milled:
+        return False
+
+    _attach_show_ids_to_milled_tree(show_row, milled)
+    db.insert_simkl_seasons(milled)
+    episodes = [episode for season in milled for episode in (season.get("episodes") or [])]
+    if episodes:
+        db.insert_simkl_episodes(episodes)
+    db.execute_sql(
+        "UPDATE shows SET needs_milling=0 WHERE simkl_id=? AND catalog=?",
+        (show_id, catalog),
+    )
+    return True
+
+
 def warm_episode_catalogs(
     db: "SimklSyncDatabase",
     targets: list[tuple[dict, str]],
@@ -244,25 +334,35 @@ def warm_episode_catalogs(
     on_progress: Callable[[int, int, str, str], None] | None = None,
     notify_silent: bool = False,
 ) -> int:
-    """Mill episode catalogs for target shows (Simkl meta only — paint on menu open)."""
+    """Warm episode catalogs for target shows (raw Simkl episode list first, mill fallback)."""
     if not targets:
         return 0
 
     if notify_silent:
         g.notification(g.ADDON_NAME, g.get_language_string(31004))
 
+    use_raw = episode_warm_uses_raw_endpoint()
     total = len(targets)
     warmed = 0
     pull_started = time.time()
     for start in range(0, total, EPISODE_WARM_BATCH_SIZE):
         batch = targets[start : start + EPISODE_WARM_BATCH_SIZE]
-        show_rows = [row for row, _ in batch]
-        db.force_mill_shows(
-            show_rows,
-            mill_episodes=True,
-            skip_provider_episode_updates=True,
-            defer_episode_format=True,
-        )
+        mill_fallback: list[dict] = []
+        if use_raw:
+            for show_row, _bucket in batch:
+                if not warm_show_episodes_from_raw_api(db, show_row):
+                    mill_fallback.append(show_row)
+        else:
+            mill_fallback = [row for row, _ in batch]
+
+        if mill_fallback:
+            db.force_mill_shows(
+                mill_fallback,
+                mill_episodes=True,
+                skip_provider_episode_updates=True,
+                defer_episode_format=True,
+            )
+
         for offset, (show_row, bucket) in enumerate(batch):
             current = start + offset + 1
             if on_progress:
@@ -271,7 +371,7 @@ def warm_episode_catalogs(
 
     pull_ms = (time.time() - pull_started) * 1000
     g.log(
-        f"Simkl episode catalog warm complete: pulled={warmed} pull_ms={pull_ms:.0f}",
+        f"Simkl episode catalog warm complete: pulled={warmed} raw_fast={use_raw} pull_ms={pull_ms:.0f}",
         "info",
     )
     return warmed

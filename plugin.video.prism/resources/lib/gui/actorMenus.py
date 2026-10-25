@@ -98,7 +98,7 @@ class ActorMenus:
 
     def search_by_actor(self, query=None):
 
-        from resources.lib.meta.provider_settings import notify_tmdb_required, provider_enabled
+        from resources.lib.meta.provider_settings import notify_tmdb_required, tmdb_features_enabled
         from resources.lib.simkl.search_menus import (
             _actor_pagination_catalog,
             normalize_actor_args,
@@ -108,7 +108,7 @@ class ActorMenus:
             render_person_picker,
         )
 
-        if not provider_enabled("tmdb"):
+        if not tmdb_features_enabled():
             notify_tmdb_required()
             g.cancel_directory()
             return
@@ -163,11 +163,11 @@ class ActorMenus:
 
     def actor_credits(self, action_args):
 
-        from resources.lib.meta.provider_settings import notify_tmdb_required, provider_enabled
+        from resources.lib.meta.provider_settings import notify_tmdb_required, tmdb_features_enabled
         from resources.lib.simkl.person_ref import fetch_filmography_page, normalize_person_ref
         from resources.lib.simkl.search_menus import notify_empty_search, persist_search_pagination
 
-        if not provider_enabled("tmdb"):
+        if not tmdb_features_enabled():
             notify_tmdb_required()
             g.cancel_directory()
             return
@@ -193,11 +193,12 @@ class ActorMenus:
         person_key = make_list_id("actor", person_id, args.get("catalog") or "mixed")
         page = g.PAGE
         store = get_list_store("actor")
-        items = store.load_page_items(
+        items = store.load_thin_page_items(
             args.get("catalog") or "movie",
             person_key,
             page,
             lambda: fetch_filmography_page(int(person_id), page, self.page_limit),
+            disk_namespace="actor",
         )
         if not items:
             notify_empty_search(30768)
@@ -208,10 +209,14 @@ class ActorMenus:
             **discover_list_kwargs(
                 seeded=True,
                 enrichment_reason="actor",
+                actor_fast_open=True,
+                paint_profile="actor",
                 mixed_list=True,
+                menu_action="actorCredits",
                 has_next_page=len(items) >= self.page_limit,
                 next_action="actorCredits",
                 next_args=args,
+                browse_source=f"actor:{person_id}",
             ),
         )
 

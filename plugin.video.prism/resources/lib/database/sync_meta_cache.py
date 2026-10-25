@@ -242,7 +242,7 @@ class SyncMetaCache:
                 """
                 SELECT simkl_id, info, art, [cast], tmdb_id, tvdb_id, imdb_id, air_date, is_airing
                 FROM shows
-                WHERE info IS NOT NULL
+                WHERE catalog IN ('tv', 'anime') AND info IS NOT NULL
                 ORDER BY last_updated DESC
                 LIMIT ?
                 """,

@@ -54,9 +54,7 @@ class PrismMonitor(xbmc.Monitor):
                 if g.PLATFORM == "android":
                     g.clear_runtime_setting("system.sleeping")
                 xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=runMaintenance")')
-                from resources.lib.modules.cache_maintenance import queue_torrent_cache_cleanup
-
-                queue_torrent_cache_cleanup()
+                xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=torrentCacheCleanup")')
             if not g.wait_for_abort(15):  # Sleep to make sure tokens refreshed during maintenance
                 xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=syncSimklActivities")')
 

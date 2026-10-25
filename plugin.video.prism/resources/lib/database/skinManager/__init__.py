@@ -14,6 +14,7 @@ from resources.lib.modules.zip_manager import ZipManager
 
 DEFAULT_SKIN_NAME = "Prism Default"
 
+
 schema = {
     "skins": {
         "columns": collections.OrderedDict(
@@ -126,6 +127,7 @@ class SkinManager(Database, ZipManager):
             return
 
         if exists := self.fetchone("select * from skins where skin_name=?", (skin_meta["skin_name"],)):
+            was_active = exists.get("active") == "1"
             self.execute_sql(
                 "UPDATE skins SET "
                 "version=?, "
@@ -141,6 +143,9 @@ class SkinManager(Database, ZipManager):
                     skin_meta["skin_name"],
                 ),
             )
+            if was_active:
+                active_label = f"{skin_meta['skin_name']} - {skin_meta['version']}"
+                g.set_setting("skin.active", active_label)
         else:
             self.execute_sql(
                 "REPLACE INTO skins VALUES (?,?,?,?,?,?)",

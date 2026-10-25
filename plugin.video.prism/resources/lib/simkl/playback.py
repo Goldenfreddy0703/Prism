@@ -176,7 +176,7 @@ def sync_episode_playbacks(db) -> int:
             )
             continue
 
-        duration = db._episode_duration_seconds(simkl_id, episode, show)
+        duration = db._episode_duration_seconds(simkl_id, episode, show, catalog=catalog)
         rows.append(
             (
                 int(simkl_id),
@@ -213,14 +213,13 @@ def _refresh_playback_bookmarks_if_empty(db, catalog: str) -> None:
 def list_continue_watching(catalog: str, page: int | None = None, *, resync_if_empty: bool = False) -> list[dict]:
     """Return bookmark rows for a catalog (already excludes hidden items)."""
     from resources.lib.database.session import get_sync_database
-    from resources.lib.database.simkl_sync.hidden import SimklSyncDatabase as HiddenDatabase
 
     page = page or g.PAGE
     page_limit = g.get_int_setting("item.limit")
     page_start, page_end = _page_slice(page, page_limit)
     hidden_mediatype = "movies" if catalog == CATALOG_MOVIE else "tvshow"
-    hidden = HiddenDatabase().get_hidden_simkl_ids("progress_watched", hidden_mediatype)
     db = get_sync_database()
+    hidden = db.get_hidden_simkl_ids("progress_watched", hidden_mediatype)
     _refresh_playback_bookmarks_if_empty(db, catalog)
     items = db.get_continue_watching(catalog, hidden)
     if resync_if_empty and not items and catalog != CATALOG_MOVIE:
@@ -250,15 +249,20 @@ def render_continue_watching_menu(catalog: str) -> None:
     if not items:
         if catalog != CATALOG_MOVIE:
             db = get_sync_database()
+            from resources.lib.database.simkl_sync.serial_sync import serial_tables
+
+            ep_table = serial_tables("anime" if catalog == "anime" else "tv").episode
             bookmark_rows = db.fetchall(
-                """
+                f"""
                 SELECT DISTINCT e.simkl_show_id AS simkl_id
                 FROM bookmarks AS b
-                         INNER JOIN episodes AS e ON e.simkl_id = b.simkl_id
+                         INNER JOIN {ep_table} AS e ON e.simkl_id = b.simkl_id
                 WHERE b.type = 'episode'
                 """
             )
             show_ids = {int(row["simkl_id"]) for row in bookmark_rows if row.get("simkl_id") is not None}
+            if catalog == "anime":
+                show_ids = {sid for sid in show_ids if db.show_catalog(sid) == "anime"}
             if show_ids:
                 schedule_lazy_episode_warm(db, show_ids)
         if page <= 1:

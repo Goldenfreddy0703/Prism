@@ -4,11 +4,16 @@ from resources.lib.modules.globals import g
 
 
 def do_version_change():
-    if g.get_setting("prism.version") == g.CLEAN_VERSION:
+    old_version = g.get_setting("prism.version")
+    if old_version == g.CLEAN_VERSION:
         return
 
     g.log("Clearing cache on Prism version change", "info")
     g.clear_cache(silent=True)
+
+    from resources.lib.modules.release_migration import flag_migration_wipe_on_version_cross
+
+    flag_migration_wipe_on_version_cross(old_version, g.CLEAN_VERSION)
 
     g.set_setting("prism.version", g.CLEAN_VERSION)
 

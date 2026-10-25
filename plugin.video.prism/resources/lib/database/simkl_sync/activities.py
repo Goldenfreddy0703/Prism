@@ -307,15 +307,22 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
             simkl_id = (blob.get("ids") or {}).get("simkl")
             if simkl_id:
                 active_movie_ids.add(int(simkl_id))
-        active_show_ids = set()
-        for media_key in ("shows", "anime"):
-            for entry in _unwrap_sync_items(payload, media_key):
-                if not isinstance(entry, dict):
-                    continue
-                blob = sync_entry_media_blob(entry, media_key)
-                simkl_id = (blob.get("ids") or {}).get("simkl")
-                if simkl_id:
-                    active_show_ids.add(int(simkl_id))
+        active_tv_ids = set()
+        for entry in _unwrap_sync_items(payload, "shows"):
+            if not isinstance(entry, dict):
+                continue
+            blob = sync_entry_media_blob(entry, "shows")
+            simkl_id = (blob.get("ids") or {}).get("simkl")
+            if simkl_id:
+                active_tv_ids.add(int(simkl_id))
+        active_anime_ids = set()
+        for entry in _unwrap_sync_items(payload, "anime"):
+            if not isinstance(entry, dict):
+                continue
+            blob = sync_entry_media_blob(entry, "anime")
+            simkl_id = (blob.get("ids") or {}).get("simkl")
+            if simkl_id:
+                active_anime_ids.add(int(simkl_id))
 
         local_movies = self.fetchall("SELECT simkl_id FROM movies")
         stale_movies = [row["simkl_id"] for row in local_movies if row["simkl_id"] not in active_movie_ids]
@@ -325,15 +332,43 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
             self.execute_sql(f"DELETE FROM movies WHERE simkl_id IN ({placeholders})", movie_params)
             self.execute_sql(f"DELETE FROM movies_meta WHERE id IN ({placeholders})", movie_params)
 
-        local_shows = self.fetchall("SELECT simkl_id FROM shows")
-        stale_shows = [row["simkl_id"] for row in local_shows if row["simkl_id"] not in active_show_ids]
+        local_shows = self.fetchall("SELECT simkl_id FROM shows WHERE catalog = 'tv'")
+        stale_shows = [row["simkl_id"] for row in local_shows if row["simkl_id"] not in active_tv_ids]
         if stale_shows:
             placeholders = ",".join("?" * len(stale_shows))
             show_params = tuple(stale_shows)
-            self.execute_sql(f"DELETE FROM episodes WHERE simkl_show_id IN ({placeholders})", show_params)
-            self.execute_sql(f"DELETE FROM seasons WHERE simkl_show_id IN ({placeholders})", show_params)
-            self.execute_sql(f"DELETE FROM shows WHERE simkl_id IN ({placeholders})", show_params)
+            self.execute_sql(
+                f"DELETE FROM episodes WHERE simkl_show_id IN ({placeholders}) AND catalog = 'tv'",
+                show_params,
+            )
+            self.execute_sql(
+                f"DELETE FROM seasons WHERE simkl_show_id IN ({placeholders}) AND catalog = 'tv'",
+                show_params,
+            )
+            self.execute_sql(
+                f"DELETE FROM shows WHERE simkl_id IN ({placeholders}) AND catalog = 'tv'",
+                show_params,
+            )
             self.execute_sql(f"DELETE FROM shows_meta WHERE id IN ({placeholders})", show_params)
+
+        local_anime = self.fetchall("SELECT simkl_id FROM shows WHERE catalog = 'anime'")
+        stale_anime = [row["simkl_id"] for row in local_anime if row["simkl_id"] not in active_anime_ids]
+        if stale_anime:
+            placeholders = ",".join("?" * len(stale_anime))
+            anime_params = tuple(stale_anime)
+            self.execute_sql(
+                f"DELETE FROM episodes WHERE simkl_show_id IN ({placeholders}) AND catalog = 'anime'",
+                anime_params,
+            )
+            self.execute_sql(
+                f"DELETE FROM seasons WHERE simkl_show_id IN ({placeholders}) AND catalog = 'anime'",
+                anime_params,
+            )
+            self.execute_sql(
+                f"DELETE FROM shows WHERE simkl_id IN ({placeholders}) AND catalog = 'anime'",
+                anime_params,
+            )
+            self.execute_sql(f"DELETE FROM shows_meta WHERE id IN ({placeholders})", anime_params)
 
     def _process_all_items_payload(self, payload, catalog: str | None = None):
         if catalog == "movie" or (catalog is None and payload.get("movies")):
@@ -346,7 +381,10 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
             self._process_show_entries(_unwrap_sync_items(payload, "anime"), "anime")
 
     def _process_movie_entries(self, entries):
+        from resources.lib.simkl.catalog import is_anime_movie_info
+
         movies = []
+        anime_films = []
         watched_ids = []
         for entry in entries:
             normalized = simkl_entry_to_sync_dict(entry, "movie")
@@ -356,6 +394,17 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
             if entry.get("status"):
                 info["simkl_status"] = entry.get("status")
             status = entry.get("status")
+            storage_catalog = normalized.get("catalog") or info.get("catalog")
+            is_anime_film = storage_catalog == "anime" or is_anime_movie_info(info)
+            if is_anime_film:
+                normalized["catalog"] = "anime"
+                info["catalog"] = "anime"
+                if status == "completed":
+                    info["last_watched_at"] = entry.get("last_watched_at") or entry.get("added_to_watchlist_at")
+                    info["episode_count"] = 1
+                    info["watched_episodes_count"] = 1
+                anime_films.append(normalized)
+                continue
             if status == "completed":
                 info["last_watched_at"] = entry.get("last_watched_at") or entry.get("added_to_watchlist_at")
                 info["watched"] = 1
@@ -368,6 +417,8 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
                 watched_ids.append(normalized["simkl_id"])
             movies.append(normalized)
 
+        if anime_films:
+            self.insert_simkl_shows(anime_films)
         if not movies:
             return
 
@@ -421,7 +472,12 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
         if not show_id:
             return None
 
+        from resources.lib.database.simkl_sync.serial_sync import serial_tables
         from resources.lib.simkl.field_map import anime_menu_episode_number, anime_menu_season, tvdb_from_episode
+
+        catalog = self.show_catalog(int(show_id))
+        st = serial_tables("anime" if catalog == "anime" else "tv")
+        ep_table = st.episode
 
         menu_season = anime_menu_season(episode)
         menu_episode = anime_menu_episode_number(
@@ -431,12 +487,12 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
         )
         if menu_episode is not None:
             row = self.fetchone(
-                """
-                SELECT simkl_id FROM episodes
-                WHERE simkl_show_id = ? AND season = ? AND number = ?
+                f"""
+                SELECT simkl_id FROM {ep_table}
+                WHERE simkl_show_id = ? AND season = ? AND number = ? AND catalog = ?
                 LIMIT 1
                 """,
-                (int(show_id), int(menu_season), int(menu_episode)),
+                (int(show_id), int(menu_season), int(menu_episode), catalog),
             )
             if row:
                 return int(row["simkl_id"])
@@ -447,12 +503,12 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
             number = episode.get("episode")
         if season is not None and number is not None:
             row = self.fetchone(
-                """
-                SELECT simkl_id FROM episodes
-                WHERE simkl_show_id = ? AND season = ? AND number = ?
+                f"""
+                SELECT simkl_id FROM {ep_table}
+                WHERE simkl_show_id = ? AND season = ? AND number = ? AND catalog = ?
                 LIMIT 1
                 """,
-                (int(show_id), int(season), int(number)),
+                (int(show_id), int(season), int(number), catalog),
             )
             if row:
                 return int(row["simkl_id"])
@@ -460,20 +516,35 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
         tvdb_season, tvdb_number = tvdb_from_episode(episode)
         if tvdb_season is not None and tvdb_number is not None:
             row = self.fetchone(
-                """
-                SELECT simkl_id FROM episodes
-                WHERE simkl_show_id = ? AND season = ? AND number = ?
+                f"""
+                SELECT simkl_id FROM {ep_table}
+                WHERE simkl_show_id = ? AND season = ? AND number = ? AND catalog = ?
                 LIMIT 1
                 """,
-                (int(show_id), int(tvdb_season), int(tvdb_number)),
+                (int(show_id), int(tvdb_season), int(tvdb_number), catalog),
             )
             if row:
                 return int(row["simkl_id"])
 
         return None
 
-    def _episode_duration_seconds(self, simkl_id, episode, show):
-        row = self.fetchone("SELECT info FROM episodes WHERE simkl_id=?", (simkl_id,))
+    def _episode_duration_seconds(self, simkl_id, episode, show, catalog=None):
+        show_id = None
+        if isinstance(show, dict):
+            ids = show.get("ids") if isinstance(show.get("ids"), dict) else {}
+            show_id = ids.get("simkl") or show.get("simkl_id")
+        elif show is not None:
+            show_id = show
+        if not catalog and show_id is not None:
+            try:
+                catalog = self.show_catalog(int(show_id))
+            except (TypeError, ValueError):
+                catalog = None
+        catalog = catalog or "tv"
+        row = self.fetchone(
+            "SELECT info FROM episodes WHERE simkl_id=? AND catalog=?",
+            (simkl_id, catalog),
+        )
         if row and row.get("info"):
             info = row["info"]
             if info.get("duration"):

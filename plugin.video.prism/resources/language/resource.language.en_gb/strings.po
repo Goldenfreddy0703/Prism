@@ -692,8 +692,8 @@ msgstr "Minimum Movie Resolution"
 
 #: /resources/settings.xml:1347
 msgctxt "#30124"
-msgid "Minimum TV Shows Resolution"
-msgstr "Minimum TV Shows Resolution"
+msgid "Minimum Shows Resolution"
+msgstr "Minimum Shows Resolution"
 
 #: /resources/settings.xml:1365
 msgctxt "#30125"
@@ -5116,7 +5116,7 @@ msgstr "Enable MDBList for calendar"
 
 msgctxt "#30959"
 msgid "TMDB metadata is disabled in settings"
-msgstr "TMDB cast and artwork is disabled in settings"
+msgstr "TMDB browse features are disabled in settings"
 
 msgctxt "#30960"
 msgid "Fetch cast and artwork from TMDB when Simkl data is incomplete. Title, plot, and ratings always come from Simkl."
@@ -5803,8 +5803,8 @@ msgstr "My Watch History"
 
 #: /resources/lib/simkl/playback_history.py
 msgctxt "#31123"
-msgid "Movies and episodes you have played in Prism"
-msgstr "Movies and episodes you have played in Prism"
+msgid "Movies and shows you have played in Prism"
+msgstr "Movies and shows you have played in Prism"
 
 #: /resources/settings.xml
 msgctxt "#31126"
@@ -5820,3 +5820,359 @@ msgstr "Show a global My Watch History folder on the Prism home menu. Hidden whe
 msgctxt "#31128"
 msgid "Nothing to continue watching right now"
 msgstr "Nothing to continue watching right now"
+
+#: /resources/settings.xml
+msgctxt "#31050"
+msgid "Seren-style menu loading"
+msgstr "Seren-style menu loading"
+
+#: /resources/settings.xml
+msgctxt "#31051"
+msgid "Load browse and library lists from the local sync database only (fast). Turn off to use the legacy paint layer."
+msgstr "Load browse and library lists from the local sync database only (fast). Turn off to use the legacy paint layer."
+
+#: /resources/settings.xml
+msgctxt "#31200"
+msgid "Catalog page pipeline (async rewrite)"
+msgstr "Catalog page pipeline (async rewrite)"
+
+#: /resources/settings.xml
+msgctxt "#31201"
+msgid "Route genre, search, discover, and library browse menus through the unified CatalogPagePipeline."
+msgstr "Route genre, search, discover, and library browse menus through the unified CatalogPagePipeline."
+
+#: /resources/settings.xml
+msgctxt "#31202"
+msgid "Async menu I/O"
+msgstr "Async menu I/O"
+
+#: /resources/settings.xml
+msgctxt "#31203"
+msgid "Use the shared asyncio runtime for bounded parallel enrich and provider fetches on menu open (recommended)."
+msgstr "Use the shared asyncio runtime for bounded parallel enrich and provider fetches on menu open (recommended)."
+
+#: /resources/settings.xml
+msgctxt "#31204"
+msgid "Kodi asyncio workaround"
+msgstr "Kodi asyncio workaround"
+
+#: /resources/settings.xml
+msgctxt "#31205"
+msgid "Apply Kodi wiki _asyncio shim when starting the addon event loop."
+msgstr "Apply Kodi wiki _asyncio shim when starting the addon event loop."
+
+#: /resources/settings.xml
+msgctxt "#31206"
+msgid "Max concurrent HTTP (menu)"
+msgstr "Max concurrent HTTP (menu)"
+
+#: /resources/settings.xml
+msgctxt "#31207"
+msgid "Upper bound on parallel outbound requests during a single menu open."
+msgstr "Upper bound on parallel outbound requests during a single menu open."
+
+#: /resources/settings.xml
+msgctxt "#31208"
+msgid "Max HTTP per menu open"
+msgstr "Max HTTP per menu open"
+
+#: /resources/settings.xml
+msgctxt "#31209"
+msgid "Hard cap on outbound HTTP calls counted against one menu perf trace."
+msgstr "Hard cap on outbound HTTP calls counted against one menu perf trace."
+
+#: /resources/settings.xml
+msgctxt "#31210"
+msgid "SQLite WAL mode"
+msgstr "SQLite WAL mode"
+
+#: /resources/settings.xml
+msgctxt "#31211"
+msgid "Enable WAL for local databases (faster reads; avoid on network/SMB profiles)."
+msgstr "Enable WAL for local databases (faster reads; avoid on network/SMB profiles)."
+
+#: /resources/settings.xml
+msgctxt "#31214"
+msgid "Cast"
+msgstr "Cast"
+
+#: /resources/settings.xml
+msgctxt "#31215"
+msgid "Enable TMDB artwork"
+msgstr "Enable TMDB artwork"
+
+#: /resources/settings.xml
+msgctxt "#31216"
+msgid "Fetch posters, fanart, and other images from TMDB when Simkl art is missing. Does not affect actor search or genre browse."
+msgstr "Fetch posters, fanart, and other images from TMDB when Simkl art is missing. Does not affect actor search or genre browse."
+
+#: /resources/settings.xml
+msgctxt "#31217"
+msgid "Enable TVDB artwork"
+msgstr "Enable TVDB artwork"
+
+#: /resources/settings.xml
+msgctxt "#31218"
+msgid "Fetch posters, fanart, and season images from TVDB when Simkl art is missing or when TVDB is your preferred artwork source."
+msgstr "Fetch posters, fanart, and season images from TVDB when Simkl art is missing or when TVDB is your preferred artwork source."
+
+#: /resources/settings.xml
+msgctxt "#31219"
+msgid "Enable TMDB browse features"
+msgstr "Enable TMDB browse features"
+
+#: /resources/settings.xml
+msgctxt "#31220"
+msgid "Use TMDB for actor search and multi-genre discover. Anime multi-genre browse uses Tenrai lists and still needs this enabled."
+msgstr "Use TMDB for actor search and multi-genre discover. Anime multi-genre browse uses Tenrai lists and still needs this enabled."
+
+#: /resources/settings.xml
+msgctxt "#31221"
+msgid "Enable IMDb cast"
+msgstr "Enable IMDb cast"
+
+#: /resources/settings.xml
+msgctxt "#31222"
+msgid "Enable AniList cast"
+msgstr "Enable AniList cast"
+
+#: /resources/settings.xml
+msgctxt "#31223"
+msgid "Fast season and episode menus"
+msgstr "Fast season and episode menus"
+
+#: /resources/settings.xml
+msgctxt "#31224"
+msgid "Open season and episode lists from Simkl episode data first, then sync full details in the background. Turn off to use the legacy database path only."
+msgstr "Open season and episode lists from Simkl episode data first, then sync full details in the background. Turn off to use the legacy database path only."
+
+#: /resources/settings.xml
+msgctxt "#31227"
+msgid "Show changelog after update"
+msgstr "Show changelog after update"
+
+#: /resources/settings.xml
+msgctxt "#31228"
+msgid "Open the changelog and news window when Prism updates to a new version."
+msgstr "Open the changelog and news window when Prism updates to a new version."
+
+#: /resources/skins/Default/1080i/release_notes.xml
+msgctxt "#31229"
+msgid "Changelog"
+msgstr "Changelog"
+
+#: /resources/skins/Default/1080i/release_notes.xml
+msgctxt "#31230"
+msgid "Changelog"
+msgstr "Changelog"
+
+#: /resources/skins/Default/1080i/release_notes.xml
+msgctxt "#31231"
+msgid "News"
+msgstr "News"
+
+#: /resources/lib/gui/homeMenu.py
+msgctxt "#31232"
+msgid "View changelog"
+msgstr "View changelog"
+
+#: /resources/lib/gui/homeMenu.py
+msgctxt "#31233"
+msgid "View the Prism changelog and news."
+msgstr "View the Prism changelog and news."
+
+#: /resources/settings.xml
+msgctxt "#31234"
+msgid "Guided Auto Play"
+msgstr "Guided Auto Play"
+
+#: /resources/settings.xml
+msgctxt "#31235"
+msgid "Auto Play: resolve and play the top source automatically. Source Select: always show the source list before playing. Guided Auto Play: show the source list once per show, then auto play for later episodes of that show until you play a different show or rescrape."
+msgstr "Auto Play: resolve and play the top source automatically. Source Select: always show the source list before playing. Guided Auto Play: show the source list once per show, then auto play for later episodes of that show until you play a different show or rescrape."
+
+#: /resources/lib/gui/homeMenu.py
+#: /resources/lib/gui/searchAllMenus.py
+msgctxt "#31236"
+msgid "Search All..."
+msgstr "Search All..."
+
+#: /resources/lib/gui/homeMenu.py
+#: /resources/lib/gui/searchAllMenus.py
+msgctxt "#31237"
+msgid "Search movies, shows, and anime together"
+msgstr "Search movies, shows, and anime together"
+
+#: /resources/lib/gui/homeMenu.py
+msgctxt "#31238"
+msgid "View your search-all history or start a new search"
+msgstr "View your search-all history or start a new search"
+
+#: /resources/lib/gui/searchAllMenus.py
+msgctxt "#31239"
+msgid "New Search All..."
+msgstr "New Search All..."
+
+#: /resources/settings.xml
+msgctxt "#31240"
+msgid "Mixed View"
+msgstr "Mixed View"
+
+#: /resources/settings.xml
+msgctxt "#31241"
+msgid "Mixed View ID"
+msgstr "Mixed View ID"
+
+#: /resources/settings.xml
+msgctxt "#31242"
+msgid "Movies, shows, and anime in one list (Search All, actor credits, watch history)"
+msgstr "Movies, shows, and anime in one list (Search All, actor credits, watch history)"
+
+#: /resources/settings.xml
+msgctxt "#31243"
+msgid "Stop scraping early when a rule below is met. Each source family can be off, stop on the first match, or stop once enough matches pass your minimum resolution."
+msgstr "Stop scraping early when a rule below is met. Each source family can be off, stop on the first match, or stop once enough matches pass your minimum resolution."
+
+#: /resources/settings.xml
+msgctxt "#31244"
+msgid "Used when any family is set to Stop when minimum count reached. Counts only sources at or above the minimum movie or show resolution."
+msgstr "Used when any family is set to Stop when minimum count reached. Counts only sources at or above the minimum movie or show resolution."
+
+#: /resources/settings.xml
+msgctxt "#31245"
+msgid "Torrent sources"
+msgstr "Torrent sources"
+
+#: /resources/settings.xml
+msgctxt "#31246"
+msgid "Cached torrents from indexers (after cache check). Does not include cloud library, embeds, or local files."
+msgstr "Cached torrents from indexers (after cache check). Does not include cloud library, embeds, or local files."
+
+#: /resources/settings.xml
+msgctxt "#31263"
+msgid "Hoster sources"
+msgstr "Hoster sources"
+
+#: /resources/settings.xml
+msgctxt "#31264"
+msgid "Debrid hoster links returned from indexer scrapers."
+msgstr "Debrid hoster links returned from indexer scrapers."
+
+#: /resources/settings.xml
+msgctxt "#31247"
+msgid "Cloud sources"
+msgstr "Cloud sources"
+
+#: /resources/settings.xml
+msgctxt "#31248"
+msgid "Files already on your debrid cloud from the cloud scraper pass."
+msgstr "Files already on your debrid cloud from the cloud scraper pass."
+
+#: /resources/settings.xml
+msgctxt "#31249"
+msgid "Adaptive sources"
+msgstr "Adaptive sources"
+
+#: /resources/settings.xml
+msgctxt "#31250"
+msgid "Online stream / embed providers (adaptive scrapers)."
+msgstr "Online stream / embed providers (adaptive scrapers)."
+
+#: /resources/settings.xml
+msgctxt "#31251"
+msgid "Direct sources"
+msgstr "Direct sources"
+
+#: /resources/settings.xml
+msgctxt "#31252"
+msgid "Local library scan and direct link providers."
+msgstr "Local library scan and direct link providers."
+
+#: /resources/settings.xml
+msgctxt "#31253"
+msgid "Off"
+msgstr "Off"
+
+#: /resources/settings.xml
+msgctxt "#31254"
+msgid "Stop on first match"
+msgstr "Stop on first match"
+
+#: /resources/settings.xml
+msgctxt "#31255"
+msgid "Stop when minimum count reached"
+msgstr "Stop when minimum count reached"
+
+#: /resources/settings.xml
+msgctxt "#31257"
+msgid "Indexer sources to include"
+msgstr "Indexer sources to include"
+
+#: /resources/settings.xml
+msgctxt "#31258"
+msgid "Only torrents/hosters at or above this quality count toward indexer termination."
+msgstr "Only torrents/hosters at or above this quality count toward indexer termination."
+
+#: /resources/settings.xml
+msgctxt "#31259"
+msgid "Minimum show resolution (TV and anime episodes) used when counting sources for termination."
+msgstr "Minimum show resolution (TV and anime episodes) used when counting sources for termination."
+
+#: /resources/settings.xml
+msgctxt "#31260"
+msgid "Which indexer results count: torrents only, hosters only, or both combined."
+msgstr "Which indexer results count: torrents only, hosters only, or both combined."
+
+#: /resources/settings.xml
+msgctxt "#31261"
+msgid "Recommended on: lets local/direct results appear before early termination stops the scrape. No effect when local files are disabled."
+msgstr "Recommended on: lets local/direct results appear before early termination stops the scrape. No effect when local files are disabled."
+
+#: /resources/settings.xml
+msgctxt "#31262"
+msgid "Recommended on: lets debrid cloud results appear before early termination stops the scrape. Finishes quickly when no debrid account is connected."
+msgstr "Recommended on: lets debrid cloud results appear before early termination stops the scrape. Finishes quickly when no debrid account is connected."
+
+#: /resources/lib/modules/release_migration.py
+msgctxt "#31265"
+msgid "Prism updated to {}"
+msgstr "Prism updated to {}"
+
+#: /resources/lib/modules/release_migration.py
+msgctxt "#31266"
+msgid ""
+"This major update requires a clean start.\n"
+"\n"
+"Your local Prism data (settings, Simkl sync database, caches, and provider state) from older builds is not compatible with this release.\n"
+"\n"
+"Choose Wipe addon data to reset Prism, then restart Kodi when prompted. Sign in to Simkl again and reconfigure debrid, providers, and source preferences.\n"
+"\n"
+"Fresh installs of this version do not need this step."
+msgstr ""
+"This major update requires a clean start.\n"
+"\n"
+"Your local Prism data (settings, Simkl sync database, caches, and provider state) from older builds is not compatible with this release.\n"
+"\n"
+"Choose Wipe addon data to reset Prism, then restart Kodi when prompted. Sign in to Simkl again and reconfigure debrid, providers, and source preferences.\n"
+"\n"
+"Fresh installs of this version do not need this step."
+
+#: /resources/lib/modules/release_migration.py
+msgctxt "#31267"
+msgid "Wipe addon data"
+msgstr "Wipe addon data"
+
+#: /resources/lib/modules/release_migration.py
+msgctxt "#31268"
+msgid "Later"
+msgstr "Later"
+
+#: /resources/lib/modules/release_migration.py
+msgctxt "#31269"
+msgid "View changelog"
+msgstr "View changelog"
+
+#: /resources/lib/common/maintenance.py
+msgctxt "#31271"
+msgid "Restart Kodi when you can so Prism finishes loading with a clean profile."
+msgstr "Restart Kodi when you can so Prism finishes loading with a clean profile."

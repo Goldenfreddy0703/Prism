@@ -1,5 +1,3 @@
-import xbmc
-
 from . import set_info_properties
 from resources.lib.common import tools
 from resources.lib.gui.windows.single_item_window import SingleItemWindow
@@ -37,14 +35,9 @@ class ResolverWindow(SingleItemWindow):
             return
         self._close_requested = True
         try:
-            xbmc.executebuiltin(f"SendClick({self.getId()},9999)")
+            self.close()
         except Exception:
             g.log_stacktrace()
-        if not g.wait_for_abort(0.05):
-            try:
-                self.close()
-            except Exception:
-                g.log_stacktrace()
 
     def onInit(self):
         """

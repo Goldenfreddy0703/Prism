@@ -19,8 +19,10 @@ ANIME_FILTER_PRESETS = {
     "dub": ANIME_BASE_FILTERS | {"SUB", "MULTI-SUB", "HC"},
 }
 
-DEFAULT_SORTMETHOD = {1: 2, 2: 1, 3: 4, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0}
-DEFAULT_SOURCETYPESORT = {1: 1, 2: 0, 3: 0, 4: 0, 5: 0}
+# sortmethod indices: 2=Source Type, 1=Resolution, 10=Audio, 11=Subtitles, 4=Size, 0=None
+DEFAULT_SORTMETHOD = {1: 2, 2: 1, 3: 10, 4: 11, 5: 4, 6: 0, 7: 0, 8: 0}
+# sourcetypesort option indices: 5=Direct, 1=Cloud, 2=Adaptive, 0=Other
+DEFAULT_SOURCETYPESORT = {1: 5, 2: 1, 3: 2, 4: 0, 5: 0}
 DEFAULT_HDRSORT = {1: 2, 2: 0}
 DEFAULT_HDRCODECSORT = {1: 2, 2: 0, 3: 0}
 DEFAULT_VIDEOCODECSORT = {1: 0, 2: 0, 3: 0, 4: 0}
@@ -28,8 +30,79 @@ DEFAULT_AUDIOCODECSORT = {1: 0, 2: 0, 3: 0, 4: 0}
 DEFAULT_MISCSORT = {1: 0, 2: 0, 3: 0, 4: 0}
 DEFAULT_AUDIOCHANNELSSORT = {1: 1, 2: 2, 3: 3}
 DEFAULT_DEBRIDSORT = {1: 1, 2: 0, 3: 0, 4: 0}
-DEFAULT_AUDIOSORT = {1: 2, 2: 1, 3: 3, 4: 4}
+# audiosort: 2=Dual-Audio, 1=Multi-Audio, 0=None
+DEFAULT_AUDIOSORT = {1: 2, 2: 1, 3: 0, 4: 0}
+# subtitlesort: 1=Multi-Sub
 DEFAULT_SUBTITLESORT = {1: 1}
+
+# Legacy global keys in settings.xml (pre per-catalog profiles) — unchanged factory values.
+_LEGACY_FACTORY_SORTMETHOD = {1: 2, 2: 1, 3: 4, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0}
+_LEGACY_FACTORY_SOURCETYPESORT = {1: 1, 2: 0, 3: 0, 4: 0, 5: 0}
+
+
+def _legacy_global_sort_profile_is_factory_default() -> bool:
+    """True when the user never customized legacy sort settings (fresh install)."""
+    for level, expected in _LEGACY_FACTORY_SORTMETHOD.items():
+        if g.get_int_setting(f"general.sortmethod.{level}", expected) != expected:
+            return False
+    for level, expected in _LEGACY_FACTORY_SOURCETYPESORT.items():
+        if g.get_int_setting(f"general.sourcetypesort.{level}", expected) != expected:
+            return False
+    return True
+
+
+def _migrate_legacy_sort_to_catalog(catalog: str) -> None:
+    """Copy legacy global sort keys into one catalog profile."""
+    for level in range(1, 9):
+        for reverse in (False, True):
+            legacy = f"general.sortmethod.{level}" + (".reverse" if reverse else "")
+            new_key = sortmethod_key(catalog, level, reverse=reverse)
+            if g.get_setting(new_key) is not None:
+                continue
+            value = g.get_setting(legacy)
+            if value is not None:
+                g.set_setting(new_key, value)
+            elif not reverse:
+                g.set_setting(new_key, DEFAULT_SORTMETHOD[level])
+            else:
+                g.set_setting(new_key, False)
+
+    for level, default in DEFAULT_SOURCETYPESORT.items():
+        new_key = sub_sort_key(catalog, "sourcetypesort", level)
+        if g.get_setting(new_key) is None:
+            legacy = g.get_setting(f"general.sourcetypesort.{level}")
+            g.set_setting(new_key, legacy if legacy is not None else default)
+
+    for level, default in DEFAULT_HDRSORT.items():
+        new_key = sub_sort_key(catalog, "hdrsort", level)
+        if g.get_setting(new_key) is None:
+            legacy = g.get_setting(f"general.hdrsort.{level}")
+            g.set_setting(new_key, legacy if legacy is not None else default)
+
+    for level, default in DEFAULT_DEBRIDSORT.items():
+        new_key = sub_sort_key(catalog, "debridsort", level)
+        if g.get_setting(new_key) is None:
+            legacy = g.get_setting(f"general.debridsort.{level}")
+            g.set_setting(new_key, legacy if legacy is not None else default)
+
+    for level, default in DEFAULT_AUDIOSORT.items():
+        new_key = sub_sort_key(catalog, "audiosort", level)
+        if g.get_setting(new_key) is None:
+            legacy = g.get_setting(f"general.audiosort.{level}")
+            g.set_setting(new_key, legacy if legacy is not None else default)
+
+    for level, default in DEFAULT_SUBTITLESORT.items():
+        new_key = sub_sort_key(catalog, "subtitlesort", level)
+        if g.get_setting(new_key) is None:
+            legacy = g.get_setting(f"general.subtitlesort.{level}")
+            g.set_setting(new_key, legacy if legacy is not None else default)
+
+    for category, defaults in _TAG_SORT_DEFAULTS.items():
+        for sub_level, default in defaults.items():
+            key = sub_sort_key(catalog, category, sub_level)
+            if g.get_setting(key) is None:
+                g.set_setting(key, default)
+
 
 OLD_TO_NEW_SORTMETHOD = {
     0: 0,
@@ -48,13 +121,9 @@ OLD_TO_NEW_SORTMETHOD = {
 OLD_HDR_PRIORITY = {0: None, 1: "DV", 2: "HDR"}
 
 # Anime sort presets — indices match sort_select.SORT_METHODS / SORT_OPTIONS.
-# sortmethod: 2=Source Type, 1=Resolution, 10=Audio, 11=Subtitles, 4=Size, 0=None
-# sourcetypesort: 5=Direct, 1=Cloud, 0=Other
-# audiosort: 2=Dual-Audio, 1=Multi-Audio, 3=Sub, 4=Dub, 0=None
-# subtitlesort: 1=Multi-Sub, 0=None
 _ANIME_SORT_PRESET_SHARED = {
     "sortmethod": {1: 2, 2: 1, 3: 10, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0},
-    "sourcetypesort": {1: 5, 2: 1, 3: 0, 4: 0, 5: 0},
+    "sourcetypesort": {1: 5, 2: 1, 3: 2, 4: 0, 5: 0},
     "hdrcodecsort": DEFAULT_HDRCODECSORT,
     "debridsort": DEFAULT_DEBRIDSORT,
 }
@@ -253,49 +322,12 @@ def ensure_migrated():
             if g.get_setting(key) is None:
                 g.set_setting(key, legacy_filters)
 
+        use_modern_sort_defaults = _legacy_global_sort_profile_is_factory_default()
         for catalog in CATALOGS:
-            for level in range(1, 9):
-                for reverse in (False, True):
-                    legacy = f"general.sortmethod.{level}" + (".reverse" if reverse else "")
-                    new_key = sortmethod_key(catalog, level, reverse=reverse)
-                    if g.get_setting(new_key) is None:
-                        value = g.get_setting(legacy)
-                        if value is not None:
-                            g.set_setting(new_key, value)
-                        elif not reverse:
-                            g.set_setting(new_key, DEFAULT_SORTMETHOD[level])
-                        else:
-                            g.set_setting(new_key, False)
-
-            for level, default in DEFAULT_SOURCETYPESORT.items():
-                new_key = sub_sort_key(catalog, "sourcetypesort", level)
-                if g.get_setting(new_key) is None:
-                    legacy = g.get_setting(f"general.sourcetypesort.{level}")
-                    g.set_setting(new_key, legacy if legacy is not None else default)
-
-            for level, default in DEFAULT_HDRSORT.items():
-                new_key = sub_sort_key(catalog, "hdrsort", level)
-                if g.get_setting(new_key) is None:
-                    legacy = g.get_setting(f"general.hdrsort.{level}")
-                    g.set_setting(new_key, legacy if legacy is not None else default)
-
-            for level, default in DEFAULT_DEBRIDSORT.items():
-                new_key = sub_sort_key(catalog, "debridsort", level)
-                if g.get_setting(new_key) is None:
-                    legacy = g.get_setting(f"general.debridsort.{level}")
-                    g.set_setting(new_key, legacy if legacy is not None else default)
-
-            for level, default in DEFAULT_AUDIOSORT.items():
-                new_key = sub_sort_key(catalog, "audiosort", level)
-                if g.get_setting(new_key) is None:
-                    legacy = g.get_setting(f"general.audiosort.{level}")
-                    g.set_setting(new_key, legacy if legacy is not None else default)
-
-            for level, default in DEFAULT_SUBTITLESORT.items():
-                new_key = sub_sort_key(catalog, "subtitlesort", level)
-                if g.get_setting(new_key) is None:
-                    legacy = g.get_setting(f"general.subtitlesort.{level}")
-                    g.set_setting(new_key, legacy if legacy is not None else default)
+            if use_modern_sort_defaults:
+                reset_sort_profile(catalog)
+            else:
+                _migrate_legacy_sort_to_catalog(catalog)
 
         g.set_setting(MIGRATION_FLAG_KEY, True)
 

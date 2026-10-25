@@ -109,6 +109,9 @@ INFO_STRUCT = {
         "60-FPS",
         "BATCH",
     },
+    "multilang": {
+        "MULTI",
+    },
     "audiolang": {
         "MULTI-AUDIO",
         "DUAL-AUDIO",
@@ -277,7 +280,38 @@ INFO_TYPES = {
     ],
     "3D": [" 3d", " half ou", " half sbs"],
     "60-FPS": [" 60 fps", " 60fps"],
-    "BATCH": ["batch", "complete series"],
+    "BATCH": [
+        "batch",
+        "complete series",
+        " complete ",
+        "complete season",
+        "season complete",
+    ],
+    "MULTI": [" multi ", "multi "],
+    "MULTI-AUDIO": [
+        "multi audio",
+        "multi lang",
+        "multiple audio",
+        "multiple lang",
+    ],
+    "DUAL-AUDIO": ["dual audio", " dual "],
+    "DUB": [" dub ", "dub ", "dubbed"],
+    "SUB": [
+        " subbed",
+        " fansub",
+        "fan sub",
+        " softsub",
+        " soft sub",
+        " eng sub",
+        " english sub",
+    ],
+    "MULTI-SUB": [
+        "multi sub",
+        "multiple sub",
+        "multisub",
+        " multi-sub ",
+        " multi sub ",
+    ],
 }
 
 
@@ -311,17 +345,8 @@ def get_info(release_title):
         info.add("HC")
     if "opus" in title and "AV1" in info:
         info.add("OPUS")
-    # Audio language axis (mutually exclusive, mirrors the dual/dub/sub vocabulary).
-    if any(i in title for i in ["multi audio", "multi lang", "multiple audio", "multiple lang"]):
-        info.add("MULTI-AUDIO")
-    elif "dual audio" in title:
-        info.add("DUAL-AUDIO")
-    elif any(i in title for i in ["dub", "dubbed"]):
-        info.add("DUB")
-    else:
-        info.add("SUB")
-    if any(i in title for i in ["multi sub", "multiple sub"]):
-        info.add("MULTI-SUB")
+    if "MULTI" in info and info.intersection({"MULTI-AUDIO", "MULTI-SUB"}):
+        info.discard("MULTI")
     return info
 
 
@@ -489,6 +514,22 @@ def build_cloud_match_title(item: dict) -> str:
     return clean_title(" ".join(parts))
 
 
+def build_cloud_file_title(item: dict) -> str:
+    """Filename-only title for cloud episode/season matching (avoids folder season false positives)."""
+    if not isinstance(item, dict):
+        return ""
+    for key in ("name", "release_title", "short_name"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return clean_title(value.strip())
+    path = item.get("path")
+    if isinstance(path, str) and path.strip():
+        segment = path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+        if segment.strip():
+            return clean_title(segment.strip())
+    return ""
+
+
 def build_torrent_match_title(file_item: dict) -> str:
     """Combine torrent file path segments for episode matching inside season packs."""
     if not isinstance(file_item, dict):
@@ -636,12 +677,22 @@ def cloud_episode_item_matches(
     episode_regex,
     season_regex,
     simple_info: dict,
+    file_title: str | None = None,
 ) -> bool:
     """Return True when a cloud file path matches the requested episode."""
     match_title = clean_title(release_title)
-    if episode_regex(match_title) or season_regex(match_title):
+    file_title_clean = clean_title(file_title) if file_title else match_title
+
+    if episode_regex(match_title) or episode_regex(file_title_clean):
         return True
-    return cloud_loose_episode_match(match_title, simple_info)
+    # Season-pack regex must not run on folder paths (e.g. "Beyblade X Season 1/...").
+    if season_regex(file_title_clean):
+        return True
+    if cloud_loose_episode_match(match_title, simple_info):
+        return True
+    if file_title_clean != match_title and cloud_loose_episode_match(file_title_clean, simple_info):
+        return True
+    return False
 
 
 def filter_movie_title(org_release_title, release_title, movie_title, simple_info):
@@ -787,6 +838,14 @@ def get_filter_season_pack_fn(simple_info):
     return filter_fn
 
 
+def _positive_int_or_none(value) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 1 else None
+
+
 def get_filter_show_pack_fn(simple_info):
     """
     Constructs and returns a method to match show pack titles
@@ -802,6 +861,16 @@ def get_filter_show_pack_fn(simple_info):
         simple_info["year"],
     )
 
+    no_seasons_int = _positive_int_or_none(no_seasons)
+    if no_seasons_int is None:
+
+        def filter_fn(_release_title):
+            return False
+
+        return filter_fn
+
+    no_seasons = str(no_seasons_int)
+
     titles = list(alias_list)
     titles.insert(0, show_title)
     for idx, title in enumerate(titles):
@@ -810,7 +879,7 @@ def get_filter_show_pack_fn(simple_info):
     all_season_ranges = []
     all_seasons = "1 "
     season_count = 2
-    while season_count <= int(no_seasons):
+    while season_count <= no_seasons_int:
         all_season_ranges.append(f"{all_seasons}and {season_count}")
         all_seasons += f"{season_count} "
         all_season_ranges.append(all_seasons)
@@ -917,8 +986,8 @@ def get_filter_show_pack_fn(simple_info):
         ]
 
     suffixes = get_pack_names(show_title)
-    seasons_count = int(season)
-    while seasons_count <= int(no_seasons):
+    seasons_count = _positive_int_or_none(season) or 1
+    while seasons_count <= no_seasons_int:
         suffixes += get_pack_names_range(str(seasons_count))
         seasons_count += 1
 

@@ -96,8 +96,10 @@ class DisplayMetaStore:
             conn.commit()
 
     @staticmethod
-    def _media_key(media_type: str) -> str:
-        return "movie" if media_type == "movie" else "show"
+    def _media_key(media_type: str, catalog: str | None = None) -> str:
+        from resources.lib.database.simkl_sync.serial_access import paint_cache_type_for_media_type
+
+        return paint_cache_type_for_media_type(media_type, catalog)
 
     @staticmethod
     def _encode_blob(value: Any) -> str | None:
@@ -132,8 +134,8 @@ class DisplayMetaStore:
     def _select_columns() -> str:
         return "media_type, simkl_id, info, art, [cast], paint_stamp"
 
-    def get_row(self, media_type: str, simkl_id: int) -> dict[str, Any] | None:
-        cache_type = self._media_key(media_type)
+    def get_row(self, media_type: str, simkl_id: int, *, catalog: str | None = None) -> dict[str, Any] | None:
+        cache_type = self._media_key(media_type, catalog)
         ram_row = self._ram.get_row(cache_type, int(simkl_id))
         if ram_row and row_has_display_meta(ram_row) and ram_row.get("_paint_stamp"):
             return ram_row
@@ -156,10 +158,16 @@ class DisplayMetaStore:
             return row
         return None
 
-    def get_batch(self, media_type: str, simkl_ids: list[int]) -> dict[int, dict[str, Any]]:
+    def get_batch(
+        self,
+        media_type: str,
+        simkl_ids: list[int],
+        *,
+        catalog: str | None = None,
+    ) -> dict[int, dict[str, Any]]:
         if not simkl_ids:
             return {}
-        cache_type = self._media_key(media_type)
+        cache_type = self._media_key(media_type, catalog)
         hits: dict[int, dict[str, Any]] = {}
         misses: list[int] = []
 
@@ -195,7 +203,21 @@ class DisplayMetaStore:
 
         return hits
 
-    def set_row(self, media_type: str, row: dict[str, Any]) -> None:
+    def get_batch_for_rows(self, rows: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+        """Load display_meta hits partitioned by ref catalog (movie / show / anime)."""
+        from resources.lib.database.simkl_sync.serial_access import partition_simkl_ids
+
+        movie_ids, tv_ids, anime_ids = partition_simkl_ids(rows)
+        hits: dict[int, dict[str, Any]] = {}
+        if movie_ids:
+            hits.update(self.get_batch("movie", movie_ids))
+        if tv_ids:
+            hits.update(self.get_batch("show", tv_ids, catalog="tv"))
+        if anime_ids:
+            hits.update(self.get_batch("anime", anime_ids, catalog="anime"))
+        return hits
+
+    def set_row(self, media_type: str, row: dict[str, Any], *, catalog: str | None = None) -> None:
         if not isinstance(row, dict) or row.get("simkl_id") is None:
             return
         from resources.lib.meta.storage import slim_db_row
@@ -205,7 +227,7 @@ class DisplayMetaStore:
         if not row_has_display_meta(slim):
             return
 
-        cache_type = self._media_key(media_type)
+        cache_type = self._media_key(media_type, catalog or row.get("catalog"))
         sid = int(slim["simkl_id"])
         self._ram.set_row(cache_type, slim)
 
@@ -237,14 +259,15 @@ class DisplayMetaStore:
             conn.commit()
             self._enforce_row_cap_locked(conn)
 
-    def merge_art_cast_row(self, media_type: str, row: dict[str, Any]) -> None:
+    def merge_art_cast_row(self, media_type: str, row: dict[str, Any], *, catalog: str | None = None) -> None:
         """Update display_meta art/cast without replacing Simkl-owned info."""
         if not isinstance(row, dict) or row.get("simkl_id") is None:
             return
 
-        cache_type = self._media_key(media_type)
+        row_catalog = catalog or row.get("catalog")
+        cache_type = self._media_key(media_type, row_catalog)
         sid = int(row["simkl_id"])
-        existing = self.get_batch(media_type, [sid]).get(sid)
+        existing = self.get_batch(media_type, [sid], catalog=row_catalog).get(sid)
         if existing and row_has_display_meta(existing):
             updated = dict(existing)
             if isinstance(row.get("art"), dict) and row["art"]:
@@ -256,19 +279,18 @@ class DisplayMetaStore:
                 )
             if row.get("cast"):
                 updated["cast"] = row["cast"]
-            self.set_row(media_type, updated)
+            self.set_row(media_type, updated, catalog=row_catalog)
             return
 
-        self.set_row(media_type, row)
+        self.set_row(media_type, row, catalog=row_catalog)
 
-    def set_rows_batch(self, media_type: str, rows: list[dict[str, Any]]) -> int:
+    def set_rows_batch(self, media_type: str, rows: list[dict[str, Any]], *, catalog: str | None = None) -> int:
         """Persist multiple paint rows in one transaction."""
         from resources.lib.meta.storage import slim_db_row
         from resources.lib.meta.profiles import MetaProfile
 
         if not rows:
             return 0
-        cache_type = self._media_key(media_type)
         now = datetime.datetime.now().isoformat()
         payload_rows: list[tuple] = []
         written = 0
@@ -279,6 +301,7 @@ class DisplayMetaStore:
             if not row_has_display_meta(slim):
                 continue
             sid = int(slim["simkl_id"])
+            cache_type = self._media_key(media_type, catalog or row.get("catalog"))
             self._ram.set_row(cache_type, slim)
             payload_rows.append(
                 (
@@ -355,10 +378,9 @@ class DisplayMetaStore:
         """Replace row info/art/cast with display-cache hits when available."""
         if not rows:
             return rows
-        simkl_ids = [int(row["simkl_id"]) for row in rows if isinstance(row, dict) and row.get("simkl_id") is not None]
-        if not simkl_ids:
+        if not any(isinstance(row, dict) and row.get("simkl_id") is not None for row in rows):
             return rows
-        hits = self.get_batch(media_type, simkl_ids)
+        hits = self.get_batch_for_rows(rows)
         if not hits:
             return rows
 
@@ -416,7 +438,12 @@ class DisplayMetaStore:
         half = max(1, limit // 2)
         with self._db_lock:
             conn = self._connect()
-            for cache_type, sql_limit in (("movie", half), ("show", max(1, limit - half))):
+            third = max(1, limit // 3)
+            for cache_type, sql_limit in (
+                ("movie", third),
+                ("show", third),
+                ("anime", max(1, limit - 2 * third)),
+            ):
                 records = conn.execute(
                     f"""
                     SELECT {self._select_columns()}
@@ -445,7 +472,8 @@ class DisplayMetaStore:
                 WHERE COALESCE(watched, 0) > 0 OR simkl_status IS NOT NULL
                 UNION
                 SELECT simkl_id FROM shows
-                WHERE COALESCE(watched_episodes, 0) > 0 OR simkl_status IS NOT NULL
+                WHERE catalog IN ('tv', 'anime')
+                  AND (COALESCE(watched_episodes, 0) > 0 OR simkl_status IS NOT NULL)
                 UNION
                 SELECT simkl_id FROM bookmarks WHERE simkl_id IS NOT NULL
                 """

@@ -7,10 +7,63 @@ from typing import Any
 from resources.lib.modules.globals import g
 
 _SETTING_ID = "general.last_played_source"
+_SHOW_ID_SETTING = "general.last_played_show_id"
+_PLAYSTYLE_EPISODES = "general.playstyleEpisodes"
+_PLAYSTYLE_SOURCE_SELECT = 1
+_PLAYSTYLE_GUIDED_AUTO = 2
 _DIRECT_TYPES = frozenset({"direct"})
 _TORRENT_STYLE_TYPES = frozenset(
     {"torrent", "torrent (uncached)", "cloud", "hoster", "local", "adaptive"}
 )
+
+
+def guided_auto_play_template_active(info: dict[str, Any] | None) -> bool:
+    """True when Guided Auto Play may auto-resolve for this episode (same show template)."""
+    if g.get_int_setting(_PLAYSTYLE_EPISODES) != _PLAYSTYLE_GUIDED_AUTO:
+        return False
+    if not isinstance(info, dict):
+        return False
+    from resources.lib.simkl.ids import show_id_from_info
+
+    show_id = show_id_from_info(info)
+    if show_id is None:
+        return False
+    lp = (g.get_setting(_SETTING_ID) or "").strip()
+    if not lp:
+        return False
+    stored_show = (g.get_setting(_SHOW_ID_SETTING) or "").strip()
+    if not stored_show:
+        return False
+    return str(show_id) == stored_show
+
+
+def episode_wants_source_select(
+    info: dict[str, Any] | None,
+    *,
+    source_select_param: str | None = None,
+    explicit_source_select: bool = False,
+) -> bool:
+    """Whether getSources should open Source Select for an episode."""
+    if source_select_param in ("true", "false"):
+        return source_select_param == "true"
+    if explicit_source_select:
+        return True
+    playstyle = g.get_int_setting(_PLAYSTYLE_EPISODES)
+    if playstyle == _PLAYSTYLE_SOURCE_SELECT:
+        return True
+    if playstyle == _PLAYSTYLE_GUIDED_AUTO:
+        return not guided_auto_play_template_active(info)
+    return False
+
+
+def episode_pre_scrape_should_resolve(info: dict[str, Any] | None) -> bool:
+    """Silent pre-scrape resolve for episodes (never opens Source Select)."""
+    playstyle = g.get_int_setting(_PLAYSTYLE_EPISODES)
+    if playstyle == 0:
+        return True
+    if playstyle == _PLAYSTYLE_GUIDED_AUTO:
+        return guided_auto_play_template_active(info)
+    return False
 
 
 def is_smart_play_reorder_context(
@@ -23,6 +76,8 @@ def is_smart_play_reorder_context(
     info = item_information.get("info") if isinstance(item_information, dict) else None
     if not isinstance(info, dict) or info.get("mediatype") != g.MEDIA_EPISODE:
         return False
+    if guided_auto_play_template_active(info):
+        return True
     if action == "preScrape":
         return True
     if smart_url_arg:
@@ -39,6 +94,7 @@ def is_smart_play_reorder_context(
 
 def clear_last_played_source() -> None:
     g.set_setting(_SETTING_ID, "")
+    g.set_setting(_SHOW_ID_SETTING, "")
 
 
 def _info_tokens(info) -> list[str]:
@@ -55,7 +111,7 @@ def _direct_source_key(source: dict[str, Any]) -> str:
     return source.get("provider", "") + " " + " ".join(_info_tokens(source.get("info")))
 
 
-def save_last_played_source(source: dict[str, Any]) -> None:
+def save_last_played_source(source: dict[str, Any], *, show_id: int | None = None) -> None:
     if not isinstance(source, dict):
         return
     source_type = source.get("type")
@@ -63,6 +119,10 @@ def save_last_played_source(source: dict[str, Any]) -> None:
         g.set_setting(_SETTING_ID, _direct_source_key(source))
     elif source_type in _TORRENT_STYLE_TYPES:
         g.set_setting(_SETTING_ID, str(source.get("release_title") or ""))
+    else:
+        return
+    if show_id is not None:
+        g.set_setting(_SHOW_ID_SETTING, str(show_id))
 
 
 def reorder_sources(

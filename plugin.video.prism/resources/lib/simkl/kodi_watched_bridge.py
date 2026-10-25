@@ -72,16 +72,22 @@ def bridge_suppressed() -> bool:
 
 def scan_kodi_watched_bridge(*, force: bool = False, trigger: str = "poll") -> None:
     """Detect Kodi/Prism watched mismatches on Prism plugin URLs and sync."""
+    scan_started = time.time()
     if not bridge_enabled():
+        return
+    from resources.lib.database.session import simkl_database_rebuilding
+
+    if simkl_database_rebuilding():
         return
     suppressed = bridge_suppressed()
     g.clear_runtime_setting("kodi_watched_bridge.pending_first_sight")
-    if not force and not suppressed:
+    if not force:
         last_scan = float(g.get_float_runtime_setting(_LAST_SCAN_KEY, 0) or 0)
         if time.time() - last_scan < _POLL_INTERVAL_SECONDS:
             return
-    if not suppressed:
-        g.set_runtime_setting(_LAST_SCAN_KEY, time.time())
+        if suppressed:
+            return
+    g.set_runtime_setting(_LAST_SCAN_KEY, time.time())
 
     try:
         rows = _fetch_prism_file_rows()
@@ -233,19 +239,29 @@ def _resolve_bridge_action_args(action_args: dict | None) -> dict | None:
     if show_id is None:
         return action_args
 
-    from resources.lib.database.session import get_sync_database
+    from resources.lib.database.session import get_sync_database, simkl_database_rebuilding
+
+    if simkl_database_rebuilding():
+        return action_args
 
     db = get_sync_database()
+    try:
+        catalog = db.show_catalog(int(show_id))
+    except Exception as exc:
+        if "no such table" in str(exc).lower():
+            return action_args
+        raise
+    ep_table = "episodes"
     row = None
     if season is not None and episode is not None and is_synthetic_episode_id(episode_id):
         row = db.fetchone(
-            "SELECT simkl_id FROM episodes WHERE simkl_show_id = ? AND season = ? AND number = ?",
-            (int(show_id), int(season), int(episode)),
+            f"SELECT simkl_id FROM {ep_table} WHERE simkl_show_id = ? AND season = ? AND number = ? AND catalog = ?",
+            (int(show_id), int(season), int(episode), catalog),
         )
     if not row:
         row = db.fetchone(
-            "SELECT simkl_id, simkl_show_id, season, number FROM episodes WHERE simkl_id = ?",
-            (episode_id,),
+            f"SELECT simkl_id, simkl_show_id, season, number FROM {ep_table} WHERE simkl_id = ? AND catalog = ?",
+            (episode_id, catalog),
         )
 
     resolved = dict(action_args)
@@ -283,15 +299,33 @@ def _prism_is_watched_lite(action_args: dict) -> bool:
                 episode_id = int(episode_id)
             except (TypeError, ValueError):
                 episode_id = None
+        catalog = (action_args.get("catalog") or "").lower()
+        if not catalog and show_id is not None:
+            catalog = db.show_catalog(int(show_id)) or "tv"
+        if not catalog and episode_id is not None:
+            from resources.lib.database.simkl_sync.serial_access import episode_table_for_catalog
+
+            if db.fetchone(
+                f"SELECT 1 FROM {episode_table_for_catalog('anime')} WHERE simkl_id = ? LIMIT 1",
+                (int(episode_id),),
+            ):
+                catalog = "anime"
+            else:
+                catalog = "tv"
+        from resources.lib.database.simkl_sync.serial_access import fetch_episode_watched_row
+
         if episode_id is not None and is_synthetic_episode_id(episode_id) and show_id is not None:
             if season is None or episode is None:
                 _, season, episode = split_synthetic_episode_id(episode_id)
-            row = db.fetchone(
-                "SELECT watched FROM episodes WHERE simkl_show_id = ? AND season = ? AND number = ?",
-                (int(show_id), int(season), int(episode)),
+            row = fetch_episode_watched_row(
+                db,
+                catalog,
+                show_id=int(show_id),
+                season=int(season),
+                episode=int(episode),
             )
         elif episode_id is not None:
-            row = db.fetchone("SELECT watched FROM episodes WHERE simkl_id = ?", (episode_id,))
+            row = fetch_episode_watched_row(db, catalog, episode_id=int(episode_id))
         if row is not None:
             try:
                 return int(row.get("watched") or 0) > 0

@@ -71,6 +71,8 @@ def _fetch_detail(catalog: str, simkl_id: int, *, prefer_anime: bool = False) ->
         paths.append(anime_api_path(simkl_id))
 
     for path in paths:
+        # Sync SimklAPI (uses sync_bridge when gateway enabled). Never runtime.run here —
+        # called from parallel enrich workers and would deadlock the shared executor.
         data = api.get_catalog_json(path)
         if isinstance(data, dict) and not data.get("error"):
             return data
@@ -129,8 +131,18 @@ def _entries_to_sync(entries: list[dict[str, Any]], *, relation_label: bool = Fa
     return sync_items
 
 
-def _render_sync_items(sync_items: list[dict[str, Any]]) -> None:
-    render_mixed_sync_list(sync_items)
+def _render_sync_items(sync_items: list[dict[str, Any]], *, browse_source: str = "related") -> None:
+    from resources.lib.meta.menu_paint_profile import MenuPaintProfile, profile_list_kwargs
+
+    render_mixed_sync_list(
+        sync_items,
+        **profile_list_kwargs(
+            MenuPaintProfile.RELATED,
+            related_fast_open=True,
+            seeded=True,
+            browse_source=browse_source,
+        ),
+    )
 
 
 def _context_menu_request() -> bool:
@@ -174,7 +186,7 @@ def render_recommendations(action_args: dict[str, Any] | None) -> None:
         _activate_browse_window("simklRecommendations", action_args)
         return
 
-    _render_sync_items(sync_items)
+    _render_sync_items(sync_items, browse_source=f"recommendations:{simkl_id}")
 
 
 def render_relations(action_args: dict[str, Any] | None) -> None:
@@ -205,4 +217,4 @@ def render_relations(action_args: dict[str, Any] | None) -> None:
         _activate_browse_window("simklRelations", action_args)
         return
 
-    _render_sync_items(sync_items)
+    _render_sync_items(sync_items, browse_source=f"relations:{simkl_id}")

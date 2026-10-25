@@ -449,6 +449,8 @@ def use_cache(cache_hours=8):
                 fresh_result = func(*args, **kwargs)
                 if func.__name__ == "get_sources" and (not fresh_result or len(fresh_result[1]) == 0):
                     return fresh_result
+                if func.__name__ in ("get_tv_episodes", "get_anime_episodes") and not fresh_result:
+                    return fresh_result
                 try:
                     g.CACHE.set(
                         cache_str,

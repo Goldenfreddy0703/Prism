@@ -10,7 +10,22 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
     def set_bookmark(self, simkl_id, time_in_seconds, media_type, percent_played, catalog=None):
         paused_at = self._get_datetime_now()
         if catalog is None:
-            catalog = "movie" if media_type == "movie" else "tv"
+            if media_type == "movie":
+                catalog = "movie"
+            elif media_type == "episode":
+                row = self.fetchone(
+                    "SELECT catalog, simkl_show_id FROM episodes "
+                    "WHERE simkl_id = ? AND catalog IN ('tv', 'anime')",
+                    (int(simkl_id),),
+                )
+                if row and row.get("catalog"):
+                    catalog = row["catalog"]
+                elif row and row.get("simkl_show_id") is not None:
+                    catalog = self.show_catalog(int(row["simkl_show_id"])) or "tv"
+                else:
+                    catalog = "tv"
+            else:
+                catalog = "tv"
         self.execute_sql(
             "REPLACE INTO bookmarks (simkl_id, resume_time, percent_played, type, paused_at, catalog) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -35,7 +50,8 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                    em.value           AS episode,
                    sm.value           AS show
             FROM bookmarks AS bm
-                     INNER JOIN episodes AS ep ON bm.simkl_id = ep.simkl_id
+                     INNER JOIN episodes AS ep
+                                ON bm.simkl_id = ep.simkl_id AND bm.catalog = ep.catalog
                      LEFT JOIN episodes_meta AS em
                                ON ep.simkl_id = em.id AND em.type = 'simkl'
                      LEFT JOIN shows_meta AS sm
@@ -48,17 +64,20 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
 
     def get_bookmarked_episode_for_show(self, simkl_show_id: int) -> tuple[int, int] | None:
         """Most recent in-progress episode for a show (resume helper)."""
+        catalog = self.show_catalog(int(simkl_show_id)) or "tv"
         row = self.fetchone(
             """
             SELECT e.season, e.number
             FROM bookmarks AS bm
-                     INNER JOIN episodes AS e ON bm.simkl_id = e.simkl_id
+                     INNER JOIN episodes AS e
+                                ON bm.simkl_id = e.simkl_id AND bm.catalog = e.catalog
             WHERE e.simkl_show_id = ?
+              AND e.catalog = ?
               AND bm.type = 'episode'
             ORDER BY Datetime(bm.paused_at) DESC
             LIMIT 1
             """,
-            (int(simkl_show_id),),
+            (int(simkl_show_id), catalog),
         )
         if not row or row.get("season") is None or row.get("number") is None:
             return None

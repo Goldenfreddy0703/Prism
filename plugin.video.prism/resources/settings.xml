@@ -3,6 +3,11 @@
 	<section id="plugin.video.prism">
 		<category id="general" label="30084" help="">
 			<group id="1" label="30591">
+				<setting id="general.releaseNotes.showOnUpdate" type="boolean" label="31227" help="31228">
+					<level>0</level>
+					<default>true</default>
+					<control type="toggle"/>
+				</setting>
 				<setting id="searchHistory" type="boolean" label="30161" help="">
 					<level>0</level>
 					<default>false</default>
@@ -129,6 +134,11 @@
 				<setting id="general.flatten.episodes" type="boolean" label="30208" help="">
 					<level>0</level>
 					<default>false</default>
+					<control type="toggle"/>
+				</setting>
+				<setting id="general.drilldown.fast_open" type="boolean" label="31223" help="31224">
+					<level>0</level>
+					<default>true</default>
 					<control type="toggle"/>
 				</setting>
 				<setting id="general.smart.scroll.enable" type="boolean" label="31021" help="">
@@ -427,6 +437,13 @@
 						<allowempty>true</allowempty>
 					</constraints>
 				</setting>
+				<setting id="general.releaseNotes.lastShownVersion" type="string" help="">
+					<level>4</level>
+					<default/>
+					<constraints>
+						<allowempty>true</allowempty>
+					</constraints>
+				</setting>
 				<setting id="prism.version" type="string" help="">
 					<level>4</level>
 					<default/>
@@ -436,6 +453,12 @@
 					<control type="edit" format="string">
 						<heading/>
 					</control>
+				</setting>
+				<setting id="prism.migration557.pending" type="boolean" help="">
+					<level>4</level>
+					<default>false</default>
+					<enable>false</enable>
+					<control type="toggle"/>
 				</setting>
 			</group>
 			<group id="5" label="30917">
@@ -701,10 +724,32 @@
 					<control type="toggle"/>
 				</setting>
 			</group>
-			<group id="2" label="30259">
+			<group id="2" label="31214">
+				<setting id="metadata.imdb.enabled" type="boolean" label="31221" help="30985">
+					<level>0</level>
+					<default>true</default>
+					<control type="toggle"/>
+				</setting>
+				<setting id="metadata.anilist.enabled" type="boolean" label="31222" help="30989">
+					<level>0</level>
+					<default>true</default>
+					<control type="toggle"/>
+				</setting>
+			</group>
+			<group id="3" label="30259">
 				<setting id="metadata.fanart.enabled" type="boolean" label="30957" help="30962">
 					<level>0</level>
 					<default>false</default>
+					<control type="toggle"/>
+				</setting>
+				<setting id="artwork.tmdb.enabled" type="boolean" label="31215" help="31216">
+					<level>0</level>
+					<default>true</default>
+					<control type="toggle"/>
+				</setting>
+				<setting id="artwork.tvdb.enabled" type="boolean" label="31217" help="31218">
+					<level>0</level>
+					<default>true</default>
 					<control type="toggle"/>
 				</setting>
 				<setting id="general.fanart.fallback" type="boolean" label="30484" help="">
@@ -725,7 +770,7 @@
 					<control type="spinner" format="string"/>
 				</setting>
 			</group>
-			<group id="3" label="30268">
+			<group id="4" label="30268">
 				<setting id="movies.preferedsource" type="integer" label="30254" help="30965">
 					<level>0</level>
 					<default>1</default>
@@ -871,7 +916,7 @@
 					</control>
 				</setting>
 			</group>
-			<group id="4" label="30269">
+			<group id="5" label="30269">
 				<setting id="tvshows.preferedsource" type="integer" label="30255" help="30966">
 					<level>0</level>
 					<default>1</default>
@@ -1057,7 +1102,7 @@
 					<control type="toggle"/>
 				</setting>
 			</group>
-			<group id="5" label="30971">
+			<group id="6" label="30971">
 				<setting id="anime.preferedsource" type="integer" label="30983" help="30972">
 					<level>0</level>
 					<default>1</default>
@@ -1989,12 +2034,12 @@
 				</setting>
 			</group>
 			<group id="5" label="30121">
-				<setting id="preem.enabled" type="boolean" label="30122" help="">
+				<setting id="preem.enabled" type="boolean" label="30122" help="31243">
 					<level>0</level>
 					<default>true</default>
 					<control type="toggle"/>
 				</setting>
-				<setting id="preem.movieres" type="integer" label="30123" help="" parent="preem.enabled">
+				<setting id="preem.movieres" type="integer" label="30123" help="31258" parent="preem.enabled">
 					<level>0</level>
 					<default>0</default>
 					<constraints>
@@ -2012,7 +2057,7 @@
 					</dependencies>
 					<control type="spinner" format="string"/>
 				</setting>
-				<setting id="preem.tvres" type="integer" label="30124" help="" parent="preem.enabled">
+				<setting id="preem.tvres" type="integer" label="30124" help="31259" parent="preem.enabled">
 					<level>0</level>
 					<default>1</default>
 					<constraints>
@@ -2030,7 +2075,7 @@
 					</dependencies>
 					<control type="spinner" format="string"/>
 				</setting>
-				<setting id="preem.limit" type="integer" label="30125" help="" parent="preem.enabled">
+				<setting id="preem.limit" type="integer" label="30125" help="31244" parent="preem.enabled">
 					<level>0</level>
 					<default>5</default>
 					<constraints>
@@ -2046,14 +2091,14 @@
 						<popup>false</popup>
 					</control>
 				</setting>
-				<setting id="preem.type" type="integer" label="30126" help="" parent="preem.enabled">
+				<setting id="preem.torrents.policy" type="integer" label="31245" help="31246" parent="preem.enabled">
 					<level>0</level>
-					<default>0</default>
+					<default>1</default>
 					<constraints>
 						<options>
-							<option label="30234">0</option>
-							<option label="30235">1</option>
-							<option label="30236">2</option>
+							<option label="31253">0</option>
+							<option label="31254">1</option>
+							<option label="31255">2</option>
 						</options>
 					</constraints>
 					<dependencies>
@@ -2063,27 +2108,87 @@
 					</dependencies>
 					<control type="spinner" format="string"/>
 				</setting>
-				<setting id="preem.waitfor.directfiles" type="boolean" label="30914" help="" parent="preem.enabled">
+				<setting id="preem.hosters.policy" type="integer" label="31263" help="31264" parent="preem.enabled">
 					<level>0</level>
-					<default>false</default>
+					<default>0</default>
+					<constraints>
+						<options>
+							<option label="31253">0</option>
+							<option label="31254">1</option>
+							<option label="31255">2</option>
+						</options>
+					</constraints>
 					<dependencies>
 						<dependency type="visible">
 							<condition operator="is" setting="preem.enabled">true</condition>
 						</dependency>
 					</dependencies>
-					<control type="toggle"/>
+					<control type="spinner" format="string"/>
 				</setting>
-				<setting id="preem.waitfor.cloudfiles" type="boolean" label="30616" help="" parent="preem.enabled">
+				<setting id="preem.type" type="integer" label="31257" parent="preem.enabled">
+					<level>4</level>
+					<default>0</default>
+					<constraints>
+						<options>
+							<option label="30234">0</option>
+							<option label="30235">1</option>
+							<option label="30236">2</option>
+						</options>
+					</constraints>
+					<control type="spinner" format="string"/>
+				</setting>
+				<setting id="preem.cloud.policy" type="integer" label="31247" help="31248" parent="preem.enabled">
 					<level>0</level>
-					<default>false</default>
+					<default>1</default>
+					<constraints>
+						<options>
+							<option label="31253">0</option>
+							<option label="31254">1</option>
+							<option label="31255">2</option>
+						</options>
+					</constraints>
 					<dependencies>
 						<dependency type="visible">
 							<condition operator="is" setting="preem.enabled">true</condition>
 						</dependency>
 					</dependencies>
-					<control type="toggle"/>
+					<control type="spinner" format="string"/>
 				</setting>
-				<setting id="preem.cloudfiles" type="boolean" label="30188" help="" parent="preem.enabled">
+				<setting id="preem.adaptive.policy" type="integer" label="31249" help="31250" parent="preem.enabled">
+					<level>0</level>
+					<default>1</default>
+					<constraints>
+						<options>
+							<option label="31253">0</option>
+							<option label="31254">1</option>
+							<option label="31255">2</option>
+						</options>
+					</constraints>
+					<dependencies>
+						<dependency type="visible">
+							<condition operator="is" setting="preem.enabled">true</condition>
+						</dependency>
+					</dependencies>
+					<control type="spinner" format="string"/>
+				</setting>
+				<setting id="preem.direct.policy" type="integer" label="31251" help="31252" parent="preem.enabled">
+					<level>0</level>
+					<default>1</default>
+					<constraints>
+						<options>
+							<option label="31253">0</option>
+							<option label="31254">1</option>
+							<option label="31255">2</option>
+						</options>
+					</constraints>
+					<dependencies>
+						<dependency type="visible">
+							<condition operator="is" setting="preem.enabled">true</condition>
+						</dependency>
+					</dependencies>
+					<control type="spinner" format="string"/>
+				</setting>
+				<setting id="preem.waitfor.directfiles" type="boolean" label="30914" help="31261" parent="preem.enabled">
 					<level>0</level>
 					<default>true</default>
 					<dependencies>
@@ -2093,7 +2198,7 @@
 					</dependencies>
 					<control type="toggle"/>
 				</setting>
-				<setting id="preem.adaptiveSources" type="boolean" label="30478" help="" parent="preem.enabled">
+				<setting id="preem.waitfor.cloudfiles" type="boolean" label="30616" help="31262" parent="preem.enabled">
 					<level>0</level>
 					<default>true</default>
 					<dependencies>
@@ -2103,14 +2208,19 @@
 					</dependencies>
 					<control type="toggle"/>
 				</setting>
-				<setting id="preem.directSources" type="boolean" label="30630" help="" parent="preem.enabled">
-					<level>0</level>
+				<setting id="preem.cloudfiles" type="boolean" label="30188" parent="preem.enabled">
+					<level>4</level>
 					<default>true</default>
-					<dependencies>
-						<dependency type="visible">
-							<condition operator="is" setting="preem.enabled">true</condition>
-						</dependency>
-					</dependencies>
+					<control type="toggle"/>
+				</setting>
+				<setting id="preem.adaptiveSources" type="boolean" label="30478" parent="preem.enabled">
+					<level>4</level>
+					<default>true</default>
+					<control type="toggle"/>
+				</setting>
+				<setting id="preem.directSources" type="boolean" label="30630" parent="preem.enabled">
+					<level>4</level>
+					<default>true</default>
 					<control type="toggle"/>
 				</setting>
 			</group>
@@ -2304,6 +2414,13 @@
 					<control type="toggle"/>
 				</setting>
 				<setting id="general.last_played_source" type="string" help="">
+					<level>4</level>
+					<default/>
+					<constraints>
+						<allowempty>true</allowempty>
+					</constraints>
+				</setting>
+				<setting id="general.last_played_show_id" type="string" help="">
 					<level>4</level>
 					<default/>
 					<constraints>
@@ -2686,13 +2803,14 @@
 					</constraints>
 					<control type="spinner" format="string"/>
 				</setting>
-				<setting id="general.playstyleEpisodes" type="integer" label="30085" help="">
+				<setting id="general.playstyleEpisodes" type="integer" label="30085" help="31235">
 					<level>0</level>
 					<default>0</default>
 					<constraints>
 						<options>
 							<option label="30086">0</option>
 							<option label="30087">1</option>
+							<option label="31234">2</option>
 						</options>
 					</constraints>
 					<control type="spinner" format="string"/>
@@ -3306,6 +3424,11 @@
 		</category>
 		<category id="advanced" label="30260" help="">
 			<group id="1" label="30605">
+				<setting id="general.db.wal_mode" type="boolean" label="31210" help="31211">
+					<level>2</level>
+					<default>false</default>
+					<control type="toggle"/>
+				</setting>
 				<setting id="general.menucaching" type="boolean" label="30193" help="31020">
 					<level>0</level>
 					<default>true</default>
@@ -3539,6 +3662,47 @@
 						<heading>30869</heading>
 					</control>
 				</setting>
+				<setting id="mixed.view" type="integer" label="31240" help="31242" parent="general.setViews">
+					<level>0</level>
+					<default>0</default>
+					<constraints>
+						<options>
+							<option label="30223">0</option>
+							<option label="30224">1</option>
+							<option label="30225">2</option>
+							<option label="30226">3</option>
+							<option label="30227">4</option>
+							<option label="30228">5</option>
+							<option label="30229">6</option>
+							<option label="30230">7</option>
+							<option label="30231">8</option>
+						</options>
+					</constraints>
+					<dependencies>
+						<dependency type="visible">
+							<and>
+								<condition operator="is" setting="general.viewidswitch">false</condition>
+								<condition operator="is" setting="general.setViews">true</condition>
+							</and>
+						</dependency>
+					</dependencies>
+					<control type="spinner" format="string"/>
+				</setting>
+				<setting id="mixed.view.id" type="integer" label="31241" help="" parent="general.setViews">
+					<level>0</level>
+					<default>0</default>
+					<dependencies>
+						<dependency type="visible">
+							<and>
+								<condition operator="is" setting="general.viewidswitch">true</condition>
+								<condition operator="is" setting="general.setViews">true</condition>
+							</and>
+						</dependency>
+					</dependencies>
+					<control type="edit" format="integer">
+						<heading>31241</heading>
+					</control>
+				</setting>
 				<setting id="episode.view" type="integer" label="30098" help="" parent="general.setViews">
 					<level>0</level>
 					<default>0</default>
@@ -3692,26 +3856,6 @@
 					<control type="edit" format="string">
 						<heading>30888</heading>
 					</control>
-				</setting>
-				<setting id="metadata.tmdb.enabled" type="boolean" label="30955" help="30960">
-					<level>0</level>
-					<default>true</default>
-					<control type="toggle"/>
-				</setting>
-				<setting id="metadata.imdb.enabled" type="boolean" label="30984" help="30985">
-					<level>0</level>
-					<default>true</default>
-					<control type="toggle"/>
-				</setting>
-				<setting id="metadata.tvdb.enabled" type="boolean" label="30956" help="30961">
-					<level>0</level>
-					<default>true</default>
-					<control type="toggle"/>
-				</setting>
-				<setting id="metadata.anilist.enabled" type="boolean" label="30988" help="30989">
-					<level>0</level>
-					<default>true</default>
-					<control type="toggle"/>
 				</setting>
 				<setting id="metadata.mdblist.enabled" type="boolean" label="30958" help="30963">
 					<level>0</level>

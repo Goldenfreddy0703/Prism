@@ -77,10 +77,18 @@ class Resolverhelper:
             if cache_key:
                 g.set_runtime_setting(cache_key, release_title)
 
-        if smart_play_context and resolved_source:
+        # Remember what actually played for digit-bump reorder (pre-scrape + binge).
+        if (
+            resolved_source
+            and item_information.get("info", {}).get("mediatype") == g.MEDIA_EPISODE
+        ):
+            from resources.lib.simkl.ids import show_id_from_info
             from resources.lib.modules.last_played_source import save_last_played_source
 
-            save_last_played_source(resolved_source)
+            save_last_played_source(
+                resolved_source,
+                show_id=show_id_from_info(item_information.get("info")),
+            )
         return stream_link
 
     def close_window(self):

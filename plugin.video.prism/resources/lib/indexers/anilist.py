@@ -231,8 +231,20 @@ class AnilistAPI:
         self._wait_rate_limit()
         payload = {"query": query, "variables": variables}
         try:
+            from resources.lib.net.sync_bridge import sync_http_request
+
             with _graphql_lock:
-                response = self.session.post(GRAPHQL_URL, json=payload, timeout=20)
+                response = sync_http_request(
+                    "anilist",
+                    "POST",
+                    GRAPHQL_URL,
+                    kind="graphql",
+                    session=self.session,
+                    json=payload,
+                    timeout=20,
+                )
+            if response is None:
+                return None
             if response.status_code == 429:
                 self._set_rate_limit()
                 g.log("AniList GraphQL rate limited (429)", "warning")

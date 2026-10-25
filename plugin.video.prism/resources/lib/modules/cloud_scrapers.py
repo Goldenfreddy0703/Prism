@@ -42,6 +42,13 @@ class CloudScraper(ApiBase):
 
         if not self._is_enabled():
             return []
+        try:
+            return self._get_sources_inner(item_information, simple_info)
+        except Exception as exc:
+            g.log(f"{self.debrid_provider} cloud scraper failed: {exc}", "error")
+            return []
+
+    def _get_sources_inner(self, item_information, simple_info=None):
         self.item_information = item_information
         self.media_type = self.item_information['info']['mediatype']
 
@@ -106,6 +113,7 @@ class CloudScraper(ApiBase):
                     episode_regex=self.episode_regex,
                     season_regex=self.season_regex,
                     simple_info=self.simple_info,
+                    file_title=source_utils.build_cloud_file_title(item),
                 ):
                     sources.append(item)
 
@@ -172,6 +180,7 @@ class CloudScraper(ApiBase):
                 episode_regex=self.episode_regex,
                 season_regex=self.season_regex,
                 simple_info=self.simple_info,
+                file_title=source_utils.build_cloud_file_title(item),
             )
 
         else:

@@ -97,13 +97,13 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
     @guard_against_none(list)
     def get_movies_by_simkl_status(self, status: str) -> list[dict]:
         rows = self.fetchall(
-            "SELECT simkl_id FROM movies WHERE simkl_status = ?",
+            "SELECT simkl_id, info FROM movies WHERE simkl_status = ?",
             (status,),
         )
         if not rows:
             rows = self.fetchall("SELECT simkl_id, info FROM movies")
             rows = [
-                {"simkl_id": row["simkl_id"]}
+                {"simkl_id": row["simkl_id"], "info": row.get("info")}
                 for row in rows
                 if isinstance(row.get("info"), dict) and row["info"].get("simkl_status") == status
             ]

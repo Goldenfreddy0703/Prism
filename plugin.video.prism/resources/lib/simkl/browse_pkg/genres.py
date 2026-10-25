@@ -155,7 +155,7 @@ def discover_by_tmdb_genres(
             tmdb_id = row.get("id")
             if not tmdb_id:
                 continue
-            normalized = resolve_tmdb_to_simkl(int(tmdb_id), catalog)
+            normalized = resolve_tmdb_to_simkl(int(tmdb_id), catalog, with_detail=False)
             if not normalized:
                 continue
             if _should_exclude_anime_from_genre_browse(normalized, catalog):

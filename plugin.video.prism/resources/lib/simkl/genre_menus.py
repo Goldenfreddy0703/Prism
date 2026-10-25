@@ -32,38 +32,22 @@ def _render_genre_browse_page(
     next_action: str,
     next_args,
     list_id: str | None = None,
+    merge_source: str = "genre",
 ) -> None:
-    """Paint genre browse via catalog payload + CDN hydrate + Simkl detail gap-fill."""
-    from resources.lib.discover.renderer import discover_list_kwargs
-    from resources.lib.discover.sync_bridge import simkl_refs
-    from resources.lib.meta.list_pipeline import get_list_store, make_list_id, render_list_page, seed_browse_page
-    from resources.lib.modules.globals import g
+    """Paint genre browse via CatalogPagePipeline."""
+    from resources.lib.pipeline.catalog_page import CatalogPagePipeline
 
-    resolved_list_id = list_id or make_list_id(next_action, next_args, g.PAGE)
-    store = get_list_store("genre")
-    store.remember_items(catalog, resolved_list_id, page.items)
+    menu_page = max(1, int(g.PAGE or 1))
+    resolved_list_id = list_id or make_list_id(next_action, next_args, menu_page)
 
-    seed_browse_page(catalog, page.items)
-
-    list_kwargs = discover_list_kwargs(
-        enrichment_reason="genre",
-        seeded=True,
-        prefer_catalog_payload=True,
-    )
-    if page.has_next_page:
-        list_kwargs["has_next_page"] = True
-        list_kwargs["next_action"] = next_action
-        list_kwargs["next_args"] = next_args
-
-    render_list_page(
-        "paint_first",
+    CatalogPagePipeline.open_genre(
         catalog,
-        page.items,
+        page,
         list_builder,
-        list_kwargs=list_kwargs,
-        refs=simkl_refs(page.items),
-        payload_rows=page.items,
-        seeded=True,
+        next_action=next_action,
+        next_args=next_args,
+        list_id=resolved_list_id,
+        browse_source=merge_source,
     )
 
 
@@ -75,9 +59,9 @@ def show_genre_picker(catalog: str) -> None:
 
     if catalog in MULTI_GENRE_ACTIONS:
         multi_action, _ = MULTI_GENRE_ACTIONS[catalog]
-        from resources.lib.meta.provider_settings import provider_enabled
+        from resources.lib.meta.provider_settings import tmdb_features_enabled
 
-        if catalog == "anime" or provider_enabled("tmdb"):
+        if catalog == "anime" or tmdb_features_enabled():
             g.add_directory_item(
                 g.get_language_string(30940),
                 action=multi_action,
@@ -96,9 +80,9 @@ def show_genre_picker(catalog: str) -> None:
 
 
 def show_tmdb_genre_multiselect(catalog: str, page_limit: int, list_builder) -> None:
-    from resources.lib.meta.provider_settings import notify_tmdb_required, provider_enabled
+    from resources.lib.meta.provider_settings import notify_tmdb_required, tmdb_features_enabled
 
-    if not provider_enabled("tmdb"):
+    if not tmdb_features_enabled():
         notify_tmdb_required()
         g.cancel_directory()
         return
@@ -185,35 +169,33 @@ def _parse_tenrai_multi_genre_action_args(action_args) -> tuple[str | None, int,
 
 
 def render_multi_genre_list(catalog: str, action_args, page_limit: int, list_builder) -> None:
-    genre_ids, tmdb_page, tmdb_offset = _parse_tmdb_multi_genre_action_args(action_args)
+    genre_ids, _tmdb_page, _tmdb_offset = _parse_tmdb_multi_genre_action_args(action_args)
     if not genre_ids:
         g.cancel_directory()
         return
 
-    pagination_args = {"genres": genre_ids}
-    if tmdb_page > 1:
-        pagination_args["tmdb_page"] = tmdb_page
-    if tmdb_offset > 0:
-        pagination_args["tmdb_offset"] = tmdb_offset
-    persist_search_pagination(pagination_args)
+    persist_search_pagination({"genres": genre_ids})
 
-    page = browse.discover_by_tmdb_genres(
-        catalog,
-        genre_ids,
-        page_limit,
-        tmdb_page=tmdb_page,
-        tmdb_offset=tmdb_offset,
-    )
-    if not page.items:
+    menu_page = max(1, int(g.PAGE or 1))
+    tmdb_list_id = make_list_id("tmdb", catalog, genre_ids)
+
+    def _tmdb_loader() -> list:
+        result = browse.discover_by_tmdb_genres(
+            catalog,
+            genre_ids,
+            page_limit,
+            menu_page=menu_page,
+        )
+        return list(result.items or [])
+
+    thin = _genre_thin_page(catalog, tmdb_list_id, menu_page, page_limit, _tmdb_loader)
+    if not thin or not thin.items:
         notify_empty_search(30766)
         return
+    page = thin
 
     _, get_action = MULTI_GENRE_ACTIONS[catalog]
     next_args: dict[str, str | int] = {"genres": genre_ids}
-    if page.has_next_page:
-        next_args["tmdb_page"] = page.next_tmdb_page
-        if page.next_tmdb_offset:
-            next_args["tmdb_offset"] = page.next_tmdb_offset
 
     _render_genre_browse_page(
         catalog,
@@ -221,39 +203,38 @@ def render_multi_genre_list(catalog: str, action_args, page_limit: int, list_bui
         list_builder,
         next_action=get_action,
         next_args=next_args,
-        list_id=make_list_id("tmdb", catalog, genre_ids, tmdb_page, tmdb_offset),
+        list_id=make_list_id("tmdb", catalog, genre_ids, menu_page),
+        merge_source=f"tmdb_genre:{genre_ids}",
     )
 
 
 def render_anime_multi_genre_list(action_args, page_limit: int, list_builder) -> None:
-    genre_ids, tenrai_page, tenrai_offset = _parse_tenrai_multi_genre_action_args(action_args)
+    genre_ids, _tenrai_page, _tenrai_offset = _parse_tenrai_multi_genre_action_args(action_args)
     if not genre_ids:
         g.cancel_directory()
         return
 
-    pagination_args = {"genres": genre_ids}
-    if tenrai_page > 1:
-        pagination_args["tenrai_page"] = tenrai_page
-    if tenrai_offset > 0:
-        pagination_args["tenrai_offset"] = tenrai_offset
-    persist_search_pagination(pagination_args)
+    persist_search_pagination({"genres": genre_ids})
 
-    page = browse.discover_by_tenrai_genres(
-        genre_ids,
-        page_limit,
-        tenrai_page=tenrai_page,
-        row_offset=tenrai_offset,
-    )
-    if not page.items:
+    menu_page = max(1, int(g.PAGE or 1))
+    tenrai_list_id = make_list_id("tenrai", genre_ids)
+
+    def _tenrai_loader() -> list:
+        result = browse.discover_by_tenrai_genres(
+            genre_ids,
+            page_limit,
+            menu_page=menu_page,
+        )
+        return list(result.items or [])
+
+    thin = _genre_thin_page("anime", tenrai_list_id, menu_page, page_limit, _tenrai_loader)
+    if not thin or not thin.items:
         notify_empty_search(30766)
         return
+    page = thin
 
     _, get_action = MULTI_GENRE_ACTIONS["anime"]
     next_args: dict[str, str | int] = {"genres": genre_ids}
-    if page.has_next_page:
-        next_args["tenrai_page"] = page.next_tmdb_page
-        if page.next_tmdb_offset:
-            next_args["tenrai_offset"] = page.next_tmdb_offset
 
     _render_genre_browse_page(
         "anime",
@@ -261,8 +242,31 @@ def render_anime_multi_genre_list(action_args, page_limit: int, list_builder) ->
         list_builder,
         next_action=get_action,
         next_args=next_args,
-        list_id=make_list_id("tenrai", genre_ids, tenrai_page, tenrai_offset),
+        list_id=make_list_id("tenrai", genre_ids, menu_page),
+        merge_source=f"tenrai_genre:{genre_ids}",
     )
+
+
+def _genre_thin_page(
+    catalog: str,
+    list_id: str,
+    page: int,
+    page_limit: int,
+    loader,
+) -> browse.GenreBrowsePage | None:
+    from resources.lib.meta.list_pipeline import get_list_store
+
+    store = get_list_store("genre")
+    items = store.load_thin_page_items(
+        catalog,
+        list_id,
+        page,
+        loader,
+        disk_namespace="genre",
+    )
+    if not items:
+        return None
+    return browse.GenreBrowsePage(items, len(items) >= page_limit)
 
 
 def render_genre_list(catalog: str, args, page_limit: int, list_builder) -> None:
@@ -271,8 +275,18 @@ def render_genre_list(catalog: str, args, page_limit: int, list_builder) -> None
         g.cancel_directory()
         return
 
-    page = browse.discover_by_genre_slug(catalog, slug, g.PAGE, page_limit)
-    if not page.items:
+    menu_page = max(1, int(g.PAGE or 1))
+    list_id = make_list_id("slug", catalog, slug)
+    page = _genre_thin_page(
+        catalog,
+        list_id,
+        menu_page,
+        page_limit,
+        lambda: list(
+            browse.discover_by_genre_slug(catalog, slug, menu_page, page_limit).items or []
+        ),
+    )
+    if not page or not page.items:
         g.cancel_directory()
         return
 
@@ -283,4 +297,5 @@ def render_genre_list(catalog: str, args, page_limit: int, list_builder) -> None
         next_action=GENRE_GET_ACTIONS[catalog],
         next_args=slug,
         list_id=make_list_id("slug", catalog, slug),
+        merge_source=f"genre_slug:{slug}",
     )

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import shutil
 import time
 
+import xbmc
 import xbmcgui
 import xbmcvfs
 
@@ -17,6 +19,68 @@ from resources.lib.indexers.simkl import SimklAPI
 from resources.lib.indexers.tvdb import TVDBAPI
 from resources.lib.modules.globals import g
 from resources.lib.modules.providers.install_manager import ProviderInstallManager
+
+_DEFERRED_WIPE_FLAG = "special://profile/prism_wipe_pending"
+
+
+def _deferred_wipe_flag_path() -> str:
+    return tools.translate_path(_DEFERRED_WIPE_FLAG)
+
+
+def stop_prism_background_services() -> None:
+    """Best-effort shutdown of provider services and DB handles before deleting addon_data."""
+    g.set_runtime_setting("prism.wipe_in_progress", True)
+
+    try:
+        import resources.lib.modules.monkey_requests as monkey_requests
+
+        monkey_requests.allow_provider_requests = False
+        monkey_requests.PRE_TERM_BLOCK = True
+    except Exception:
+        pass
+
+    try:
+        from resources.lib.modules.providers.service_manager import ProvidersServiceManager
+
+        manager = ProvidersServiceManager()
+        for package in manager.known_packages:
+            pack_name = package.get("pack_name")
+            if pack_name:
+                manager.stop_package_services(pack_name)
+        for _ in range(30):
+            messages = manager.get_messages()
+            if not messages:
+                break
+            manager._handle_messages(messages)
+    except Exception:
+        g.log_stacktrace()
+
+    from resources.lib.common.backup_restore import release_userdata_locks
+
+    release_userdata_locks()
+
+
+def schedule_deferred_wipe() -> None:
+    flag = _deferred_wipe_flag_path()
+    try:
+        with open(flag, "w", encoding="utf-8") as handle:
+            handle.write(str(int(time.time())))
+        g.log(f"Prism: scheduled deferred addon_data wipe ({flag})", "info")
+    except OSError:
+        g.log_stacktrace()
+
+
+def consume_deferred_wipe_at_startup() -> bool:
+    """Run before any Prism DB init on service start (no background threads yet)."""
+    flag = _deferred_wipe_flag_path()
+    if not os.path.isfile(flag):
+        return False
+    try:
+        os.remove(flag)
+    except OSError:
+        g.log(f"Prism: could not remove deferred wipe flag {flag}", "warning")
+    g.log("Prism: performing deferred addon_data wipe at cold service start", "info")
+    return _wipe_userdata_folder_core()
 
 
 def export_settings() -> None:
@@ -37,7 +101,8 @@ def update_themes():
     :return: None
     :rtype: None
     """
-    if g.get_bool_setting("skin.updateAutomatic"):
+    automatic = g.get_bool_setting("skin.updateAutomatic")
+    if automatic:
         SkinManager().check_for_updates(silent=True)
 
 
@@ -64,11 +129,102 @@ def refresh_apis():
     """
     if g.get_setting("simkl.auth"):
         SimklAPI().try_refresh_token()
-        from resources.lib.simkl.remote_activities import get_activities_payload
-
-        get_activities_payload(force=True)
+        # Activities sync is owned by syncSimklActivities (throttled); do not force-fetch here.
     real_debrid.RealDebrid().try_refresh_token()
     TVDBAPI().try_refresh_token()
+
+
+def _userdata_file_count(userdata_path: str) -> int:
+    native = tools.translate_path(userdata_path)
+    if not os.path.isdir(native):
+        return 0
+    total = 0
+    for _root, _dirs, files in os.walk(native):
+        total += len(files)
+    return total
+
+
+def _wipe_userdata_folder_core() -> bool:
+    path = tools.validate_path(g.ADDON_USERDATA_PATH)
+    native = tools.translate_path(path)
+    before_count = _userdata_file_count(path)
+    g.log(f"Wipe addon data: {before_count} file(s) under {path}", "info")
+
+    try:
+        if xbmcvfs.exists(path):
+            if not xbmcvfs.rmdir(path, True):
+                g.log("Wipe addon data: xbmcvfs.rmdir returned false (files may be locked)", "warning")
+
+        if os.path.isdir(native):
+            shutil.rmtree(native, ignore_errors=False)
+
+        xbmcvfs.mkdir(g.ADDON_USERDATA_PATH)
+
+        after_count = _userdata_file_count(path)
+        ok = after_count == 0
+        g.log(f"Wipe addon data: complete, {after_count} file(s) remaining", "info" if ok else "error")
+        return ok
+    except OSError:
+        g.log_stacktrace()
+        return False
+
+
+def wipe_userdata_folder() -> bool:
+    """Stop services, delete addon_data, or schedule a deferred wipe if files stay locked."""
+    stop_prism_background_services()
+    ok = _wipe_userdata_folder_core()
+    g.clear_runtime_setting("prism.wipe_in_progress")
+    if ok:
+        return True
+    schedule_deferred_wipe()
+    return False
+
+
+def prompt_restart_to_finish_wipe() -> None:
+    if xbmcgui.Dialog().yesno(
+        g.ADDON_NAME,
+        "Prism must restart to finish removing old data (files were still in use). Restart now?",
+    ):
+        xbmc.executebuiltin("RestartApp")
+    else:
+        notify_wipe_incomplete()
+
+
+def perform_addon_data_wipe() -> bool:
+    """
+    Wipe addon_data after stopping services. On failure, schedules wipe on next Kodi start
+    and prompts to restart.
+    """
+    if wipe_userdata_folder():
+        return True
+    g.log("Prism: addon_data wipe incomplete — restart required", "warning")
+    prompt_restart_to_finish_wipe()
+    return False
+
+
+def perform_migration_wipe() -> None:
+    """
+    5.0.57 migration wipe: stop services, try delete now, always defer + restart prompt
+    (service has not opened databases yet, but provider threads may still lock files).
+    """
+    stop_prism_background_services()
+    if not _wipe_userdata_folder_core():
+        g.log("Prism: migration inline wipe incomplete — will finish after restart", "warning")
+    g.clear_runtime_setting("prism.wipe_in_progress")
+    schedule_deferred_wipe()
+    prompt_restart_to_finish_wipe()
+
+
+def prompt_restart_after_wipe() -> None:
+    if xbmcgui.Dialog().yesno(g.ADDON_NAME, g.get_language_string(31271)):
+        xbmc.executebuiltin("RestartApp")
+
+
+def notify_wipe_incomplete() -> None:
+    xbmcgui.Dialog().ok(
+        g.ADDON_NAME,
+        "Some Prism data files could not be removed (still in use). Restart Kodi and run Wipe Addon Data again.",
+    )
 
 
 def wipe_install():
@@ -88,10 +244,8 @@ def wipe_install():
     if confirm == 0:
         return
 
-    path = tools.validate_path(g.ADDON_USERDATA_PATH)
-    if xbmcvfs.exists(path):
-        xbmcvfs.rmdir(path, True)
-    xbmcvfs.mkdir(g.ADDON_USERDATA_PATH)
+    if perform_addon_data_wipe():
+        prompt_restart_after_wipe()
 
 
 def premiumize_transfer_cleanup():
@@ -228,7 +382,7 @@ def run_maintenance():
     :return: None
     :rtype: None
     """
-    g.log("Performing Maintenance")
+    g.log("Performing Maintenance", "debug")
     # ADD COMMON HOUSE KEEPING ITEMS HERE #
 
     # Refresh API tokens
@@ -239,40 +393,12 @@ def run_maintenance():
         g.log(f"Failed to update API keys: {e}", 'error')
 
     try:
-        from resources.lib.calendar.simkl_calendar import (
-            prefetch_all_calendars,
-            prefetch_calendars_enabled,
-            weekly_cache_warm,
-        )
-        from resources.lib.modules.cache_maintenance import service_background_idle_ready
-        from resources.lib.modules.page_prefetch import foreground_browse_busy
-
-        if prefetch_calendars_enabled() and not weekly_cache_warm():
-            if g.is_addon_visible() or foreground_browse_busy():
-                g.log("Simkl calendar prefetch: deferred — foreground browse active", "debug")
-            elif not service_background_idle_ready():
-                g.log("Simkl calendar prefetch: deferred — background not idle", "debug")
-            else:
-                warmed = prefetch_all_calendars()
-                if warmed:
-                    g.log(f"Calendar prefetch warmed {warmed} weekly rows", "debug")
-    except Exception as e:
-        g.log(f"Failed to prefetch weekly calendars: {e}", "warning")
-
-    try:
         account_premium_status_checks()
     except Exception as e:
         g.log(f"Failed to check account status: {e}", 'error')
     ProviderInstallManager()
     update_provider_packages()
     update_themes()
-
-    try:
-        from resources.lib.anime.mal_dubs import update_mal_dub_list
-
-        update_mal_dub_list()
-    except Exception as e:
-        g.log(f"Failed to update MAL-Dubs list: {e}", "warning")
 
     # Check Premiumize Fair Usage for cleanup
     if g.get_bool_setting("premiumize.enabled") and g.get_bool_setting("premiumize.autodelete"):
@@ -283,17 +409,66 @@ def run_maintenance():
 
     # clean_deprecated_settings()
     cache.Cache().check_cleanup()
-    try:
-        from resources.lib.meta.enrichment import MetaEnrichmentQueue
 
-        scheduled = MetaEnrichmentQueue.schedule_needs_update()
-        if scheduled:
-            g.log(f"Queued {scheduled} items for background meta enrichment", "debug")
-    except Exception as e:
-        g.log(f"Failed to queue meta enrichment: {e}", "warning")
-    try:
-        from resources.lib.modules.cache_maintenance import run_cache_maintenance
 
-        run_cache_maintenance()
-    except Exception as e:
-        g.log(f"Failed cache maintenance: {e}", "warning")
+def run_prism_idle_maintenance():
+    """
+    Prism-only background work (throttled, idle-only). Invoked via RunPlugin when not playing.
+    Seren-equivalent cache work stays in run_maintenance() via check_cleanup().
+    """
+    from resources.lib.common.background_coordinator import (
+        background_work_guard,
+        idle_ok_for_background_work,
+        mark_throttle,
+        throttle_elapsed,
+    )
+
+    if not idle_ok_for_background_work():
+        g.log("Prism idle maintenance: deferred — foreground or playback active", "debug")
+        return
+
+    with background_work_guard():
+        try:
+            from resources.lib.calendar.simkl_calendar import (
+                prefetch_all_calendars,
+                prefetch_calendars_enabled,
+                weekly_cache_warm,
+            )
+
+            if (
+                prefetch_calendars_enabled()
+                and not weekly_cache_warm()
+                and throttle_elapsed("prism.idle.calendar_last_run")
+            ):
+                warmed = prefetch_all_calendars()
+                mark_throttle("prism.idle.calendar_last_run")
+                if warmed:
+                    g.log(f"Calendar prefetch warmed {warmed} weekly rows", "debug")
+        except Exception as e:
+            g.log(f"Failed to prefetch weekly calendars: {e}", "warning")
+
+        try:
+            from resources.lib.anime.mal_dubs import update_mal_dub_list
+
+            if throttle_elapsed("prism.idle.mal_dubs_last_run"):
+                if update_mal_dub_list():
+                    mark_throttle("prism.idle.mal_dubs_last_run")
+        except Exception as e:
+            g.log(f"Failed to update MAL-Dubs list: {e}", "warning")
+
+        try:
+            from resources.lib.meta.enrichment import MetaEnrichmentQueue
+
+            scheduled = MetaEnrichmentQueue.schedule_needs_update()
+            if scheduled:
+                g.log(f"Queued {scheduled} items for background meta enrichment", "debug")
+            MetaEnrichmentQueue.process_idle()
+        except Exception as e:
+            g.log(f"Failed meta enrichment idle work: {e}", "warning")
+
+        try:
+            from resources.lib.discover.browse_catalog_seed import process_idle_browse_catalog_seed
+
+            process_idle_browse_catalog_seed()
+        except Exception as e:
+            g.log(f"Failed browse catalog seed idle work: {e}", "warning")

@@ -103,15 +103,16 @@ def library_list_needs_verify(catalog: str, status: str, *, force: bool = False)
         record_library_sync_watermark(db, catalog)
 
     from resources.lib.simkl.enrich import simkl_detail_needed
-    from resources.lib.simkl.library_cache import library_status_items_from_db
+    from resources.lib.simkl.media_ref import sync_db_rows_for_refs
 
-    if any(
-        simkl_detail_needed(item)
-        for item in library_status_items_from_db(catalog, status)
-        if isinstance(item, dict)
-    ):
+    rows = sync_db_rows_for_refs(catalog, db_refs)
+    if any(simkl_detail_needed(row) for row in rows if isinstance(row, dict)):
         return True
 
+    g.log(
+        f"Simkl library verify skipped: {catalog}/{status} activities unchanged",
+        "debug",
+    )
     return False
 
 
@@ -143,14 +144,25 @@ def _local_status_simkl_ids(db, catalog: str, status: str) -> set[int]:
 def _clear_local_status_membership(db, catalog: str, status: str, simkl_ids: set[int]) -> None:
     if not simkl_ids:
         return
-    table = "movies" if catalog == "movie" else "shows"
     for simkl_id in simkl_ids:
-        row = db.fetchone(f"SELECT simkl_status FROM {table} WHERE simkl_id=?", (int(simkl_id),))
+        sid = int(simkl_id)
+        if catalog == "movie":
+            row = db.fetchone("SELECT simkl_status FROM movies WHERE simkl_id=?", (sid,))
+        elif catalog == "anime":
+            row = db.fetchone(
+                "SELECT simkl_status FROM shows WHERE simkl_id=? AND catalog='anime'",
+                (sid,),
+            )
+        else:
+            row = db.fetchone(
+                "SELECT simkl_status FROM shows WHERE simkl_id=? AND catalog='tv'",
+                (sid,),
+            )
         if not row:
             continue
         if str(row.get("simkl_status") or "").lower() != str(status).lower():
             continue
-        db.set_simkl_status(int(simkl_id), catalog, None)
+        db.set_simkl_status(sid, catalog, None)
 
 
 def _watch_counters_setting_key(catalog: str, status: str) -> str:
@@ -183,6 +195,12 @@ def refresh_library_watch_counters(catalog: str, status: str, *, force: bool = F
                 pass
 
     db = get_sync_database()
+    section_key = "tv_shows" if catalog == "tv" else "anime"
+    activity_wm = str((db.activities.get(section_key) or {}).get(status) or "")
+    activity_wm_key = f"{key}.activity_wm"
+    if not force and activity_wm and g.get_runtime_setting(activity_wm_key) == activity_wm:
+        return False
+
     media_key = _media_key(catalog)
     try:
         payload = db.simkl_api.get_all_items(
@@ -201,6 +219,8 @@ def refresh_library_watch_counters(catalog: str, status: str, *, force: bool = F
 
     db.apply_show_watch_counters(entries)
     g.set_runtime_setting(key, str(time.time()))
+    if activity_wm:
+        g.set_runtime_setting(activity_wm_key, activity_wm)
 
     return True
 
@@ -236,6 +256,7 @@ def _ingest_remote_status_payload(
                 movies.append(normalized)
         if movies:
             db.insert_simkl_movies(movies, force_meta=force_meta)
+        materialize_library_status_metadata(catalog, status)
         return
     shows = []
     for entry in entries:
@@ -250,6 +271,69 @@ def _ingest_remote_status_payload(
         db.insert_simkl_shows(shows, force_meta=force_meta)
     if entries and catalog != "movie":
         db.apply_show_watch_counters(entries)
+    materialize_library_status_metadata(catalog, status)
+
+
+def materialize_library_priority_page_one(catalog: str) -> int:
+    """Hub/sync helper: stamp page-1 priority library buckets for one catalog."""
+    from resources.lib.meta.menu_paint_profile import MenuPaintProfile
+    from resources.lib.meta.page_materialize import materialize_refs_from_sync_db
+    from resources.lib.simkl.library_cache import _load_refs_from_sync_db
+    from resources.lib.simkl.menu_helpers import library_list_page
+
+    total = 0
+    profile = MenuPaintProfile.LIBRARY.value
+    warm_statuses = frozenset({"watching", "plantowatch", "completed", "dropped"})
+    for status in _statuses_for_catalog(catalog):
+        if status not in warm_statuses:
+            continue
+        refs = _load_refs_from_sync_db(catalog, status)
+        if not refs:
+            continue
+        page_refs, _ = library_list_page(refs)
+        if page_refs:
+            materialize_refs_from_sync_db(catalog, page_refs, profile=profile)
+            total += len(page_refs)
+    return total
+
+
+def schedule_library_hub_background_warm(catalog: str) -> None:
+    """After library hub closes: warm page-1 stamps + raw episode trees for watching shows."""
+    from resources.lib.common.thread_pool import defer_background
+
+    def _warm() -> None:
+        try:
+            materialize_library_priority_page_one(catalog)
+            if catalog in ("tv", "anime"):
+                from resources.lib.database.session import get_sync_database
+                from resources.lib.modules.drilldown_prefetch import schedule_watching_show_raw_prefetch
+
+                schedule_watching_show_raw_prefetch(get_sync_database(), catalog=catalog)
+        except Exception:
+            g.log_stacktrace()
+
+    defer_background(_warm, name=f"prism-library-hub-warm-{catalog}")
+
+
+def materialize_library_catalog_metadata(catalog: str) -> int:
+    """Batch materialize all status buckets for one library catalog after sync."""
+    return sum(
+        materialize_library_status_metadata(catalog, status)
+        for status in _statuses_for_catalog(catalog)
+    )
+
+
+def materialize_library_status_metadata(catalog: str, status: str) -> int:
+    """Sync-time Simkl detail + provider paint + display_meta stamps (not per menu click)."""
+    from resources.lib.meta.menu_paint_profile import MenuPaintProfile
+    from resources.lib.meta.page_materialize import materialize_refs_from_sync_db
+    from resources.lib.simkl.library_cache import _load_refs_from_sync_db
+
+    refs = _load_refs_from_sync_db(catalog, status)
+    if not refs:
+        return 0
+    materialize_refs_from_sync_db(catalog, refs, profile=MenuPaintProfile.LIBRARY.value)
+    return len(refs)
 
 
 def _normalize_remote_status_entries(catalog: str, status: str, payload) -> list[dict]:
@@ -400,9 +484,9 @@ def schedule_library_status_verify(catalog: str, status: str) -> None:
             with _verify_lock:
                 _verify_scheduled.discard(key)
 
-    from resources.lib.common.thread_pool import defer_background
+    from resources.lib.pipeline.library_sync_service import LibrarySyncService
 
-    defer_background(_run, name=f"prism-library-verify-{catalog}-{status}")
+    LibrarySyncService.schedule_verify(catalog, status, _run)
 
 
 def _enrich_thin_library_status_items(catalog: str, status: str) -> int:
@@ -464,7 +548,7 @@ def refresh_library_status_list(catalog: str, status: str, *, force: bool = Fals
         if refs:
             _save_cached_refs(catalog, status, refs)
         record_library_sync_watermark(db, catalog)
-        refresh_library_watch_counters(catalog, status, force=True)
+        refresh_library_watch_counters(catalog, status)
         enriched = _enrich_thin_library_status_items(catalog, status)
         if enriched:
             g.log(

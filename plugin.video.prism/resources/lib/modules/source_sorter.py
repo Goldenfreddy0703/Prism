@@ -1,3 +1,5 @@
+import json
+import time
 from difflib import SequenceMatcher
 
 import xbmcgui
@@ -370,10 +372,17 @@ class SourceSorter:
         return 0 if ratio < 0.85 else ratio
 
     def _get_audio_lang_sort_key(self, source):
-        present = {"MULTI-AUDIO", "DUAL-AUDIO", "SUB", "DUB"} & source.get("info", set())
-        return max((self.audio_priorities.get(tag, -99) for tag in present), default=-99)
+        info = source.get("info", set())
+        scores = [self.audio_priorities.get(tag, -99) for tag in {"MULTI-AUDIO", "DUAL-AUDIO", "SUB", "DUB"} & info]
+        if "MULTI" in info:
+            scores.append(self.audio_priorities.get("MULTI-AUDIO", -99))
+        return max(scores, default=-99)
 
     def _get_subtitle_sort_key(self, source):
-        if "MULTI-SUB" in source.get("info", set()):
-            return self.subtitle_priorities.get("MULTI-SUB", -99)
-        return -99
+        info = source.get("info", set())
+        scores = []
+        if "MULTI-SUB" in info:
+            scores.append(self.subtitle_priorities.get("MULTI-SUB", -99))
+        if "MULTI" in info:
+            scores.append(self.subtitle_priorities.get("MULTI-SUB", -99))
+        return max(scores, default=-99)

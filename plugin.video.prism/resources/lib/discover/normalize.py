@@ -166,14 +166,17 @@ def ensure_info_duration(info: dict[str, Any]) -> None:
 def _build_info(item: dict[str, Any], catalog: str, simkl_id: int, ids: dict[str, Any], air_date: str | None) -> dict[str, Any]:
     from resources.lib.simkl.catalog import is_anime_movie_item, simkl_anime_type
 
-    is_movie = catalog == "movie"
+    anime_type = simkl_anime_type(item)
+    is_anime_film = catalog == "anime" and (
+        anime_type == "movie" or is_anime_movie_item(item, catalog)
+    )
+    is_movie = catalog == "movie" or is_anime_film
     mediatype = "movie" if is_movie else "tvshow"
     overview = item.get("overview")
     tmdb_id = _int_or_none(ids.get("tmdb"))
     tvdb_id = _int_or_none(ids.get("tvdb"))
     mal_id = _int_or_none(ids.get("mal"))
     imdb_id = ids.get("imdb")
-    anime_type = simkl_anime_type(item)
 
     info: dict[str, Any] = {
         "simkl_id": simkl_id,

@@ -72,11 +72,9 @@ class SimklContextMenu:
         options = {
             g.get_language_string(30278): {
                 "method": self._mark_watched,
-                "info_key": "info",
             },
             g.get_language_string(30279): {
                 "method": self._mark_unwatched,
-                "info_key": "info",
             },
             g.get_language_string(30753): {
                 "method": self._move_to_list,
@@ -171,9 +169,13 @@ class SimklContextMenu:
         if not show_id:
             return None
         from resources.lib.database.session import get_sync_database
+        from resources.lib.database.simkl_sync.serial_access import sync_show_table_for_catalog
+        from resources.lib.simkl.library_status import library_catalog
 
+        catalog = library_catalog(info) or "tv"
+        show_table = sync_show_table_for_catalog(catalog)
         row = get_sync_database().fetchone(
-            "SELECT user_rating FROM shows WHERE simkl_id=?",
+            f"SELECT user_rating FROM {show_table} WHERE simkl_id=?",
             (int(show_id),),
         )
         if not row or row.get("user_rating") is None:
@@ -270,6 +272,13 @@ class SimklContextMenu:
     @staticmethod
     def _season_or_show_mark_watched(item_information: dict) -> bool:
         """True when Simkl manager should offer Mark as Watched for a season or show."""
+        info = _library_info(item_information)
+        mediatype = (info.get("mediatype") or "").lower()
+        if mediatype == "season":
+            from resources.lib.modules.list_builder import ListBuilder
+
+            fully = ListBuilder._season_fully_watched(item_information)
+            return not fully
         watched = int(item_information.get("watched_episodes") or 0)
         unwatched_raw = item_information.get("unwatched_episodes")
         if unwatched_raw is not None:

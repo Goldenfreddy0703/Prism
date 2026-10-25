@@ -5,6 +5,7 @@ import threading
 from functools import reduce
 
 from resources.lib.common import tools
+from resources.lib.common.concurrency import _SCALED_WORKERS, pool_workers as _pool_workers_from_scale
 from resources.lib.modules.globals import g
 
 _shared_executor = None
@@ -25,11 +26,19 @@ def exit_prism_plugin_mode() -> None:
     global _PRISM_PLUGIN_MODE
     _PRISM_PLUGIN_MODE = False
 
-# Default, Low, Medium, High, Extreme
-_SCALED_WORKERS = [20, 10, 20, 40, 80]
 
 # Long-running plugin actions that need real worker threads (scraping, resolving).
-_PLUGIN_THREADED_ACTIONS = frozenset({"getSources", "preScrape", "tmdbHelper"})
+_PLUGIN_THREADED_ACTIONS = frozenset(
+    {
+        "getSources",
+        "preScrape",
+        "tmdbHelper",
+        "actorCredits",
+        "movieGenresMultiGet",
+        "showGenresMultiGet",
+        "animeGenresMultiGet",
+    }
+)
 
 
 def _peek_plugin_action_from_argv() -> str | None:
@@ -105,8 +114,10 @@ def _use_inline_pool() -> bool:
         if argv0.endswith("service.py"):
             return False
         if argv0.endswith("prism.py"):
-            return True
-        return int(getattr(g, "PLUGIN_HANDLE", 0) or 0) > 0
+            return _PRISM_PLUGIN_MODE or g.get_bool_runtime_setting("prism.inline_pool")
+        if int(getattr(g, "PLUGIN_HANDLE", 0) or 0) > 0:
+            return _PRISM_PLUGIN_MODE
+        return False
     except Exception:
         return False
 
@@ -166,9 +177,7 @@ class ThreadPoolExecutor(concurrent.futures.ThreadPoolExecutor):
 
 
 def _max_pool_workers() -> int:
-    limiter = g.get_bool_runtime_setting("threadpool.limiter")
-    workers = _SCALED_WORKERS[g.get_int_setting("general.threadpoolScale", -1) + 1]
-    return 1 if limiter else workers
+    return _pool_workers_from_scale()
 
 
 def get_shared_executor() -> ThreadPoolExecutor:
@@ -211,6 +220,14 @@ def release_global_executors(*, wait: bool = False, cancel_futures: bool = True)
                 pass
         _shared_executor = None
         _provider_executor = None
+    try:
+        from resources.lib.net.http_gateway import get_http_gateway
+        from resources.lib.net.async_runtime import get_async_runtime
+
+        rt = get_async_runtime()
+        rt.run(get_http_gateway().close(), timeout=5.0)
+    except Exception:
+        pass
 
 
 def shutdown_all_executors(*, wait: bool = False) -> None:

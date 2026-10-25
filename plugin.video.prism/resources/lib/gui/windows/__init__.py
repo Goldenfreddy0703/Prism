@@ -11,7 +11,16 @@ def set_info_properties(info, item):
     :param item: xbmcgui element with setProperty() method
     """
     struct_info = source_utils.info_set_to_dict(info)
-    codec_type_display_list = ["hdrcodec", "videocodec", "misc", "audiocodec", "audiochannels"]
+    codec_type_display_list = [
+        "hdrcodec",
+        "videocodec",
+        "misc",
+        "audiocodec",
+        "audiochannels",
+        "multilang",
+        "audiolang",
+        "subtitlelang",
+    ]
     color_tag = f"[COLOR {g.get_user_text_color()}]"
 
     item.setProperty(

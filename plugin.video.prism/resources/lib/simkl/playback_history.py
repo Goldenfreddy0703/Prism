@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from resources.lib.database.session import get_sync_database
 from resources.lib.modules.globals import g
-from resources.lib.modules.list_builder import ListBuilder
 from resources.lib.modules.metadataHandler import MetadataHandler
 from resources.lib.simkl.ids import build_action_args
 
@@ -78,10 +77,10 @@ def hydrate_movie_menu_row(simkl_id: int) -> dict | None:
 def hydrate_show_menu_row(show_id: int, catalog: str | None = None) -> dict | None:
     db = get_sync_database()
     try:
-        ref = {"simkl_id": int(show_id)}
-        if catalog:
-            ref["catalog"] = catalog
-        rows = db.get_show_list([ref], hide_unaired=False, hide_watched=False)
+        from resources.lib.simkl.media_ref import sync_db_rows_for_refs
+
+        cat = catalog or db.show_catalog(int(show_id)) or "tv"
+        rows = sync_db_rows_for_refs(cat, [{"simkl_id": int(show_id), "catalog": cat}])
         if rows and isinstance(rows[0], dict):
             return rows[0]
     except Exception:
@@ -159,6 +158,113 @@ def _rows_from_specs(specs: list[dict]) -> list[dict]:
             item.setdefault("force_resume_indicator", True)
         rows.append(item)
     return rows
+
+
+def _apply_history_row_catalog(spec: dict, row: dict) -> dict:
+    merged = dict(row)
+    if spec.get("kind") == "movie":
+        catalog = "movie"
+        mediatype = "movie"
+    else:
+        catalog = spec.get("catalog") or merged.get("catalog") or "tv"
+        if catalog not in ("tv", "anime"):
+            catalog = "tv"
+        mediatype = "tvshow"
+    merged["catalog"] = catalog
+    info = merged.get("info")
+    if not isinstance(info, dict):
+        info = {}
+        merged["info"] = info
+    info.setdefault("catalog", catalog)
+    info.setdefault("mediatype", mediatype)
+    label = spec.get("label") or merged.get("name")
+    if label:
+        merged["name"] = label
+        info.setdefault("title", label)
+    return merged
+
+
+def _specs_with_menu_rows(specs: list[dict], rows: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for spec, row in zip(specs, rows):
+        menu_row = _apply_history_row_catalog(spec, row)
+        if spec.get("resume") is not None:
+            menu_row["resume_time"] = spec["resume"]
+            menu_row["force_resume_indicator"] = True
+        action = spec.get("action")
+        if not action:
+            action = "getSources" if spec.get("kind") == "movie" else "showSeasons"
+        out.append(
+            {
+                **spec,
+                "action": action,
+                "menu_item": menu_row,
+                "action_args": build_action_args(menu_row),
+            }
+        )
+    return out
+
+
+def _enrich_playback_history_specs(specs: list[dict]) -> list[dict]:
+    """Simkl detail + provider paint for history rows (same library finalize as browse)."""
+    from resources.lib.meta.list_paint import _seren_sync_finalize_page
+    from resources.lib.meta.menu_paint_profile import MenuPaintProfile
+    from resources.lib.simkl.enrich import simkl_detail_needed
+    from resources.lib.simkl.media_ref import sync_db_rows_for_refs
+
+    profile = MenuPaintProfile.LIBRARY.value
+    refs_by_catalog: dict[str, list[dict]] = {"movie": [], "tv": [], "anime": []}
+    for spec in specs:
+        item = spec.get("menu_item") if isinstance(spec.get("menu_item"), dict) else {}
+        simkl_id = item.get("simkl_id")
+        if simkl_id is None:
+            continue
+        if spec.get("kind") == "movie":
+            refs_by_catalog["movie"].append({"simkl_id": int(simkl_id), "catalog": "movie"})
+            continue
+        if spec.get("kind") != "show":
+            continue
+        catalog = spec.get("catalog") or item.get("catalog") or "tv"
+        if catalog not in ("tv", "anime"):
+            catalog = "tv"
+        refs_by_catalog[catalog].append({"simkl_id": int(simkl_id), "catalog": catalog})
+
+    enriched_map: dict[tuple[str, int], dict] = {}
+    for catalog, refs in refs_by_catalog.items():
+        if not refs:
+            continue
+        rows = sync_db_rows_for_refs(catalog, refs) or []
+        if rows:
+            rows = _seren_sync_finalize_page(catalog, refs, rows, profile)
+        for row in rows:
+            if not isinstance(row, dict) or row.get("simkl_id") is None:
+                continue
+            enriched_map[(catalog, int(row["simkl_id"]))] = row
+
+    out: list[dict] = []
+    for spec in specs:
+        item = dict(spec["menu_item"])
+        if spec.get("resume") is not None:
+            item["resume_time"] = spec["resume"]
+            item.setdefault("force_resume_indicator", True)
+        key = None
+        if spec.get("kind") == "movie" and item.get("simkl_id") is not None:
+            key = ("movie", int(item["simkl_id"]))
+        elif spec.get("kind") == "show" and item.get("simkl_id") is not None:
+            catalog = spec.get("catalog") or item.get("catalog") or "tv"
+            if catalog not in ("tv", "anime"):
+                catalog = "tv"
+            key = (catalog, int(item["simkl_id"]))
+        row = enriched_map.get(key) if key else None
+        if row:
+            merged = _apply_history_row_catalog(spec, row)
+            if item.get("resume_time") is not None:
+                merged["resume_time"] = item["resume_time"]
+                merged["force_resume_indicator"] = item.get("force_resume_indicator", True)
+            out.append(merged)
+        else:
+            out.append(_apply_history_row_catalog(spec, item))
+    return out
 
 
 def _spec_is_renderable(spec: dict | None) -> bool:
@@ -245,14 +351,10 @@ def _render_history_specs(specs: list[dict]) -> None:
         return
 
     xbmcplugin.addDirectoryItems(g.PLUGIN_HANDLE, list_items, len(list_items))
-    has_shows = any(spec.get("kind") == "show" for spec in specs)
-    g.close_directory(g.CONTENT_SHOW if has_shows else g.CONTENT_MOVIE)
+    g.close_directory(g.CONTENT_MIXED)
 
 
 def render_playback_history() -> None:
-    from resources.lib.meta.list_paint import render_catalog_rows
-    from resources.lib.meta.menu_paint_profile import MenuPaintProfile, profile_list_kwargs
-    from resources.lib.simkl.media_ref import render_mixed_sync_list
     from resources.lib.simkl.menu_helpers import paginate_simkl_lists
 
     no_paging = not paginate_simkl_lists()
@@ -263,29 +365,6 @@ def render_playback_history() -> None:
         g.cancel_directory()
         return
 
-    movie_specs = [spec for spec in specs if spec.get("kind") == "movie"]
-    show_specs = [spec for spec in specs if spec.get("kind") == "show"]
-    movie_rows = _rows_from_specs(movie_specs)
-    show_rows = _rows_from_specs(show_specs)
-    builder = ListBuilder()
-    list_kwargs = profile_list_kwargs(
-        MenuPaintProfile.LIBRARY,
-        no_paging=no_paging,
-        seeded=True,
-    )
-
-    if movie_specs and not show_specs:
-        render_catalog_rows(
-            "movie",
-            movie_rows,
-            builder,
-            sync_items=movie_rows,
-            **list_kwargs,
-        )
-        return
-
-    if show_specs and not movie_specs:
-        render_mixed_sync_list(show_rows, **list_kwargs)
-        return
-
-    _render_history_specs(specs)
+    rows = _enrich_playback_history_specs(specs)
+    painted_specs = _specs_with_menu_rows(specs, rows)
+    _render_history_specs(painted_specs)

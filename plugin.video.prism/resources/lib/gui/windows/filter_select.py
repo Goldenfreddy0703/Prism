@@ -9,11 +9,12 @@ from resources.lib.modules.globals import g
 # broadest to narrowest, with the subtitle tag last). Tags absent from this map
 # fall back to alphabetical ordering, leaving the other filter cards unchanged.
 FILTER_ORDER = {
-    "MULTI-AUDIO": 0,
-    "DUAL-AUDIO": 1,
-    "DUB": 3,
-    "SUB": 2,
-    "MULTI-SUB": 4,
+    "MULTI": 0,
+    "MULTI-AUDIO": 1,
+    "DUAL-AUDIO": 2,
+    "SUB": 3,
+    "DUB": 4,
+    "MULTI-SUB": 5,
 }
 
 
@@ -65,7 +66,7 @@ class FilterSelect(BaseWindow):
         self._populate_list(self.audiocodec_list, "audiocodec")
         self._populate_list(self.audiochannels_list, "audiochannels")
         self._populate_list(self.misc_list, "misc")
-        self._populate_list(self.audiosublang_list, ("audiolang", "subtitlelang"))
+        self._populate_list(self.audiosublang_list, ("multilang", "audiolang", "subtitlelang"))
 
     @staticmethod
     def _set_setting_item_properties(menu_item, setting):

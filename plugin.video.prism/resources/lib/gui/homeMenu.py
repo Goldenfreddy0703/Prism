@@ -68,9 +68,15 @@ class Menus:
 
     @staticmethod
     def search_menu():
-        from resources.lib.meta.provider_settings import provider_enabled
+        from resources.lib.meta.provider_settings import tmdb_features_enabled
 
         if g.get_bool_setting('searchHistory'):
+            g.add_directory_item(
+                g.get_language_string(31236),
+                action='allSearchHistory',
+                description=g.get_language_string(31238),
+                menu_item=g.create_icon_dict("search", g.ICONS_PATH),
+            )
             g.add_directory_item(
                 g.get_language_string(30025),
                 action='moviesSearchHistory',
@@ -89,7 +95,7 @@ class Menus:
                 description=g.get_language_string(31040),
                 menu_item=g.create_icon_dict("anime_search", g.ICONS_PATH),
             )
-            if provider_enabled("tmdb"):
+            if tmdb_features_enabled():
                 g.add_directory_item(
                     g.get_language_string(30327),
                     action='actorSearchHistory',
@@ -97,6 +103,12 @@ class Menus:
                     menu_item=g.create_icon_dict("actor_search", g.ICONS_PATH),
                 )
         else:
+            g.add_directory_item(
+                g.get_language_string(31236),
+                action='allSearch',
+                description=g.get_language_string(31237),
+                menu_item=g.create_icon_dict("search", g.ICONS_PATH),
+            )
             g.add_directory_item(
                 g.get_language_string(30025),
                 action='moviesSearch',
@@ -115,7 +127,7 @@ class Menus:
                 description=g.get_language_string(30770),
                 menu_item=g.create_icon_dict("anime_search", g.ICONS_PATH),
             )
-            if provider_enabled("tmdb"):
+            if tmdb_features_enabled():
                 g.add_directory_item(
                     g.get_language_string(30327),
                     action='searchByActor',
@@ -126,6 +138,13 @@ class Menus:
 
     @staticmethod
     def tools_menu():
+        g.add_directory_item(
+            g.get_language_string(31232),
+            action="showReleaseNotes",
+            is_folder=False,
+            description=g.get_language_string(31233),
+            menu_item=g.create_icon_dict("tools", g.ICONS_PATH),
+        )
         g.add_directory_item(
             g.get_language_string(30037),
             action='providerTools',

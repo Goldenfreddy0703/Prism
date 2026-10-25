@@ -191,6 +191,8 @@ class Premiumize:
         """
         url = "/item/listall"
         response = self.get_url(url)
+        if not isinstance(response, dict):
+            return []
         files = response.get("files")
         return files if isinstance(files, list) else []
 

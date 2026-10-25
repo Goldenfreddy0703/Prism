@@ -102,6 +102,32 @@ def _simkl_episode_id_lookup(info: dict[str, Any]) -> dict[str, str] | None:
     return payload or None
 
 
+def _anime_season_episode_numbers(show_id: int, season_num: int) -> list[int]:
+    """Episode numbers in a TVDB menu season bucket (``episodes`` with ``catalog='anime'``)."""
+    from resources.lib.database.session import get_sync_database
+    from resources.lib.database.simkl_sync.serial_sync import serial_profile_scope
+
+    db = get_sync_database()
+    with serial_profile_scope(db, "anime"):
+        st = db._st()
+        rows = db.fetchall(
+            f"""
+            SELECT number
+            FROM {st.episode}
+            WHERE simkl_show_id = ? AND season = ? AND season > 0
+            ORDER BY number
+            """,
+            (int(show_id), int(season_num)),
+        ) or []
+    nums: list[int] = []
+    for row in rows:
+        try:
+            nums.append(int(row["number"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+    return nums
+
+
 def _simkl_api_episode_block(info: dict[str, Any], *, for_history: bool = False) -> dict[str, Any]:
     """Episode object for Simkl scrobble / sync/history."""
     if _is_anime(info):
@@ -146,7 +172,24 @@ def info_to_history_payload(info: dict[str, Any], force_show: bool = False) -> d
     if mediatype == "season":
         key = "anime" if _is_anime(info) else "shows"
         item = _base_media(_show_info_for_child(info))
-        item["seasons"] = [{"number": int(info.get("season", 0))}]
+        season_num = int(info.get("season") or 0)
+        if _is_anime(info) and info.get("tvdb_season") is not None:
+            tvdb_season = int(info["tvdb_season"])
+            season_num = 1 if tvdb_season == 0 else tvdb_season
+        if _is_anime(info):
+            show_id = show_id_from_info(info)
+            ep_numbers = _anime_season_episode_numbers(int(show_id), season_num) if show_id else []
+            if ep_numbers:
+                item["seasons"] = [
+                    {
+                        "number": season_num,
+                        "episodes": [{"number": n} for n in ep_numbers],
+                    }
+                ]
+            else:
+                item["seasons"] = [{"number": season_num}]
+        else:
+            item["seasons"] = [{"number": season_num}]
         return {key: [item]}
 
     if mediatype == "episode":

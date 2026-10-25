@@ -256,7 +256,15 @@ def dispatch(params):
                 source_select_style = "Episodes"
             else:
                 source_select_style = "Movie"
-            if source_select_param in ("true", "false"):
+            if item_information['info']['mediatype'] == g.MEDIA_EPISODE:
+                from resources.lib.modules.last_played_source import episode_wants_source_select
+
+                manual_source_select = episode_wants_source_select(
+                    item_information.get("info"),
+                    source_select_param=source_select_param,
+                    explicit_source_select=source_select,
+                )
+            elif source_select_param in ("true", "false"):
                 manual_source_select = source_select_param == "true"
             else:
                 manual_source_select = (
@@ -357,10 +365,12 @@ def dispatch(params):
                 return
 
             if item_information["info"]["mediatype"] == g.MEDIA_EPISODE:
-                source_select_style = "Episodes"
+                from resources.lib.modules.last_played_source import episode_pre_scrape_should_resolve
+
+                should_resolve = episode_pre_scrape_should_resolve(ii.get("info"))
             else:
-                source_select_style = "Movie"
-            if g.get_int_setting(f"general.playstyle{source_select_style}") == 0 and sources:
+                should_resolve = g.get_int_setting("general.playstyleMovie") == 0
+            if should_resolve and sources:
                 helpers.Resolverhelper().resolve_silent_or_visible(
                     sources,
                     ii,
@@ -434,6 +444,21 @@ def dispatch(params):
 
         animeMenus.Menus().anime_search_history()
 
+    elif action == "allSearch":
+        from resources.lib.gui import searchAllMenus
+
+        searchAllMenus.SearchAllMenus().all_search(action_args)
+
+    elif action == "allSearchResults":
+        from resources.lib.gui import searchAllMenus
+
+        searchAllMenus.SearchAllMenus().all_search_results(action_args)
+
+    elif action == "allSearchHistory":
+        from resources.lib.gui import searchAllMenus
+
+        searchAllMenus.SearchAllMenus().all_search_history()
+
     elif action == "showSeasons":
         from resources.lib.gui import tvshowMenus
 
@@ -468,6 +493,11 @@ def dispatch(params):
         from resources.lib.gui import homeMenu
 
         homeMenu.Menus().tools_menu()
+
+    elif action == "showReleaseNotes":
+        from resources.lib.modules import release_notes
+
+        release_notes.show_release_notes_window()
 
     elif action == "clearCache":
         from resources.lib.common import tools
@@ -972,6 +1002,11 @@ def dispatch(params):
         if prefetch_calendars_enabled() and not weekly_cache_warm():
             if not g.is_addon_visible() and not foreground_browse_busy() and service_background_idle_ready():
                 prefetch_all_calendars()
+
+    elif action == "runPrismIdleMaintenance":
+        from resources.lib.common.maintenance import run_prism_idle_maintenance
+
+        run_prism_idle_maintenance()
 
     elif action == "processMetaEnrichmentQueue":
         from resources.lib.meta.enrichment import MetaEnrichmentQueue

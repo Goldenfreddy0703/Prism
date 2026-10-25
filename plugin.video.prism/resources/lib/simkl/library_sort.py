@@ -377,13 +377,17 @@ def _load_db_sort_meta(refs: list[dict], catalog: str) -> dict[int, dict]:
         WHERE simkl_id IN ({placeholders})
         """
     else:
+        serial_catalog = "anime" if catalog == "anime" else "tv"
         query = f"""
         SELECT simkl_id, info, last_watched_at, user_rating, episode_count, watched_episodes
         FROM shows
-        WHERE simkl_id IN ({placeholders})
+        WHERE catalog = ? AND simkl_id IN ({placeholders})
         """
 
-    rows = get_sync_database().fetchall(query, tuple(ids))
+    if catalog == "movie":
+        rows = get_sync_database().fetchall(query, tuple(ids))
+    else:
+        rows = get_sync_database().fetchall(query, (serial_catalog,) + tuple(ids))
 
     meta: dict[int, dict] = {}
     for row in rows:

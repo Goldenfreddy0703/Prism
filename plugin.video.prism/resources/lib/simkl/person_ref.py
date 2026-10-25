@@ -3,7 +3,7 @@
 Flow (same idea as plugin.video.themoviedb.helper person lists):
   1. TMDB ``search/person`` → pick a person (PersonRef)
   2. TMDB ``person/{id}/combined_credits`` → movie + TV rows
-  3. Simkl ``GET /search/id?tmdb=…`` per credit → SyncRow with simkl_id
+  3. Simkl ``GET /redirect?to=simkl&tmdb=…`` (parallel, cached per person) → SyncRow with simkl_id
   4. ListBuilder renders Simkl-keyed filmography
 
 PersonRef (menus / action_args):

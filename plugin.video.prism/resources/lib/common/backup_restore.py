@@ -315,6 +315,11 @@ def _collect_export_entries(userdata: str) -> list[tuple[str, str]]:
     return entries
 
 
+def release_userdata_locks() -> None:
+    """Close session DB/cache handles so addon_data files can be deleted on disk."""
+    _release_userdata_locks()
+
+
 def _release_userdata_locks() -> None:
     try:
         from resources.lib.database.session import get_sync_database, reset_sync_database
@@ -337,6 +342,14 @@ def _release_userdata_locks() -> None:
         cache = getattr(g, "CACHE", None)
         if cache is not None and hasattr(cache, "close"):
             cache.close()
+            g.CACHE = None
+    except Exception:
+        pass
+
+    try:
+        from resources.lib.common.thread_pool import release_global_executors
+
+        release_global_executors(wait=True, cancel_futures=True)
     except Exception:
         pass
 

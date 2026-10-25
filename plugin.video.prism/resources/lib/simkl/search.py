@@ -32,6 +32,8 @@ def simkl_search_page_limit() -> int:
 
 
 def _catalog_from_search_context(url: str, media_type: str) -> str:
+    if "search/all" in (url or "") or media_type == "all":
+        return "all"
     if "anime" in (url or "") or "anime" in (media_type or ""):
         return "anime"
     if "movie" in (url or "") or media_type == "movies":
@@ -98,12 +100,21 @@ def fetch_all_search_results(catalog: str, query: str) -> list[dict]:
     """Fetch every Simkl search page, then apply the configured sort."""
     exact = simkl_search_exact_enabled()
     sort_mode = simkl_search_sort_mode()
-    return _fetch_all_search_results_cached(
-        catalog,
-        query.strip().lower(),
-        exact,
-        sort_mode,
-    )
+    q = query.strip().lower()
+    items = _fetch_all_search_results_cached(catalog, q, exact, sort_mode)
+    if items:
+        return items
+    # Stale empty cache (e.g. after a failed search) — refetch once and refresh cache.
+    fresh = sort_search_results(fetch_search_pool(catalog, q, exact=exact), sort_mode)
+    if fresh:
+        return _fetch_all_search_results_cached(
+            catalog,
+            q,
+            exact,
+            sort_mode,
+            overwrite_cache=True,
+        )
+    return fresh
 
 
 def search_page(

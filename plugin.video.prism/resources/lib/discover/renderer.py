@@ -110,7 +110,7 @@ class DiscoverRenderer:
     @staticmethod
     def show_discover_menu(catalog: Catalog):
         from resources.lib.discover.definitions import CATALOG_LISTS
-        from resources.lib.meta.provider_settings import filter_discover_lists, provider_enabled
+        from resources.lib.meta.provider_settings import filter_discover_lists, tmdb_features_enabled
 
         search_actions = {
             "movie": ("moviesSearch", "moviesSearchHistory"),
@@ -152,7 +152,7 @@ class DiscoverRenderer:
         )
 
         if catalog in search_actions:
-            if provider_enabled("tmdb"):
+            if tmdb_features_enabled():
                 g.add_directory_item(
                     g.get_language_string(30327),
                     action=actor_action,
@@ -326,10 +326,18 @@ class DiscoverRenderer:
             page_sync = sync_items_for_refs(catalog, page_refs)
 
         from resources.lib.modules.list_builder import ListBuilder
-        from resources.lib.meta.browse_sync import render_browse_sync_page
+        from resources.lib.pipeline.catalog_page import CatalogPagePipeline
         from resources.lib.simkl.field_map import display_rating_priority_for_discover
 
-        list_kwargs = discover_list_kwargs(enrichment_reason="discover")
+        thin_rows = page_sync or []
+        list_kwargs = discover_list_kwargs(
+            enrichment_reason="discover",
+            discover_fast_open=True,
+            catalog_pipeline=True,
+            seeded=True,
+            browse_source=f"discover:{discover_list.list_id}",
+            thin_payload_rows=thin_rows,
+        )
         list_kwargs["display_rating_priority"] = display_rating_priority_for_discover(
             catalog,
             discover_list.db_query if discover_list.source == "db" else None,
@@ -340,11 +348,12 @@ class DiscoverRenderer:
             list_kwargs["list_id"] = list_id
 
         builder = ListBuilder()
-        render_browse_sync_page(
+        CatalogPagePipeline.open_discover(
             catalog,
-            page_sync or [],
+            page_refs,
             builder,
             list_kwargs=list_kwargs,
+            payload_rows=thin_rows,
         )
 
     def _build_full_db_list(self, discover_list: DiscoverList, catalog: Catalog) -> list[dict]:

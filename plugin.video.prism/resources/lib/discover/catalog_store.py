@@ -35,6 +35,7 @@ _LIBRARY_INFO_KEYS = frozenset(
         "play_count",
         "dateadded",
         "dateadded_watchlist",
+        "listed_at",
     }
 )
 
@@ -439,6 +440,93 @@ def get_items_batch(catalog: str, simkl_ids: list[int]) -> dict[int, dict[str, A
     return hits
 
 
+def _sync_base_to_cdn_row(
+    catalog: str,
+    base: dict[str, Any],
+    discover: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Rebuild a cdn_store-shaped row from catalog_items fragments (lazy CDN lookup)."""
+    simkl_id = base.get("simkl_id")
+    if simkl_id is None:
+        return None
+    simkl_id = int(simkl_id)
+    info = base.get("info") if isinstance(base.get("info"), dict) else {}
+
+    def _pick(key: str) -> Any:
+        if base.get(key) is not None:
+            return base.get(key)
+        return info.get(key)
+
+    row: dict[str, Any] = {"simkl_id": simkl_id, "catalog": catalog}
+    for key in (
+        "slug",
+        "title",
+        "title_romaji",
+        "url",
+        "poster",
+        "fanart",
+        "overview",
+        "release_date",
+        "country",
+        "runtime",
+        "status",
+        "network",
+        "metadata_line",
+        "anime_type",
+        "total_episodes",
+        "trailer",
+        "type",
+    ):
+        val = _pick(key)
+        if val is not None:
+            row[key] = val
+
+    ids = dict(base.get("ids") or {})
+    if not ids and isinstance(info.get("ids"), dict):
+        ids = dict(info["ids"])
+    ids.setdefault("simkl_id", simkl_id)
+    row["ids_json"] = json.dumps(ids, ensure_ascii=False)
+
+    genres = base.get("genres")
+    if genres is None:
+        genres = info.get("genres")
+    if genres is not None:
+        row["genres_json"] = genres if isinstance(genres, str) else json.dumps(genres, ensure_ascii=False)
+
+    ratings = base.get("ratings")
+    if ratings is None:
+        ratings = info.get("ratings")
+    if ratings is not None:
+        row["ratings_json"] = ratings if isinstance(ratings, str) else json.dumps(ratings, ensure_ascii=False)
+
+    if isinstance(discover, dict):
+        for key in _DISCOVER_ROW_KEYS:
+            if discover.get(key) is not None:
+                row[key] = discover[key]
+
+    return row
+
+
+def get_persisted_cdn_rows_by_ids(catalog: str, simkl_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """Lazy per-ID CDN-shaped rows from catalog_items (no trending ingest)."""
+    if not simkl_ids:
+        return {}
+    from resources.lib.database.session import get_sync_database
+
+    ensure_catalog_tables()
+    db = get_sync_database()
+    records = _fetch_catalog_records_batch(db, catalog, [int(sid) for sid in simkl_ids])
+    out: dict[int, dict[str, Any]] = {}
+    for sid, record in records.items():
+        base = _decode(record.get("base_json"))
+        if not isinstance(base, dict):
+            continue
+        cdn_row = _sync_base_to_cdn_row(catalog, base, _decode(record.get("discover_json")))
+        if cdn_row:
+            out[int(sid)] = cdn_row
+    return out
+
+
 def _fallback_sync_items_from_library_db(catalog: str, simkl_ids: list[int]) -> dict[int, dict[str, Any]]:
     """Build paint rows from movies/shows when catalog_items miss (pre-sync edge case)."""
     from resources.lib.database.session import get_sync_database
@@ -651,7 +739,8 @@ def trim_stale_catalog_items(
                 WHERE COALESCE(watched, 0) > 0 OR simkl_status IS NOT NULL
                 UNION
                 SELECT simkl_id FROM shows
-                WHERE COALESCE(watched_episodes, 0) > 0 OR simkl_status IS NOT NULL
+                WHERE catalog IN ('tv', 'anime')
+                  AND (COALESCE(watched_episodes, 0) > 0 OR simkl_status IS NOT NULL)
               )
             """,
             (cutoff,),

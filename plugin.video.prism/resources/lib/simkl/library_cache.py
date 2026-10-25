@@ -350,6 +350,16 @@ def record_library_sync_watermark(db=None, catalog: str | None = None) -> None:
 
         )
 
+    try:
+        from resources.lib.simkl.library_list_sync import materialize_library_catalog_metadata
+
+        for cat in catalogs:
+            materialize_library_catalog_metadata(cat)
+    except Exception:
+        from resources.lib.modules.globals import g
+
+        g.log_stacktrace()
+
 
 def _attach_library_watch_fields(items: list[dict], full_rows: list[dict]) -> list[dict]:
     """Keep Simkl sync watch counters on library SyncRows (rows_to_sync_items drops them)."""
@@ -360,7 +370,7 @@ def _attach_library_watch_fields(items: list[dict], full_rows: list[dict]) -> li
     }
     if not by_id:
         return items
-    watch_keys = ("episode_count", "watched_episodes", "unwatched_episodes")
+    watch_keys = ("episode_count", "watched_episodes", "unwatched_episodes", "play_count")
     info_watch_keys = (
         "episode_count",
         "aired_episodes",
@@ -368,6 +378,7 @@ def _attach_library_watch_fields(items: list[dict], full_rows: list[dict]) -> li
         "unwatched_episodes",
         "not_aired_episodes_count",
         "watch_counters_from_episodes",
+        "playcount",
     )
     merged_items: list[dict] = []
     for item in items:
@@ -396,14 +407,19 @@ def _attach_library_watch_fields(items: list[dict], full_rows: list[dict]) -> li
 
 
 def library_status_items_from_db(catalog: str, status: str) -> list[dict]:
-    """Load sorted library SyncRows from simkl_sync for one status bucket."""
+    """Load sorted library SyncRows from simkl_sync for one status bucket (full list — not menu thread)."""
     from resources.lib.meta.list_paint import rows_to_sync_items
-    from resources.lib.simkl.library_list_sync import refresh_library_watch_counters
     from resources.lib.simkl.library_sort import sort_library_refs
     from resources.lib.simkl.media_ref import sync_db_rows_for_refs
 
     if catalog != "movie":
-        refresh_library_watch_counters(catalog, status)
+        from resources.lib.common.thread_pool import defer_background
+        from resources.lib.simkl.library_list_sync import refresh_library_watch_counters
+
+        defer_background(
+            lambda: refresh_library_watch_counters(catalog, status),
+            name=f"prism-library-watch-{catalog}-{status}",
+        )
 
     refs = sort_library_refs(_load_refs_from_sync_db(catalog, status), catalog, status)
     if not refs:
@@ -418,7 +434,7 @@ def library_status_items_from_db(catalog: str, status: str) -> list[dict]:
 
 
 def load_library_list_items(catalog: str, status: str) -> list[dict]:
-    """Foreground library list loader: RAM cache → sync DB SyncRows → cold API fetch."""
+    """Full-bucket SyncRows (background/cold API). Menu path: use library_list_cache instead."""
     from resources.lib.meta.list_pipeline import get_list_store, make_list_id
     from resources.lib.simkl.library_list_sync import fetch_library_status_items_from_api
 

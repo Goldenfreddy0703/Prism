@@ -1010,18 +1010,17 @@ class MetadataHandler:
             patch = tasks[0]()
             return [patch] if patch else []
 
+        import concurrent.futures
+
         from resources.lib.common.thread_pool import get_provider_executor
 
         executor = get_provider_executor()
         futures = [executor.submit(fetcher) for fetcher in tasks]
-        patches = []
-        for future in as_completed(futures):
-            exc = future.exception()
-            if exc:
-                raise exc
-            patch = future.result()
-            if patch:
-                patches.append(patch)
+        patches: list = []
+        for fut in concurrent.futures.as_completed(futures, timeout=120.0):
+            item = fut.result()
+            if item:
+                patches.append(item)
         return patches
 
     def _merge_provider_patches(self, db_object, patches: list) -> None:
@@ -1971,20 +1970,25 @@ class MetadataHandler:
         if art_profile is None:
             art_profile = artwork_profile_for_row(row, default_media_type=media_type)
         provider_type = "movie" if art_profile in (PROFILE_ANIME_MOVIE, PROFILE_MOVIE) else "tvshow"
+        from resources.lib.meta.paint_complete import art_gap_keys_for_scope
+
+        scope_art_keys = art_gap_keys_for_scope(scope)
         blocking_scope = str(scope).lower() == "blocking"
 
         gaps: list[str] = []
         cast = row.get("cast")
-        if cast_gapfill_available(row, provider_type) and (
+        cast_wanted = (
             not cast
             or not isinstance(cast, list)
             or len(cast) == 0
             or not self._cast_has_photos(cast)
-        ):
+        )
+        cast_ok = cast_gapfill_available(row, provider_type)
+        if cast_ok and cast_wanted:
             gaps.append("cast")
         art = row.get("art") if isinstance(row.get("art"), dict) else {}
         online_art_keys = []
-        if not blocking_scope:
+        if scope_art_keys and not blocking_scope:
             if art_profile == PROFILE_ANIME_MOVIE:
                 if art_option_enabled("anime.clearlogo", "anime_movie"):
                     online_art_keys.append("clearlogo")
@@ -2026,10 +2030,13 @@ class MetadataHandler:
                 if art_option_enabled("tvshows.landscape", "tvshow"):
                     online_art_keys.append("landscape")
             for art_key in online_art_keys:
+                if art_key not in scope_art_keys:
+                    continue
                 if art_gapfill_available(row, provider_type) and not self._art_key_present(art, art_key):
                     gaps.append(art_key)
         if (
-            fanart_art_usable()
+            "fanart" in scope_art_keys
+            and fanart_art_usable()
             and art_gapfill_available(row, provider_type)
             and not self._art_key_present(art, "fanart")
         ):
@@ -2657,6 +2664,7 @@ class MetadataHandler:
         db=None,
         profile: str = "browse",
         overlay_sync: bool = True,
+        gap_scope: str | None = None,
     ) -> tuple[list[dict], list[dict], dict]:
         """Seren-style prepare: provider HTTP only for incomplete rows."""
         import time
@@ -2699,7 +2707,7 @@ class MetadataHandler:
                 from resources.lib.meta.artwork import artwork_profile_for_row, provider_media_type
                 from resources.lib.meta.paint_complete import gap_scope_for_profile
 
-                gap_scope = gap_scope_for_profile(profile)
+                resolved_gap_scope = gap_scope if gap_scope is not None else gap_scope_for_profile(profile)
                 provider_cache: dict[int, dict] = {}
                 movie_rows = [
                     row
@@ -2715,27 +2723,59 @@ class MetadataHandler:
                     provider_cache.update(db.load_cached_provider_meta_batch("movies", movie_rows))
                 if show_rows:
                     provider_cache.update(db.load_cached_provider_meta_batch("shows", show_rows))
+                requested = len(movie_rows) + len(show_rows)
+                if requested:
+                    g.log(
+                        f"prepare_list_rows provider_cache hits={len(provider_cache)}/{requested}",
+                        "debug",
+                    )
 
                 wave_rows = [dict(row) for row in prepared_incomplete]
                 cast_input = [dict(row) for row in wave_rows]
                 art_input = [dict(row) for row in wave_rows]
                 parallel_start = time.time()
-                from resources.lib.common.thread_pool import get_provider_executor
+                import threading
 
-                executor = get_provider_executor()
-                cast_future = executor.submit(
-                    self._apply_cast_gaps_to_rows, cast_input, media_type, db=db
-                )
-                art_future = executor.submit(
-                    self._apply_art_gaps_to_rows,
-                    art_input,
-                    media_type,
-                    db=db,
-                    provider_cache=provider_cache,
-                    gap_scope=gap_scope,
-                )
-                cast_rows, cast_batch_count = cast_future.result()
-                art_rows, art_stats = art_future.result()
+                cast_holder: list = []
+                art_holder: list = []
+                parallel_error: list[BaseException] = []
+
+                def _run_cast() -> None:
+                    try:
+                        cast_holder.append(
+                            self._apply_cast_gaps_to_rows(
+                                cast_input,
+                                media_type,
+                                db=db,
+                            )
+                        )
+                    except BaseException as exc:
+                        parallel_error.append(exc)
+
+                def _run_art() -> None:
+                    try:
+                        art_holder.append(
+                            self._apply_art_gaps_to_rows(
+                                art_input,
+                                media_type,
+                                db=db,
+                                provider_cache=provider_cache,
+                                gap_scope=resolved_gap_scope,
+                            )
+                        )
+                    except BaseException as exc:
+                        parallel_error.append(exc)
+
+                cast_thread = threading.Thread(target=_run_cast, name="prism-cast-gap")
+                art_thread = threading.Thread(target=_run_art, name="prism-art-gap")
+                cast_thread.start()
+                art_thread.start()
+                cast_thread.join(timeout=180.0)
+                art_thread.join(timeout=180.0)
+                if parallel_error:
+                    raise parallel_error[0]
+                (cast_rows, cast_batch_count) = cast_holder[0]
+                (art_rows, art_stats) = art_holder[0]
                 prepared_incomplete = self._merge_cast_art_paint_rows(wave_rows, cast_rows, art_rows)
                 stats["cast_batch"] = cast_batch_count
                 stats["cast_art_parallel_ms"] = round((time.time() - parallel_start) * 1000, 1)
@@ -2898,15 +2938,26 @@ class MetadataHandler:
                 for ref in movie_refs
                 if ref.get("simkl_id") is not None and int(ref["simkl_id"]) in online_ids
             }
-            tvshow_ids = {
+            tv_ids = {
                 int(ref["simkl_id"])
                 for ref in tvshow_refs
-                if ref.get("simkl_id") is not None and int(ref["simkl_id"]) in online_ids
+                if ref.get("simkl_id") is not None
+                and int(ref["simkl_id"]) in online_ids
+                and (ref.get("catalog") or catalog) != "anime"
+            }
+            anime_ids = {
+                int(ref["simkl_id"])
+                for ref in tvshow_refs
+                if ref.get("simkl_id") is not None
+                and int(ref["simkl_id"]) in online_ids
+                and (ref.get("catalog") or catalog) == "anime"
             }
             if movie_ids:
                 merged_by_id.update(self._reload_rows_by_id(db, "movie", movie_ids))
-            if tvshow_ids:
-                merged_by_id.update(self._reload_rows_by_id(db, "tvshow", tvshow_ids))
+            if tv_ids:
+                merged_by_id.update(self._reload_rows_by_id(db, "tvshow", tv_ids, catalog="tv"))
+            if anime_ids:
+                merged_by_id.update(self._reload_rows_by_id(db, "anime", anime_ids, catalog="anime"))
 
         ref_by_id = {
             int(ref["simkl_id"]): ref
@@ -2986,11 +3037,20 @@ class MetadataHandler:
         return {int(ref["simkl_id"]) for ref in refs if ref.get("simkl_id") is not None}
 
     @staticmethod
-    def _reload_rows_by_id(db, media_type: str, simkl_ids: set[int]) -> dict[int, dict]:
+    def _reload_rows_by_id(
+        db,
+        media_type: str,
+        simkl_ids: set[int],
+        *,
+        catalog: str | None = None,
+    ) -> dict[int, dict]:
         if not simkl_ids:
             return {}
+        from resources.lib.database.simkl_sync.serial_access import paint_cache_type_for_media_type, sync_show_table_for_catalog
+
         ids_sql = ",".join(str(int(simkl_id)) for simkl_id in simkl_ids)
-        if media_type == "movie":
+        paint_key = paint_cache_type_for_media_type(media_type, catalog)
+        if paint_key == "movie":
             query = f"""
                 SELECT m.simkl_id,
                        m.info,
@@ -3007,6 +3067,7 @@ class MetadataHandler:
                 WHERE m.simkl_id IN ({ids_sql})
             """
         else:
+            show_table = sync_show_table_for_catalog("anime" if paint_key == "anime" else "tv")
             query = f"""
                 SELECT s.simkl_id,
                        s.info,
@@ -3019,7 +3080,7 @@ class MetadataHandler:
                        s.season_count,
                        s.air_date,
                        s.user_rating
-                FROM shows AS s
+                FROM {show_table} AS s
                 WHERE s.simkl_id IN ({ids_sql})
             """
         return {

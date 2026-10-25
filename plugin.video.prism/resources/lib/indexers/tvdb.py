@@ -44,6 +44,8 @@ def tvdb_guard_response(func):
 
         try:
             response = func(*args, **kwarg)
+            if response is None:
+                return None
             if response.status_code in [200, 201]:
                 return response
 
@@ -1341,8 +1343,14 @@ class TVDBAPI(ApiBase):
             headers["Authorization"] = f"Bearer {self.jwToken}"
         if language is not None:
             headers["Accept-Language"] = self._v4_language_code(language)
-        return self.session.get(
+        from resources.lib.net.sync_bridge import sync_http_request
+
+        return sync_http_request(
+            "tvdb",
+            "GET",
             parse.urljoin(self.v4BaseUrl, url),
+            kind="get_v4",
+            session=self.session,
             params=params,
             headers=headers,
             timeout=timeout,

@@ -31,16 +31,10 @@ class Menus:
         return SearchHistory()
 
     @cached_property
-    def hidden_database(self):
-        from resources.lib.database.simkl_sync.hidden import SimklSyncDatabase as HiddenDatabase
+    def sync_database(self):
+        from resources.lib.database.session import get_sync_database
 
-        return HiddenDatabase()
-
-    @cached_property
-    def bookmark_database(self):
-        from resources.lib.database.simkl_sync.bookmark import SimklSyncDatabase as BookmarkDatabase
-
-        return BookmarkDatabase()
+        return get_sync_database()
 
     @cached_property
     def simkl_api(self):
@@ -132,7 +126,7 @@ class Menus:
         from resources.lib.meta.menu_paint_profile import MenuPaintProfile, profile_list_kwargs
         from resources.lib.simkl.ids import show_id_from_item
 
-        hidden_shows = self.hidden_database.get_hidden_items("calendar", "shows")
+        hidden_shows = self.sync_database.get_hidden_items("calendar", "shows")
         episodes = [
             ep for ep in browse.airing_episodes("today") if show_id_from_item(ep) not in hidden_shows
         ]
@@ -233,7 +227,19 @@ class Menus:
         if not show_id:
             g.cancel_directory()
             return
-        render_catalog_seasons(show_id, self.list_builder, no_paging=True)
+        catalog = args.get("catalog") if isinstance(args, dict) else None
+        from resources.lib.database.session import get_sync_database
+
+        resolved = get_sync_database().show_catalog(int(show_id))
+        if resolved == "anime":
+            catalog = "anime"
+        render_catalog_seasons(
+            show_id,
+            self.list_builder,
+            no_paging=True,
+            catalog=catalog,
+            action_args=args,
+        )
 
     def flat_episode_list(self, args):
         from resources.lib.meta.list_paint import render_catalog_drilldown_episodes
@@ -302,36 +308,39 @@ class Menus:
             g.close_directory(g.CONTENT_MENU)
         else:
             from resources.lib.discover.renderer import discover_list_kwargs
-            from resources.lib.meta.list_pipeline import get_list_store, make_list_id, render_list_page, seed_browse_page
+            from resources.lib.discover.sync_bridge import simkl_refs
+            from resources.lib.meta.list_pipeline import get_list_store, make_list_id
             from resources.lib.modules.globals import g
+            from resources.lib.pipeline.catalog_page import CatalogPagePipeline
 
             list_id = make_list_id(year)
             page = g.PAGE
             store = get_list_store("year")
 
-            items = store.load_page_items(
+            items = store.load_thin_page_items(
                 "tv",
                 list_id,
                 page,
                 lambda: browse.discover_by_year("tv", int(year), page, self.page_limit),
+                disk_namespace="year",
             )
             if not items:
                 g.cancel_directory()
                 return
 
-            seed_browse_page("tv", items)
-            render_list_page(
-                "paint_first",
+            CatalogPagePipeline.open_discover(
                 "tv",
-                items,
+                simkl_refs(items),
                 self.list_builder,
                 list_kwargs=discover_list_kwargs(
                     seeded=True,
                     next_action="showYears",
                     next_args=int(year),
                     has_next_page=len(items) >= self.page_limit,
+                    catalog_pipeline=True,
+                    browse_source=f"year:{year}",
+                    thin_payload_rows=items,
                 ),
                 payload_rows=items,
-                seeded=True,
             )
 

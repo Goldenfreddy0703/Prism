@@ -206,17 +206,26 @@ def schedule_refs_enrichment(
             if ref.get("simkl_id") is not None and ref.get("catalog") == "movie"
         }
     )
-    show_ids = sorted(
+    tv_ids = sorted(
         {
             int(ref["simkl_id"])
             for ref in refs
-            if ref.get("simkl_id") is not None and ref.get("catalog") in ("tv", "anime")
+            if ref.get("simkl_id") is not None and ref.get("catalog") == "tv"
+        }
+    )
+    anime_ids = sorted(
+        {
+            int(ref["simkl_id"])
+            for ref in refs
+            if ref.get("simkl_id") is not None and ref.get("catalog") == "anime"
         }
     )
     if catalog == "movie" and not movie_ids:
         movie_ids = sorted({int(ref["simkl_id"]) for ref in refs if ref.get("simkl_id") is not None})
-    elif catalog in ("tv", "anime") and not show_ids and not movie_ids:
-        show_ids = sorted({int(ref["simkl_id"]) for ref in refs if ref.get("simkl_id") is not None})
+    elif catalog == "tv" and not tv_ids and not movie_ids:
+        tv_ids = sorted({int(ref["simkl_id"]) for ref in refs if ref.get("simkl_id") is not None})
+    elif catalog == "anime" and not anime_ids and not movie_ids:
+        anime_ids = sorted({int(ref["simkl_id"]) for ref in refs if ref.get("simkl_id") is not None})
 
     if movie_ids:
         MetaEnrichmentQueue.schedule_run_plugin(
@@ -225,12 +234,19 @@ def schedule_refs_enrichment(
             reason=reason,
             catalog="movie",
         )
-    if show_ids:
+    if tv_ids:
         MetaEnrichmentQueue.schedule_run_plugin(
-            [{"simkl_id": simkl_id, "needs_update": True} for simkl_id in show_ids],
+            [{"simkl_id": simkl_id, "needs_update": True} for simkl_id in tv_ids],
             "tvshow",
             reason=reason,
-            catalog=catalog if catalog in ("tv", "anime") else "tv",
+            catalog="tv",
+        )
+    if anime_ids:
+        MetaEnrichmentQueue.schedule_run_plugin(
+            [{"simkl_id": simkl_id, "needs_update": True} for simkl_id in anime_ids],
+            "anime",
+            reason=reason,
+            catalog="anime",
         )
 
 
@@ -363,7 +379,7 @@ def _prefetch_discover(page_params: dict[str, Any]) -> bool:
 
 def _prefetch_search(page_params: dict[str, Any]) -> bool:
     from resources.lib.meta.list_pipeline import get_list_store, make_list_id
-    from resources.lib.simkl.media_ref import persist_search_results
+    from resources.lib.discover.sync_bridge import simkl_refs
     from resources.lib.simkl.menu_helpers import paginate_refs_for_page
     from resources.lib.simkl.search import (
         fetch_all_search_results,
@@ -377,6 +393,7 @@ def _prefetch_search(page_params: dict[str, Any]) -> bool:
         "moviesSearchResults": "movie",
         "showsSearchResults": "tv",
         "animeSearchResults": "anime",
+        "allSearchResults": "all",
     }
     catalog = search_map.get(action)
     if not catalog:
@@ -397,15 +414,43 @@ def _prefetch_search(page_params: dict[str, Any]) -> bool:
     page_items = paginate_refs_for_page(all_items, page, page_limit=page_limit)
     if not page_items:
         return False
-    refs = persist_search_results(catalog, page_items, enrich=False)
-    from resources.lib.discover.catalog_store import sync_items_for_refs
+    from resources.lib.browse.browse_paint_resolver import prefetch_resolved_page_rows
     from resources.lib.meta.menu_paint_profile import MenuPaintProfile
 
-    page_sync = sync_items_for_refs(catalog, refs)
+    if catalog == "all":
+        from resources.lib.browse.browse_paint_resolver import resolve_mixed_browse_rows
+        from resources.lib.meta.paint_cache import page_cache_catalog
+
+        resolved = resolve_mixed_browse_rows(
+            page_items,
+            profile=MenuPaintProfile.SEARCH.value,
+            source=f"search:{query}",
+        )
+        refs = simkl_refs(resolved)
+        if not refs:
+            return False
+        cache_catalog = page_cache_catalog("movie", refs, mixed_list=True)
+        return _prefetch_paint_catalog_page(
+            cache_catalog,
+            refs,
+            payload_rows=resolved,
+            paint_profile=MenuPaintProfile.SEARCH.value,
+        )
+
+    resolved = prefetch_resolved_page_rows(
+        catalog,
+        page_items,
+        list_id=list_id,
+        page=page,
+        profile=MenuPaintProfile.SEARCH.value,
+        source=f"search:{query}",
+        namespace="search",
+    )
+    refs = simkl_refs(resolved)
     return _prefetch_paint_catalog_page(
         catalog,
         refs,
-        payload_rows=page_sync,
+        payload_rows=resolved,
         paint_profile=MenuPaintProfile.SEARCH.value,
     )
 
@@ -469,7 +514,6 @@ def _prefetch_genre_slug(page_params: dict[str, Any]) -> bool:
     from urllib import parse
 
     from resources.lib.simkl import browse
-    from resources.lib.simkl.media_ref import persist_genre_page
 
     action = page_params.get("action")
     catalog_map = {
@@ -490,12 +534,24 @@ def _prefetch_genre_slug(page_params: dict[str, Any]) -> bool:
     result = browse.discover_by_genre_slug(catalog, slug, page, page_limit)
     if not result.items:
         return False
+    from resources.lib.browse.browse_paint_resolver import prefetch_resolved_page_rows
+    from resources.lib.discover.sync_bridge import simkl_refs
+
     list_id = make_list_id("slug", catalog, slug)
-    get_list_store("genre").remember_items(catalog, list_id, result.items)
-    refs = persist_genre_page(catalog, result.items, blocking_enrich=False, enrich_reason="prefetch_genre")
+    source = f"genre_slug:{slug}"
+    resolved = prefetch_resolved_page_rows(
+        catalog,
+        result.items,
+        list_id=list_id,
+        page=page,
+        profile="genre",
+        source=source,
+        namespace="genre",
+    )
+    refs = simkl_refs(resolved)
     if not refs:
         return False
-    return _prefetch_paint_catalog_page(catalog, refs, payload_rows=result.items)
+    return _prefetch_paint_catalog_page(catalog, refs, payload_rows=resolved)
 
 
 def _prefetch_multi_genre(page_params: dict[str, Any]) -> bool:
@@ -504,25 +560,25 @@ def _prefetch_multi_genre(page_params: dict[str, Any]) -> bool:
         _parse_tenrai_multi_genre_action_args,
         _parse_tmdb_multi_genre_action_args,
     )
-    from resources.lib.simkl.media_ref import persist_genre_page
 
     action = page_params.get("action")
     action_args = page_params.get("action_args")
     page_limit = g.get_int_setting("item.limit", 25)
 
+    menu_page = max(1, int(page_params.get("page") or 1))
+
     if action == "animeGenresMultiGet":
-        genre_ids, tenrai_page, tenrai_offset = _parse_tenrai_multi_genre_action_args(action_args)
+        genre_ids, _tenrai_page, _tenrai_offset = _parse_tenrai_multi_genre_action_args(action_args)
         if not genre_ids:
             return False
         result = browse.discover_by_tenrai_genres(
             genre_ids,
             page_limit,
-            tenrai_page=tenrai_page,
-            row_offset=tenrai_offset,
+            menu_page=menu_page,
         )
         catalog = "anime"
     elif action in ("movieGenresMultiGet", "showGenresMultiGet"):
-        genre_ids, tmdb_page, tmdb_offset = _parse_tmdb_multi_genre_action_args(action_args)
+        genre_ids, _tmdb_page, _tmdb_offset = _parse_tmdb_multi_genre_action_args(action_args)
         if not genre_ids:
             return False
         catalog = "movie" if action == "movieGenresMultiGet" else "tv"
@@ -530,8 +586,7 @@ def _prefetch_multi_genre(page_params: dict[str, Any]) -> bool:
             catalog,
             genre_ids,
             page_limit,
-            tmdb_page=tmdb_page,
-            tmdb_offset=tmdb_offset,
+            menu_page=menu_page,
         )
     else:
         return False
@@ -540,15 +595,28 @@ def _prefetch_multi_genre(page_params: dict[str, Any]) -> bool:
         return False
     from resources.lib.meta.list_pipeline import get_list_store, make_list_id
 
+    from resources.lib.browse.browse_paint_resolver import prefetch_resolved_page_rows
+    from resources.lib.discover.sync_bridge import simkl_refs
+
     if action == "animeGenresMultiGet":
-        list_id = make_list_id("tenrai", genre_ids, tenrai_page, tenrai_offset)
+        list_id = make_list_id("tenrai", genre_ids, menu_page)
+        merge_source = f"tenrai_genre:{genre_ids}"
     else:
-        list_id = make_list_id("tmdb", catalog, genre_ids, tmdb_page, tmdb_offset)
-    get_list_store("genre").remember_items(catalog, list_id, result.items)
-    refs = persist_genre_page(catalog, result.items, blocking_enrich=False, enrich_reason="prefetch_genre")
+        list_id = make_list_id("tmdb", catalog, genre_ids, menu_page)
+        merge_source = f"tmdb_genre:{genre_ids}"
+    resolved = prefetch_resolved_page_rows(
+        catalog,
+        result.items,
+        list_id=list_id,
+        page=menu_page,
+        profile="genre",
+        source=merge_source,
+        namespace="genre",
+    )
+    refs = simkl_refs(resolved)
     if not refs:
         return False
-    return _prefetch_paint_catalog_page(catalog, refs, payload_rows=result.items)
+    return _prefetch_paint_catalog_page(catalog, refs, payload_rows=resolved)
 
 
 def _library_catalog_status(page_params: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -602,28 +670,9 @@ def _blocking_enrich_simkl_ids(
 
 
 def _blocking_enrich_refs(refs: list[dict], *, default_catalog: str, reason: str) -> None:
-    movie_ids = sorted(
-        {
-            int(ref["simkl_id"])
-            for ref in refs
-            if ref.get("simkl_id") is not None and ref.get("catalog") == "movie"
-        }
-    )
-    show_ids = sorted(
-        {
-            int(ref["simkl_id"])
-            for ref in refs
-            if ref.get("simkl_id") is not None and ref.get("catalog") in ("tv", "anime")
-        }
-    )
-    if not movie_ids and default_catalog == "movie":
-        movie_ids = sorted({int(ref["simkl_id"]) for ref in refs if ref.get("simkl_id") is not None})
-    if not show_ids and default_catalog in ("tv", "anime"):
-        show_ids = sorted({int(ref["simkl_id"]) for ref in refs if ref.get("simkl_id") is not None})
-    if movie_ids:
-        _blocking_enrich_simkl_ids(movie_ids, "movie", catalog="movie", reason=reason)
-    if show_ids:
-        _blocking_enrich_simkl_ids(show_ids, "tvshow", catalog=default_catalog, reason=reason)
+    from resources.lib.meta.page_materialize import materialize_refs_from_sync_db
+
+    materialize_refs_from_sync_db(default_catalog, refs, profile="browse")
 
 
 def _prefetch_library(page_params: dict[str, Any]) -> bool:
@@ -631,40 +680,52 @@ def _prefetch_library(page_params: dict[str, Any]) -> bool:
     if not catalog or not status:
         return False
     from resources.lib.meta.menu_paint_profile import MenuPaintProfile
-    from resources.lib.simkl.library_cache import load_library_list_items
+    from resources.lib.simkl.library_list_cache import (
+        library_status_page_sync_items,
+        load_library_status_refs,
+    )
     from resources.lib.simkl.library_list_sync import schedule_library_status_verify
     from resources.lib.simkl.menu_helpers import paginate_refs_for_page
-    from resources.lib.discover.sync_bridge import simkl_refs
 
-    items = load_library_list_items(catalog, status)
+    refs = load_library_status_refs(catalog, status)
     schedule_library_status_verify(catalog, status)
-    if not items:
+    if not refs:
         return False
     page = int(page_params.get("page") or 1)
-    page_refs = paginate_refs_for_page(simkl_refs(items), page)
+    page_refs = paginate_refs_for_page(refs, page)
     if not page_refs:
         return False
-    order = [int(ref["simkl_id"]) for ref in page_refs if ref.get("simkl_id") is not None]
-    by_id = {int(row["simkl_id"]): row for row in items if row.get("simkl_id") is not None}
-    page_items = [by_id[sid] for sid in order if sid in by_id]
+    page_items = library_status_page_sync_items(catalog, status, page_refs)
     if not page_items:
         return False
-    from resources.lib.simkl.library_list_sync import prepare_library_browse_page
+    from resources.lib.browse.browse_paint_resolver import prefetch_resolved_page_rows
+    from resources.lib.meta.list_pipeline import make_list_id
 
-    page_items = prepare_library_browse_page(catalog, page_items)
+    from resources.lib.meta.page_materialize import materialize_refs_from_sync_db
+
+    materialize_refs_from_sync_db(catalog, page_refs, profile=MenuPaintProfile.LIBRARY.value)
+    resolved = prefetch_resolved_page_rows(
+        catalog,
+        page_items,
+        list_id=make_list_id(status),
+        page=page,
+        profile=MenuPaintProfile.LIBRARY.value,
+        source=f"library:{catalog}:{status}",
+        namespace="library",
+    )
     return _prefetch_paint_catalog_page(
         catalog,
         page_refs,
-        payload_rows=page_items,
-        paint_profile=MenuPaintProfile.BROWSE.value,
+        payload_rows=resolved,
+        paint_profile=MenuPaintProfile.LIBRARY.value,
     )
 
 
 def _prefetch_actor(page_params: dict[str, Any]) -> bool:
+    from resources.lib.browse.browse_paint_resolver import prefetch_resolved_page_rows
+    from resources.lib.discover.sync_bridge import simkl_refs
     from resources.lib.meta.list_pipeline import get_list_store, make_list_id
     from resources.lib.meta.paint_cache import page_cache_catalog
-    from resources.lib.simkl.enrich import enrich_sync_items
-    from resources.lib.simkl.media_ref import enrich_and_persist
     from resources.lib.simkl.person_ref import fetch_filmography_page, normalize_person_ref
 
     args = normalize_person_ref(page_params.get("action_args"))
@@ -676,36 +737,81 @@ def _prefetch_actor(page_params: dict[str, Any]) -> bool:
     page_limit = g.get_int_setting("item.limit", 25)
     list_id = make_list_id("actor", person_id, catalog_hint)
     store = get_list_store("actor")
-    items = store.load_page_items(
+    items = store.load_thin_page_items(
         catalog_hint,
         list_id,
         page,
         lambda: fetch_filmography_page(int(person_id), page, page_limit),
+        disk_namespace="actor",
+        schedule_upsert=False,
     )
     if not items:
         return False
-    items = enrich_sync_items(items, fast=True)
-    refs: list[dict] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        item_catalog = item.get("catalog") or catalog_hint
-        refs.extend(
-            enrich_and_persist(
-                item_catalog,
-                [item],
-                force_simkl_meta=True,
-                enrich=False,
-            )
-        )
+    from resources.lib.browse.browse_paint_resolver import resolve_mixed_browse_rows
+
+    resolved = resolve_mixed_browse_rows(
+        items,
+        profile="actor",
+        source=f"actor:{person_id}",
+    )
+    refs = simkl_refs(resolved)
     if not refs:
         return False
     cache_catalog = page_cache_catalog(catalog_hint, refs, mixed_list=True)
     return _prefetch_paint_catalog_page(
         cache_catalog,
         refs,
-        payload_rows=items,
+        payload_rows=resolved,
+        paint_profile="actor",
     )
+
+
+def _prefetch_detail_related(page_params: dict[str, Any], *, relations: bool) -> bool:
+    from resources.lib.browse.browse_paint_resolver import resolve_mixed_browse_rows
+    from resources.lib.discover.sync_bridge import simkl_refs
+    from resources.lib.meta.menu_paint_profile import MenuPaintProfile
+    from resources.lib.meta.paint_cache import page_cache_catalog
+    from resources.lib.simkl.ids import normalize_action_args
+    from resources.lib.simkl.related import (
+        _entries_to_sync,
+        _fetch_detail,
+        detail_target_from_action_args,
+    )
+
+    args = normalize_action_args(page_params.get("action_args") or {})
+    target = detail_target_from_action_args(args)
+    if not target:
+        return False
+    catalog, simkl_id = target
+    if relations and catalog != "anime":
+        return False
+    detail = _fetch_detail(catalog, simkl_id)
+    if not detail:
+        return False
+    entries = detail.get("relations") if relations else detail.get("users_recommendations")
+    sync_items = _entries_to_sync(entries or [], relation_label=relations)
+    if not sync_items:
+        return False
+    source = f"relations:{simkl_id}" if relations else f"recommendations:{simkl_id}"
+    resolved = resolve_mixed_browse_rows(sync_items, profile="related", source=source)
+    refs = simkl_refs(resolved)
+    if not refs:
+        return False
+    cache_catalog = page_cache_catalog(catalog, refs, mixed_list=True)
+    return _prefetch_paint_catalog_page(
+        cache_catalog,
+        refs,
+        payload_rows=resolved,
+        paint_profile=MenuPaintProfile.RELATED.value,
+    )
+
+
+def _prefetch_recommendations(page_params: dict[str, Any]) -> bool:
+    return _prefetch_detail_related(page_params, relations=False)
+
+
+def _prefetch_relations(page_params: dict[str, Any]) -> bool:
+    return _prefetch_detail_related(page_params, relations=True)
 
 
 def _prefetch_year(page_params: dict[str, Any]) -> bool:
@@ -956,6 +1062,7 @@ _PREFETCH_HANDLERS: dict[str, Callable[[dict[str, Any]], bool]] = {
     "moviesSearchResults": _prefetch_search,
     "showsSearchResults": _prefetch_search,
     "animeSearchResults": _prefetch_search,
+    "allSearchResults": _prefetch_search,
     "movieGenresGet": _prefetch_genre_slug,
     "showGenresGet": _prefetch_genre_slug,
     "animeGenresGet": _prefetch_genre_slug,
@@ -964,6 +1071,10 @@ _PREFETCH_HANDLERS: dict[str, Callable[[dict[str, Any]], bool]] = {
     "animeGenresMultiGet": _prefetch_multi_genre,
     "simklLibraryList": _prefetch_library,
     "actorCredits": _prefetch_actor,
+    "simklRecommendations": _prefetch_recommendations,
+    "simklRelations": _prefetch_relations,
+    "moviesRelated": _prefetch_recommendations,
+    "showsRelated": _prefetch_recommendations,
     "movieYearsMovies": _prefetch_year,
     "showYears": _prefetch_year,
     **_build_library_prefetch_handlers(),
@@ -1018,6 +1129,20 @@ def run_page_prefetch(page_params: dict[str, Any]) -> bool:
     except Exception:
         g.log_stacktrace()
     return stamped
+
+
+def schedule_current_page_paint(page_params: dict[str, Any] | None) -> None:
+    """Background stamp for the page the user just opened (speeds back-navigation)."""
+    if not isinstance(page_params, dict) or not page_params.get("action"):
+        return
+    if not g.kodi_menu_caching_enabled():
+        return
+    params = dict(page_params)
+    try:
+        params["page"] = int(g.PAGE or page_params.get("page") or 1)
+    except (TypeError, ValueError):
+        params["page"] = 1
+    PagePrefetch.schedule(params)
 
 
 def schedule_page_prefetch_chain(page_params: dict[str, Any] | None) -> None:

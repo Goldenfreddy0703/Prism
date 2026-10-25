@@ -19,7 +19,9 @@ class PremiumizeResolver(TorrentResolverBase):
         self.transfer_class = PremiumizeTransfers()
 
     def _fetch_source_files(self, torrent, item_information):
-        return self.debrid_module.direct_download(torrent["magnet"])["content"]
+        response = self.debrid_module.direct_download(torrent["magnet"]) or {}
+        content = response.get("content") if isinstance(response, dict) else None
+        return content or []
 
     def resolve_stream_url(self, file_info):
         """

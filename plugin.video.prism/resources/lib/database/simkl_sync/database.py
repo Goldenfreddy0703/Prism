@@ -92,11 +92,13 @@ schema = {
                 ("needs_update", ["BOOLEAN", "NOT NULL", "DEFAULT 1"]),
                 ("needs_milling", ["BOOLEAN", "NOT NULL", "DEFAULT 1"]),
                 ("simkl_status", ["TEXT", "NULL"]),
+                ("catalog", ["TEXT", "NOT NULL", "DEFAULT 'tv'"]),
             ]
         ),
         "table_constraints": [],
         "indices": [
             ("idx_shows_simkl_status", ["simkl_status"]),
+            ("idx_shows_catalog", ["catalog"]),
         ],
         "default_seed": [],
     },
@@ -122,12 +124,16 @@ schema = {
                 ("last_watched_at", ["TEXT"]),
                 ("user_rating", ["INTEGER", "NULL"]),
                 ("needs_update", ["BOOLEAN", "NOT NULL", "DEFAULT 1"]),
+                ("catalog", ["TEXT", "NOT NULL", "DEFAULT 'tv'"]),
             ]
         ),
         "table_constraints": [
             "PRIMARY KEY(simkl_show_id, season)",
             "UNIQUE(simkl_id)"
             "FOREIGN KEY(simkl_show_id) REFERENCES shows(simkl_id) ON UPDATE CASCADE ON DELETE CASCADE",
+        ],
+        "indices": [
+            ("idx_seasons_catalog", ["catalog"]),
         ],
         "default_seed": [],
     },
@@ -154,6 +160,7 @@ schema = {
                 ("local_playback_at", ["TEXT"]),
                 ("user_rating", ["INTEGER", "NULL"]),
                 ("needs_update", ["BOOLEAN", "NOT NULL", "DEFAULT 1"]),
+                ("catalog", ["TEXT", "NOT NULL", "DEFAULT 'tv'"]),
             ]
         ),
         "table_constraints": [
@@ -167,6 +174,7 @@ schema = {
             ("idx_episodes_seasonid", ["simkl_season_id"]),
             ("idx_episodes_showid_season_number_lastwatched", ["simkl_show_id", "season", "number", "last_watched_at"]),
             ("idx_episodes_season_number", ["season", "number"]),
+            ("idx_episodes_catalog", ["catalog"]),
         ],
         "default_seed": [],
     },
@@ -273,6 +281,7 @@ class SimklSyncDatabase(Database):
             self._migrate_movies_tvdb_id_column()
             self._migrate_library_cache_tables()
             self._migrate_bookmarks_catalog_column()
+            self._migrate_bookmarks_simkl_id_index()
             self._migrate_last_changes_poll_column()
             g.set_runtime_setting("simkl_sync.migrations.done", True)
 
@@ -297,6 +306,15 @@ class SimklSyncDatabase(Database):
         self.hide_watched = g.get_bool_setting("general.hideWatched")
         self.page_limit = g.get_int_setting("item.limit")
         self._pending_list_enrichment = None
+
+    def rebuild_database(self):
+        from resources.lib.database.session import set_simkl_database_rebuilding
+
+        set_simkl_database_rebuilding(True)
+        try:
+            super().rebuild_database()
+        finally:
+            set_simkl_database_rebuilding(False)
 
     def _ensure_auxiliary_tables(self) -> None:
         """Tables created outside the declarative schema (discover catalog, library cache)."""
@@ -352,12 +370,21 @@ class SimklSyncDatabase(Database):
 
         return MetadataHandler()
 
-    def fetch_paint_overlay_fields(self, media_type: str, simkl_ids: list[int]) -> dict[int, dict]:
+    def fetch_paint_overlay_fields(
+        self,
+        media_type: str,
+        simkl_ids: list[int],
+        *,
+        catalog: str | None = None,
+    ) -> dict[int, dict]:
         """Lightweight sync fields for paint-cache rows (no info/art pickles)."""
         if not simkl_ids:
             return {}
+        from resources.lib.database.simkl_sync.serial_access import paint_cache_type_for_media_type, sync_show_table_for_catalog
+
         ids_sql = ",".join(str(int(simkl_id)) for simkl_id in simkl_ids)
-        if media_type == "movie":
+        paint_key = paint_cache_type_for_media_type(media_type, catalog)
+        if paint_key == "movie":
             query = f"""
                 SELECT m.simkl_id, m.args, m.watched AS play_count, m.user_rating,
                        m.simkl_status, m.history_cleared,
@@ -368,12 +395,13 @@ class SimklSyncDatabase(Database):
                 WHERE m.simkl_id IN ({ids_sql})
             """
         else:
+            show_table = sync_show_table_for_catalog("anime" if paint_key == "anime" else "tv")
             query = f"""
                 SELECT s.simkl_id, s.args, s.watched_episodes, s.unwatched_episodes,
                        s.episode_count, s.season_count, s.user_rating,
                        s.tmdb_id, s.tvdb_id, s.imdb_id, s.air_date, s.is_airing, s.[cast],
                        b.resume_time, b.percent_played
-                FROM shows AS s
+                FROM {show_table} AS s
                 LEFT JOIN bookmarks AS b ON b.simkl_id = s.simkl_id
                 WHERE s.simkl_id IN ({ids_sql})
             """
@@ -383,7 +411,7 @@ class SimklSyncDatabase(Database):
             if not isinstance(row, dict) or row.get("simkl_id") is None:
                 continue
             entry = dict(row)
-            if media_type == "movie":
+            if paint_key == "movie":
                 if int(entry.get("history_cleared") or 0) > 0:
                     entry["watch_history_cleared"] = True
                 status = entry.get("simkl_status")
@@ -392,21 +420,31 @@ class SimklSyncDatabase(Database):
             overlays[int(row["simkl_id"])] = entry
         return overlays
 
-    def fetch_paint_rows_batch(self, media_type: str, simkl_ids: list[int]) -> dict[int, dict]:
+    def fetch_paint_rows_batch(
+        self,
+        media_type: str,
+        simkl_ids: list[int],
+        *,
+        catalog: str | None = None,
+    ) -> dict[int, dict]:
         """Load denormalized info/art/cast rows for list paint (Seren-style)."""
         if not simkl_ids:
             return {}
+        from resources.lib.database.simkl_sync.serial_access import paint_cache_type_for_media_type, sync_show_table_for_catalog
+
         ids_sql = ",".join(str(int(simkl_id)) for simkl_id in simkl_ids)
-        if media_type == "movie":
+        paint_key = paint_cache_type_for_media_type(media_type, catalog)
+        if paint_key == "movie":
             query = f"""
                 SELECT simkl_id, info, art, [cast], tmdb_id, tvdb_id, imdb_id, air_date
                 FROM movies
                 WHERE simkl_id IN ({ids_sql})
             """
         else:
+            show_table = sync_show_table_for_catalog("anime" if paint_key == "anime" else "tv")
             query = f"""
                 SELECT simkl_id, info, art, [cast], tmdb_id, tvdb_id, imdb_id, air_date, is_airing
-                FROM shows
+                FROM {show_table}
                 WHERE simkl_id IN ({ids_sql})
             """
         rows = self.fetchall(query) or []
@@ -424,8 +462,11 @@ class SimklSyncDatabase(Database):
         from resources.lib.database.sync_meta_cache import SyncMetaCache
         from resources.lib.simkl.ids import serialize_action_args
 
-        table = "movies" if media_type == "movie" else "shows"
-        cache_media = "movie" if media_type == "movie" else "show"
+        from resources.lib.database.simkl_sync.serial_access import paint_cache_type_for_media_type, sync_show_table_for_catalog
+
+        paint_key = paint_cache_type_for_media_type(media_type)
+        table = "movies" if paint_key == "movie" else sync_show_table_for_catalog("anime" if paint_key == "anime" else "tv")
+        cache_media = paint_key
         payload_rows: list[tuple] = []
         cache_rows: list[dict] = []
         for row in rows:
@@ -663,6 +704,9 @@ class SimklSyncDatabase(Database):
                 WHERE catalog IS NULL
                 """
             )
+
+    def _migrate_bookmarks_simkl_id_index(self):
+        self.execute_sql("CREATE INDEX IF NOT EXISTS idx_bookmarks_simkl_id ON bookmarks(simkl_id)")
 
     def _migrate_last_changes_poll_column(self):
         columns = {row["name"] for row in self.fetchall("PRAGMA table_info(activities)")}
@@ -966,8 +1010,13 @@ class SimklSyncDatabase(Database):
         )
 
     def _continue_watching_episodes(self, catalog: str, hidden_show_ids: set[int]) -> list[dict]:
-        rows = self.fetchall(
-            """
+        from resources.lib.database.simkl_sync.serial_sync import serial_profile_scope, serial_tables
+
+        profile = "anime" if catalog == "anime" else "tv"
+        st = serial_tables(profile)
+        with serial_profile_scope(self, profile):
+            rows = self.fetchall(
+                f"""
             SELECT ep.simkl_show_id   AS simkl_show_id,
                    ep.simkl_id        AS simkl_id,
                    ep.simkl_season_id AS simkl_season_id,
@@ -978,21 +1027,22 @@ class SimklSyncDatabase(Database):
                    em.value           AS episode,
                    sm.value           AS show
             FROM bookmarks AS bm
-                     INNER JOIN episodes AS ep ON bm.simkl_id = ep.simkl_id
-                     LEFT JOIN episodes_meta AS em
+                     INNER JOIN {st.episode} AS ep ON bm.simkl_id = ep.simkl_id
+                     LEFT JOIN {st.episode_meta} AS em
                                ON ep.simkl_id = em.id AND em.type = 'simkl'
-                     LEFT JOIN shows_meta AS sm
+                     LEFT JOIN {st.show_meta} AS sm
                                ON ep.simkl_show_id = sm.id AND sm.type = 'simkl'
             WHERE bm.type = 'episode'
+              AND bm.catalog = ?
+              AND ep.catalog = ?
             ORDER BY Datetime(bm.paused_at) DESC
-            """
-        )
+            """,
+                (catalog, catalog),
+            )
         filtered: list[dict] = []
-        for row in rows:
+        for row in rows or []:
             show_id = row.get("simkl_show_id")
             if show_id is None or int(show_id) in hidden_show_ids:
-                continue
-            if self._infer_show_catalog(int(show_id)) != catalog:
                 continue
             filtered.append(row)
         return self.wrap_in_simkl_object(filtered)
@@ -1503,10 +1553,16 @@ class SimklSyncDatabase(Database):
                 merged.append(item)
                 continue
             sid = int(item["simkl_id"])
-            row = self.fetchone(
-                f"SELECT info, art FROM {table} WHERE simkl_id=?",
-                (sid,),
-            )
+            if table in ("shows", "seasons", "episodes"):
+                row = self.fetchone(
+                    f"SELECT info, art FROM {table} WHERE simkl_id=? AND catalog=?",
+                    (sid, catalog),
+                )
+            else:
+                row = self.fetchone(
+                    f"SELECT info, art FROM {table} WHERE simkl_id=?",
+                    (sid,),
+                )
             if not row:
                 merged.append(item)
                 continue
@@ -1681,27 +1737,66 @@ class SimklSyncDatabase(Database):
     def insert_simkl_shows(self, shows, force_meta=False):
         if not shows:
             return
+        tv_batch: list = []
+        anime_batch: list = []
+        for item in shows:
+            if not isinstance(item, dict):
+                continue
+            info = MetadataHandler.simkl_info(item) or {}
+            catalog = item.get("catalog") or info.get("catalog")
+            if catalog == "anime":
+                anime_batch.append(item)
+            else:
+                tv_batch.append(item)
+        if tv_batch:
+            self._insert_serial_shows(tv_batch, catalog="tv", force_meta=force_meta)
+        if anime_batch:
+            self._insert_serial_shows(anime_batch, catalog="anime", force_meta=force_meta)
+            self._purge_movies_rows_for_anime_serial(anime_batch)
+
+    def _purge_movies_rows_for_anime_serial(self, items: list) -> None:
+        """Anime titles belong on shows (catalog=anime); drop legacy movies rows."""
+        simkl_ids = [
+            int(item["simkl_id"])
+            for item in items
+            if isinstance(item, dict) and item.get("simkl_id") is not None
+        ]
+        if not simkl_ids:
+            return
+        placeholders = ",".join("?" * len(simkl_ids))
+        self.execute_sql(f"DELETE FROM movies WHERE simkl_id IN ({placeholders})", tuple(simkl_ids))
+
+    def _insert_serial_shows(self, shows, *, catalog: str, force_meta=False):
+        if not shows:
+            return
 
         if force_meta:
             to_insert = [i for i in shows if isinstance(i, dict) and i.get("simkl_id")]
         else:
-            to_insert = self._filter_media_items_that_needs_updating(shows, "shows")
+            from resources.lib.database.simkl_sync.serial_sync import serial_tables as _st_tables
+
+            to_insert = self._filter_media_items_that_needs_updating(shows, _st_tables(catalog).show)
 
         if not to_insert:
             return
 
+        from resources.lib.database.simkl_sync.serial_sync import serial_tables
+
+        st = serial_tables(catalog)
         to_insert = self._merge_sync_items_with_existing_rows(
             to_insert,
-            table="shows",
-            catalog="tv",
+            table=st.show,
+            catalog=catalog,
         )
         self._prepare_sync_inserts(to_insert)
-        self._preserve_library_status_on_items(to_insert, "shows")
-        g.log(f"Inserting Shows into sync database: {len(to_insert)}")
+        self._preserve_library_status_on_items(to_insert, st.show)
+        g.log(f"Inserting {catalog} shows into sync database: {len(to_insert)}", "debug")
         from resources.lib.meta.storage import slim_art_dict, slim_info_dict
 
         get = MetadataHandler.get_simkl_info
         simkl_obj = MetadataHandler.simkl_object
+        art_kind = "anime" if catalog == "anime" else "tvshow"
+        upsert_query = self.upsert_show_query
 
         def _insert_episode_count(item):
             info = MetadataHandler.simkl_info(item) or {}
@@ -1717,17 +1812,12 @@ class SimklSyncDatabase(Database):
             return best if best > 0 else get(item, "episode_count")
 
         self.execute_sql(
-            self.upsert_show_query,
+            upsert_query,
             (
                 (
                     i.get("simkl_id"),
                     slim_info_dict(MetadataHandler.simkl_info(i) or {}, simkl=True) or None,
-                    slim_art_dict(
-                        MetadataHandler.art(simkl_obj(i)) or {},
-                        "anime"
-                        if (MetadataHandler.simkl_info(i) or {}).get("catalog") == "anime"
-                        else "tvshow",
-                    )
+                    slim_art_dict(MetadataHandler.art(simkl_obj(i)) or {}, art_kind)
                     or None,
                     None,
                     g.validate_date(get(i, "aired")),
@@ -1743,12 +1833,13 @@ class SimklSyncDatabase(Database):
                     g.validate_date(get(i, "last_watched_at")),
                     get(i, "user_rating"),
                     self._library_status_from_item(i),
+                    catalog,
                 )
                 for i in to_insert
             ),
         )
-        self.save_to_meta_table(to_insert, "shows", "simkl", "simkl_id")
-        self._set_needs_update(shows, "shows")
+        self.save_to_meta_table(to_insert, st.show, "simkl", "simkl_id")
+        self._set_needs_update(shows, st.show)
         from resources.lib.database.sync_meta_cache import SyncMetaCache
 
         cache = SyncMetaCache()
@@ -1759,10 +1850,7 @@ class SimklSyncDatabase(Database):
                 {
                     "simkl_id": item.get("simkl_id"),
                     "info": slim_info_dict(info, simkl=True),
-                    "art": slim_art_dict(
-                        MetadataHandler.art(simkl_obj(item)) or {},
-                        "anime" if info.get("catalog") == "anime" else "tvshow",
-                    ),
+                    "art": slim_art_dict(MetadataHandler.art(simkl_obj(item)) or {}, art_kind),
                     "tmdb_id": get(item, "tmdb_id"),
                     "tvdb_id": get(item, "tvdb_id"),
                     "imdb_id": get(item, "imdb_id"),
@@ -1802,23 +1890,59 @@ class SimklSyncDatabase(Database):
             (new_id, old_id),
         )
 
+    def _serial_catalog_for_sync_item(self, item: dict) -> str:
+        info = MetadataHandler.simkl_info(item) or {}
+        catalog = item.get("catalog") or info.get("catalog")
+        if catalog == "anime":
+            return "anime"
+        show_id = item.get("simkl_show_id")
+        if show_id is not None:
+            try:
+                if self.show_catalog(int(show_id)) == "anime":
+                    return "anime"
+            except (TypeError, ValueError):
+                pass
+        return "tv"
+
     def insert_simkl_episodes(self, episodes):
         if not episodes:
             return
+        tv_batch: list = []
+        anime_batch: list = []
+        for item in episodes:
+            if not isinstance(item, dict):
+                continue
+            if self._serial_catalog_for_sync_item(item) == "anime":
+                anime_batch.append(item)
+            else:
+                tv_batch.append(item)
+        if tv_batch:
+            self._insert_serial_episodes(tv_batch, catalog="tv")
+        if anime_batch:
+            self._insert_serial_episodes(anime_batch, catalog="anime")
 
-        to_insert = self._filter_media_items_that_needs_updating(episodes, "episodes")
+    def _insert_serial_episodes(self, episodes, *, catalog: str):
+        if not episodes:
+            return
+
+        from resources.lib.database.simkl_sync.serial_sync import serial_tables
+
+        st = serial_tables(catalog)
+        to_insert = self._filter_media_items_that_needs_updating(episodes, st.episode)
 
         if not to_insert:
             return
         self._prepare_sync_inserts(to_insert)
-        g.log(f"Inserting episodes into sync database: {len(to_insert)}")
+        g.log(f"Inserting {catalog} episodes into sync database: {len(to_insert)}", "debug")
         get = MetadataHandler.get_simkl_info
 
         if missing_season_ids := [i for i in to_insert if not i.get("simkl_season_id")]:
             predicate = " OR ".join(
                 [f"(simkl_show_id={get(i, 'simkl_show_id')} AND season={get(i, 'season')})" for i in missing_season_ids]
             )
-            season_ids = self.fetchall(f"SELECT simkl_show_id, simkl_id, season FROM seasons WHERE {predicate}")
+            season_ids = self.fetchall(
+                f"SELECT simkl_show_id, simkl_id, season FROM {st.season} WHERE {predicate}"
+            )
             season_ids = {f"{i['simkl_show_id']}-{i['season']}": i["simkl_id"] for i in season_ids}
             for i in to_insert:
                 i["simkl_season_id"] = season_ids.get(f"{get(i, 'simkl_show_id')}-{get(i, 'season')}")
@@ -1831,14 +1955,15 @@ class SimklSyncDatabase(Database):
             if show_id is None or season is None or ep_num is None or new_id is None:
                 continue
             old_row = self.fetchone(
-                """
+                f"""
                 SELECT simkl_id
-                FROM episodes
+                FROM {st.episode}
                 WHERE simkl_show_id = ?
                   AND season = ?
                   AND number = ?
+                  AND catalog = ?
                 """,
-                (int(show_id), int(season), int(ep_num)),
+                (int(show_id), int(season), int(ep_num), catalog),
             )
             if not old_row:
                 continue
@@ -1846,8 +1971,9 @@ class SimklSyncDatabase(Database):
             if old_id != int(new_id):
                 self._migrate_episode_bookmark_simkl_id(old_id, int(new_id))
 
+        upsert = self.upsert_episode_query
         self.execute_sql(
-            self.upsert_episode_query,
+            upsert,
             (
                 (
                     i.get("simkl_id"),
@@ -1868,24 +1994,45 @@ class SimklSyncDatabase(Database):
                     g.validate_date(get(i, "last_watched_at")),
                     get(i, "user_rating"),
                     self.simkl_api.meta_hash,
+                    catalog,
                 )
                 for i in to_insert
             ),
         )
-        self.save_to_meta_table(to_insert, "episodes", "simkl", "simkl_id")
-        self._set_needs_update(episodes, "episodes")
+        self.save_to_meta_table(to_insert, st.episode, "simkl", "simkl_id")
+        self._set_needs_update(episodes, st.episode)
 
     def insert_simkl_seasons(self, seasons):
         if not seasons:
             return
+        tv_batch: list = []
+        anime_batch: list = []
+        for item in seasons:
+            if not isinstance(item, dict):
+                continue
+            if self._serial_catalog_for_sync_item(item) == "anime":
+                anime_batch.append(item)
+            else:
+                tv_batch.append(item)
+        if tv_batch:
+            self._insert_serial_seasons(tv_batch, catalog="tv")
+        if anime_batch:
+            self._insert_serial_seasons(anime_batch, catalog="anime")
 
-        to_insert = self._filter_media_items_that_needs_updating(seasons, "seasons")
+    def _insert_serial_seasons(self, seasons, *, catalog: str):
+        if not seasons:
+            return
+
+        from resources.lib.database.simkl_sync.serial_sync import serial_tables
+
+        st = serial_tables(catalog)
+        to_insert = self._filter_media_items_that_needs_updating(seasons, st.season)
 
         if not to_insert:
             return
 
         self._prepare_sync_inserts(to_insert)
-        g.log(f"Inserting seasons into sync database: {len(to_insert)}")
+        g.log(f"Inserting {catalog} seasons into sync database: {len(to_insert)}", "debug")
         get = MetadataHandler.get_simkl_info
 
         def _insert_episode_count(item):
@@ -1911,8 +2058,9 @@ class SimklSyncDatabase(Database):
                 f"season={get(i, 'season')} row_id={i.get('simkl_id')} title={get(i, 'title')}",
                 "debug",
             )
+        upsert = self.upsert_season_query
         self.execute_sql(
-            self.upsert_season_query,
+            upsert,
             (
                 (
                     i.get("simkl_show_id"),
@@ -1930,12 +2078,13 @@ class SimklSyncDatabase(Database):
                     self._create_args(i),
                     g.validate_date(get(i, "last_watched_at")),
                     get(i, "user_rating"),
+                    catalog,
                 )
                 for i in to_insert
             ),
         )
-        self.save_to_meta_table(to_insert, "seasons", "simkl", "simkl_id")
-        self._set_needs_update(seasons, "seasons")
+        self.save_to_meta_table(to_insert, st.season, "simkl", "simkl_id")
+        self._set_needs_update(seasons, st.season)
 
     def _mill_if_needed(self, list_to_update, queue_wrapper=None, mill_episodes=True):
         if queue_wrapper is None:
@@ -2080,6 +2229,7 @@ class SimklSyncDatabase(Database):
         skip_provider_episode_updates=False,
         defer_episode_format: bool = False,
         mill_season_filter: set[int] | frozenset[int] | None = None,
+        catalog: str | None = None,
     ):
         """Parallel Simkl catalogue pull — skips needs_milling gate and show meta enrichment."""
         if not shows:
@@ -2095,27 +2245,37 @@ class SimklSyncDatabase(Database):
         )
         if not show_ids:
             return
+        if catalog is None:
+            catalog = self.show_catalog(show_ids[0])
+        catalog = catalog or "tv"
+        from resources.lib.database.simkl_sync.serial_sync import serial_profile_scope, serial_tables
+
+        st = serial_tables(catalog)
         predicate = ",".join(str(show_id) for show_id in show_ids)
         rows = self.fetchall(
             f"""
             SELECT s.simkl_id, m.value AS simkl_object, s.tmdb_id, s.tvdb_id
-            FROM shows AS s
-                     LEFT JOIN shows_meta AS m ON m.id = s.simkl_id AND m.type = 'simkl'
+            FROM {st.show} AS s
+                     LEFT JOIN {st.show_meta} AS m ON m.id = s.simkl_id AND m.type = 'simkl'
             WHERE s.simkl_id IN ({predicate})
             """
         )
         if not rows:
-            rows = [{"simkl_id": show_id} for show_id in show_ids]
-        g.log(f"Parallel force-mill: {len(rows)} show(s)", "debug")
-        self.insert_simkl_shows(rows)
-        self.mill_seasons(
-            rows,
-            self._queue_mill_tasks,
-            mill_episodes=mill_episodes,
-            skip_provider_episode_updates=skip_provider_episode_updates,
-            defer_episode_format=defer_episode_format,
-            mill_season_filter=mill_season_filter,
-        )
+            rows = [{"simkl_id": show_id, "catalog": catalog} for show_id in show_ids]
+        else:
+            for row in rows:
+                row["catalog"] = catalog
+        g.log(f"Parallel force-mill ({catalog}): {len(rows)} show(s)", "debug")
+        with serial_profile_scope(self, catalog):
+            self.insert_simkl_shows(rows)
+            self.mill_seasons(
+                rows,
+                self._queue_mill_tasks,
+                mill_episodes=mill_episodes,
+                skip_provider_episode_updates=skip_provider_episode_updates,
+                defer_episode_format=defer_episode_format,
+                mill_season_filter=mill_season_filter,
+            )
 
     def mill_seasons(
         self,
@@ -2397,24 +2557,39 @@ class SimklSyncDatabase(Database):
 
     def _catalog_from_catalog_items(self, show_id: int) -> str | None:
         """Browse/search stores the list catalog on catalog_items; trust it over sparse show rows."""
+        from resources.lib.database.session import simkl_database_rebuilding
         from resources.lib.discover.catalog_store import ensure_catalog_tables
 
-        ensure_catalog_tables(self)
-        rows = self.fetchall(
-            """
-            SELECT catalog FROM catalog_items
-            WHERE simkl_id = ? AND catalog IN ('tv', 'anime')
-            """,
-            (int(show_id),),
-        )
+        if simkl_database_rebuilding():
+            return None
+        try:
+            ensure_catalog_tables(self)
+            rows = self.fetchall(
+                """
+                SELECT catalog FROM catalog_items
+                WHERE simkl_id = ? AND catalog IN ('tv', 'anime')
+                """,
+                (int(show_id),),
+            )
+        except Exception as exc:
+            if "no such table" in str(exc).lower():
+                return None
+            raise
         if not rows:
             return None
         catalogs = {str(row.get("catalog") or "") for row in rows}
-        if "anime" in catalogs:
-            return "anime"
-        if "tv" in catalogs:
-            return "tv"
-        return None
+        chosen = None
+        shows_catalog = None
+        if "tv" in catalogs and "anime" in catalogs:
+            show_row = self.fetchone("SELECT catalog FROM shows WHERE simkl_id = ?", (int(show_id),))
+            shows_catalog = (show_row.get("catalog") or "").strip().lower() if show_row else ""
+            if shows_catalog in ("tv", "anime"):
+                chosen = shows_catalog
+        if chosen is None and "anime" in catalogs:
+            chosen = "anime"
+        elif chosen is None and "tv" in catalogs:
+            chosen = "tv"
+        return chosen
 
     def _anime_tvdb_menu_seasons(self, show_id: int) -> set[int]:
         from resources.lib.database.simkl_sync.milling import fetch_raw_show_episodes
@@ -2431,10 +2606,15 @@ class SimklSyncDatabase(Database):
         expected = self._anime_tvdb_menu_seasons(int(show_id))
         if not expected:
             return False
-        rows = self.fetchall(
-            "SELECT season FROM seasons WHERE simkl_show_id = ?",
-            (int(show_id),),
-        )
+        from resources.lib.database.simkl_sync.serial_sync import catalog_filter_sql, serial_profile_scope
+
+        with serial_profile_scope(self, "anime"):
+            season_table = self._st().season
+            cat_sql, cat_params = catalog_filter_sql(self._st())
+            rows = self.fetchall(
+                f"SELECT season FROM {season_table} WHERE simkl_show_id = ?{cat_sql}",
+                (int(show_id),) + cat_params,
+            )
         local = {int(row["season"]) for row in rows or [] if row.get("season") is not None}
         return local != expected
 
@@ -2447,14 +2627,19 @@ class SimklSyncDatabase(Database):
             return from_items
         row = self.fetchone(
             """
-            SELECT m.value AS simkl_object, s.info AS show_info
+            SELECT s.catalog AS row_catalog, m.value AS simkl_object, s.info AS show_info
             FROM shows AS s
             LEFT JOIN shows_meta AS m ON m.id = s.simkl_id AND m.type = 'simkl'
             WHERE s.simkl_id = ?
             """,
             (sid,),
         )
-        return self._catalog_from_show_row(row)
+        if row:
+            row_cat = (row.get("row_catalog") or "").strip().lower()
+            if row_cat in ("tv", "anime"):
+                return row_cat
+            return self._catalog_from_show_row(row)
+        return "tv"
 
     def _show_ids_for_catalog(self, catalog: str | None) -> list[int] | None:
         """Return show simkl_ids for a catalog (tv/anime), cached on the session DB singleton."""
@@ -2464,20 +2649,16 @@ class SimklSyncDatabase(Database):
         if isinstance(cache, dict) and catalog in cache:
             return cache[catalog]
         rows = self.fetchall(
-            """
-            SELECT s.simkl_id, m.value AS simkl_object, s.info AS show_info
-            FROM shows AS s
-            LEFT JOIN shows_meta AS m ON m.id = s.simkl_id AND m.type = 'simkl'
-            """
+            "SELECT simkl_id FROM shows WHERE catalog = ?",
+            (catalog,),
         )
-        grouped: dict[str, list[int]] = {"tv": [], "anime": []}
-        for row in rows or []:
-            if row.get("simkl_id") is None:
-                continue
-            cat = self._catalog_from_show_row(row)
-            grouped.setdefault(cat, []).append(int(row["simkl_id"]))
-        self._show_ids_by_catalog = grouped
-        return grouped.get(catalog, [])
+        ids = [int(row["simkl_id"]) for row in rows or [] if row.get("simkl_id") is not None]
+        cache = getattr(self, "_show_ids_by_catalog", None)
+        if not isinstance(cache, dict):
+            cache = {}
+        cache[catalog] = ids
+        self._show_ids_by_catalog = cache
+        return ids
 
     @staticmethod
     def _create_args(item):
@@ -3145,7 +3326,7 @@ class SimklSyncDatabase(Database):
             return 0
 
         rows = self.fetchall(
-            "SELECT season FROM seasons WHERE simkl_show_id=?",
+            "SELECT season FROM seasons WHERE simkl_show_id=? AND catalog='anime'",
             (show_id,),
         )
         stale = sorted({int(row["season"]) for row in rows or [] if int(row["season"]) not in valid})
@@ -3749,22 +3930,48 @@ class SimklSyncDatabase(Database):
 
     def set_simkl_status(self, simkl_id: int, catalog: str, status: str | None) -> None:
         """Persist Simkl list status on a movie or show row for My Library menus."""
-        table = "movies" if catalog == "movie" else "shows"
-        row = self.fetchone(f"SELECT simkl_status, info FROM {table} WHERE simkl_id=?", (int(simkl_id),))
-        if not row:
-            return
-        prior_status = row.get("simkl_status")
-        info = row.get("info")
-        if not isinstance(info, dict):
-            info = {}
-        if status:
-            info["simkl_status"] = status
+        if catalog == "movie":
+            table = "movies"
+            row = self.fetchone(f"SELECT simkl_status, info FROM {table} WHERE simkl_id=?", (int(simkl_id),))
+            if not row:
+                return
+            prior_status = row.get("simkl_status")
+            info = row.get("info")
+            if not isinstance(info, dict):
+                info = {}
+            if status:
+                info["simkl_status"] = status
+            else:
+                info.pop("simkl_status", None)
+            self.execute_sql(
+                f"UPDATE {table} SET info=?, simkl_status=? WHERE simkl_id=?",
+                (info, status, int(simkl_id)),
+            )
         else:
-            info.pop("simkl_status", None)
-        self.execute_sql(
-            f"UPDATE {table} SET info=?, simkl_status=? WHERE simkl_id=?",
-            (info, status, int(simkl_id)),
-        )
+            from resources.lib.database.simkl_sync.serial_sync import serial_profile_scope
+
+            profile = "anime" if catalog == "anime" else "tv"
+            with serial_profile_scope(self, profile):
+                table = self._st().show
+                cat_sql, cat_params = (" AND catalog = ?", (catalog,)) if catalog in ("tv", "anime") else ("", ())
+                row = self.fetchone(
+                    f"SELECT simkl_status, info FROM {table} WHERE simkl_id=?{cat_sql}",
+                    (int(simkl_id),) + cat_params,
+                )
+                if not row:
+                    return
+                prior_status = row.get("simkl_status")
+                info = row.get("info")
+                if not isinstance(info, dict):
+                    info = {}
+                if status:
+                    info["simkl_status"] = status
+                else:
+                    info.pop("simkl_status", None)
+                self.execute_sql(
+                    f"UPDATE {table} SET info=?, simkl_status=? WHERE simkl_id=?{cat_sql}",
+                    (info, status, int(simkl_id)) + cat_params,
+                )
         if str(status or "") != str(prior_status or ""):
             from resources.lib.simkl.library_cache import invalidate_library_cache
 
@@ -4247,15 +4454,15 @@ class SimklSyncDatabase(Database):
                      tmdb_id, tvdb_id, imdb_id, meta_hash,
                      season_count, episode_count,
                      args, is_airing,
-                     last_watched_at, user_rating, simkl_status,
+                     last_watched_at, user_rating, simkl_status, catalog,
                      needs_update, needs_milling)
-                     AS (VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, TRUE))
+                     AS (VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, TRUE))
             INSERT
             INTO shows(simkl_id, info, art, cast, air_date, last_updated,
                        tmdb_id, tvdb_id, imdb_id, meta_hash,
                        season_count, episode_count,
                        args, is_airing,
-                       last_watched_at, user_rating, simkl_status,
+                       last_watched_at, user_rating, simkl_status, catalog,
                        needs_update, needs_milling)
             SELECT simkl_id,
                    info,
@@ -4274,6 +4481,7 @@ class SimklSyncDatabase(Database):
                    last_watched_at,
                    user_rating,
                    simkl_status,
+                   catalog,
                    needs_update,
                    needs_milling
             FROM new
@@ -4283,7 +4491,7 @@ class SimklSyncDatabase(Database):
                         tmdb_id, tvdb_id, imdb_id, meta_hash,
                         season_count, episode_count, watched_episodes, unwatched_episodes,
                         args, is_airing,
-                        last_watched_at, user_rating, simkl_status,
+                        last_watched_at, user_rating, simkl_status, catalog,
                         needs_update,
                         needs_milling) = (SELECT coalesce(new.info, old.info),
                                                  coalesce(new.art, old.art),
@@ -4303,6 +4511,7 @@ class SimklSyncDatabase(Database):
                                                  coalesce(new.last_watched_at, old.last_watched_at),
                                                  coalesce(new.user_rating, old.user_rating),
                                                  coalesce(new.simkl_status, old.simkl_status),
+                                                 coalesce(old.catalog, new.catalog),
                                                  CASE
                                                      WHEN old.needs_update
                                                          THEN CASE
@@ -4337,14 +4546,14 @@ class SimklSyncDatabase(Database):
                      air_date, last_updated,
                      tmdb_id, tvdb_id, meta_hash, episode_count,
                      season, args,
-                     last_watched_at, user_rating,
-                     needs_update) AS (VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE))
+                     last_watched_at, user_rating, catalog,
+                     needs_update) AS (VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE))
             INSERT
             INTO seasons(simkl_show_id, simkl_id, info, art, cast,
                          air_date, last_updated,
                          tmdb_id, tvdb_id, meta_hash, episode_count,
                          season, args,
-                         last_watched_at, user_rating,
+                         last_watched_at, user_rating, catalog,
                          needs_update)
             SELECT simkl_show_id,
                    simkl_id,
@@ -4361,6 +4570,7 @@ class SimklSyncDatabase(Database):
                    coalesce(args, FALSE),
                    last_watched_at,
                    user_rating,
+                   catalog,
                    needs_update
             FROM new
             WHERE TRUE
@@ -4369,7 +4579,7 @@ class SimklSyncDatabase(Database):
                         air_date, last_updated,
                         tmdb_id, tvdb_id, meta_hash, episode_count,
                         args,
-                        last_watched_at, user_rating,
+                        last_watched_at, user_rating, catalog,
                         needs_update) = (SELECT new.simkl_id,
                                                 coalesce(new.info, old.info),
                                                 coalesce(new.art, old.art),
@@ -4383,6 +4593,7 @@ class SimklSyncDatabase(Database):
                                                 coalesce(new.args, old.args),
                                                 coalesce(new.last_watched_at, old.last_watched_at),
                                                 coalesce(new.user_rating, old.user_rating),
+                                                coalesce(old.catalog, new.catalog),
                                                 CASE
                                                     WHEN old.needs_update
                                                         THEN CASE
@@ -4413,8 +4624,8 @@ class SimklSyncDatabase(Database):
                      tmdb_id, tvdb_id, imdb_id,
                      info, art, cast,
                      args, last_watched_at,
-                     user_rating, meta_hash,
-                     needs_update) AS (VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE))
+                     user_rating, meta_hash, catalog,
+                     needs_update) AS (VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE))
             INSERT
             INTO episodes(simkl_id, simkl_show_id, simkl_season_id,
                           watched,
@@ -4423,7 +4634,7 @@ class SimklSyncDatabase(Database):
                           tmdb_id, tvdb_id, imdb_id,
                           info, art, cast,
                           args, last_watched_at,
-                          user_rating, meta_hash, needs_update)
+                          user_rating, meta_hash, catalog, needs_update)
             SELECT simkl_id,
                    simkl_show_id,
                    simkl_season_id,
@@ -4442,6 +4653,7 @@ class SimklSyncDatabase(Database):
                    last_watched_at,
                    user_rating,
                    meta_hash,
+                   catalog,
                    needs_update
             FROM new
             WHERE TRUE
@@ -4452,7 +4664,7 @@ class SimklSyncDatabase(Database):
                         tmdb_id, tvdb_id, imdb_id,
                         info, art, cast,
                         args, last_watched_at,
-                        user_rating, meta_hash,
+                        user_rating, meta_hash, catalog,
                         needs_update) = (SELECT new.simkl_id,
                                                 coalesce(new.simkl_season_id, old.simkl_season_id),
                                                 MAX(coalesce(new.watched, 0), coalesce(old.watched, 0)),
@@ -4468,6 +4680,7 @@ class SimklSyncDatabase(Database):
                                                 coalesce(new.last_watched_at, old.last_watched_at),
                                                 coalesce(new.user_rating, old.user_rating),
                                                 coalesce(new.meta_hash, old.meta_hash),
+                                                coalesce(old.catalog, new.catalog),
                                                 CASE
                                                     WHEN old.needs_update
                                                         THEN CASE

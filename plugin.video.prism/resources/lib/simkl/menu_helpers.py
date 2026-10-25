@@ -34,7 +34,13 @@ def library_list_has_next(refs: list) -> bool:
     return g.PAGE * page_limit < len(refs)
 
 
-def library_status_list_kwargs(catalog: str, status: str, items: list) -> dict:
+def library_status_list_kwargs(
+    catalog: str,
+    status: str,
+    items: list,
+    *,
+    membership_refs: list | None = None,
+) -> dict:
     """
     Shared list-builder kwargs for Simkl library status menus (watchlist, watching, etc.).
 
@@ -48,7 +54,7 @@ def library_status_list_kwargs(catalog: str, status: str, items: list) -> dict:
     g.REQUEST_PARAMS["catalog"] = catalog
     g.REQUEST_PARAMS["status"] = status
 
-    refs = simkl_refs(items)
+    refs = membership_refs if membership_refs is not None else simkl_refs(items)
     return {
         **discover_list_kwargs(
             enrichment_reason="browse",

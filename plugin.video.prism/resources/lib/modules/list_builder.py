@@ -101,37 +101,56 @@ class ListBuilder:
         return None
 
     @staticmethod
-    def _season_fully_watched(row: dict) -> bool:
-        from resources.lib.simkl.watch_counters import is_caught_up
+    def _is_serial_show_menu_row(item: dict, info: dict) -> bool:
+        """Hub-level TV or anime show rows (not season/episode drilldown)."""
+        mediatype = (info.get("mediatype") or "").lower()
+        if mediatype in ("season", "episode", "movie", "movies", "list"):
+            return False
+        if mediatype == "tvshow":
+            return True
+        catalog = item.get("catalog") or info.get("catalog")
+        ids = info.get("ids") if isinstance(info.get("ids"), dict) else {}
+        return catalog == "anime" or bool(info.get("mal_id") or ids.get("mal"))
 
+    @staticmethod
+    def _season_completion_mark(row: dict) -> bool:
+        """True when the season would show the same watched checkmark as a finished episode."""
         info = row.get("info") if isinstance(row.get("info"), dict) else {}
-        episode_count = row.get("episode_count") or info.get("episode_count")
-        watched_episodes = row.get("watched_episodes") or info.get("watched_episodes_count")
-        unwatched = row.get("unwatched_episodes", info.get("unwatched_episodes"))
         try:
-            episode_count = int(episode_count) if episode_count is not None else 0
-            watched_episodes = int(watched_episodes) if watched_episodes is not None else 0
+            episode_count = int(row.get("episode_count") or info.get("episode_count") or 0)
+            watched_episodes = int(row.get("watched_episodes") or info.get("watched_episodes_count") or 0)
         except (TypeError, ValueError):
             episode_count = 0
             watched_episodes = 0
-        if is_caught_up(watched_episodes, episode_count, unwatched=unwatched):
-            return True
-        play_count = row.get("play_count")
-        if play_count is None:
-            play_count = info.get("playcount")
-        try:
-            # Partial seasons may carry playcount=watched count (e.g. 19); only 1 means complete.
-            return play_count is not None and int(play_count) == 1
-        except (TypeError, ValueError):
-            return False
+        # A partial season can carry playcount equal to the watched-episode count.
+        # Only a full season gets the completion mark episodes use (playcount > 0).
+        return episode_count > 0 and watched_episodes >= episode_count
+
+    @classmethod
+    def _stamp_season_completion_marks(cls, media_list) -> None:
+        for row in media_list or []:
+            if not isinstance(row, dict):
+                continue
+            info = row.get("info")
+            if not isinstance(info, dict):
+                info = {}
+                row["info"] = info
+            if cls._season_completion_mark(row):
+                row["play_count"] = 1
+                info["playcount"] = 1
+            else:
+                row["play_count"] = 0
+                info["playcount"] = 0
+
+    @staticmethod
+    def _season_fully_watched(row: dict) -> bool:
+        return ListBuilder._season_completion_mark(row)
 
     @classmethod
     def _first_incomplete_season_index(cls, media_list) -> int | None:
-        """0-based index of the first season that is not fully watched."""
-        for idx, row in enumerate(media_list or []):
-            if isinstance(row, dict) and not cls._season_fully_watched(row):
-                return idx
-        return None
+        """0-based index of the first season without a completion mark."""
+        cls._stamp_season_completion_marks(media_list)
+        return cls._first_unwatched_episode_index(media_list)
 
     def season_list_builder(self, show_id, media_list=None, **params):
         """
@@ -153,15 +172,23 @@ class ListBuilder:
             show_ctx = load_show_menu_context(show_id)
             set_show_menu_plugin_category(show_ctx)
             self._fast_list_defaults(params)
-            rows = self._sync_db().get_season_list(show_id, **self._apply_list_filters(params))
+            db = self._sync_db()
+            season_fetch = (
+                db.get_anime_season_list
+                if db.show_catalog(int(show_id)) == "anime"
+                else db.get_season_list
+            )
+            rows = season_fetch(show_id, **self._apply_list_filters(params))
             rows = overlay_parent_context_on_rows(rows, show_ctx)
         else:
             rows = media_list
         show_status = None
         try:
-            show_row = self._sync_db().fetchone(
-                "SELECT simkl_status FROM shows WHERE simkl_id=?",
-                (int(show_id),),
+            db = self._sync_db()
+            show_catalog = db.show_catalog(int(show_id))
+            show_row = db.fetchone(
+                "SELECT simkl_status FROM shows WHERE simkl_id=? AND catalog=?",
+                (int(show_id), show_catalog),
             )
             show_status = (show_row or {}).get("simkl_status")
         except Exception:
@@ -214,6 +241,9 @@ class ListBuilder:
         params["is_folder"] = False
         params["is_playable"] = True
         action = "getSources"
+        specials_menu = season is not None and int(season) == 0
+        if specials_menu:
+            params.setdefault("sort", "specials")
 
         if media_list is None:
             from resources.lib.meta.list_paint import (
@@ -240,12 +270,16 @@ class ListBuilder:
             rows = media_list
 
         g.smart_scroll_index = self._first_unwatched_episode_index(rows)
-        return self._common_menu_builder(
-            rows,
-            g.CONTENT_EPISODE,
-            action,
-            **params,
-        )
+        self._specials_menu = specials_menu
+        try:
+            return self._common_menu_builder(
+                rows,
+                g.CONTENT_EPISODE,
+                action,
+                **params,
+            )
+        finally:
+            self._specials_menu = False
 
     def mixed_episode_builder(self, media_list, **params):
         """
@@ -343,6 +377,8 @@ class ListBuilder:
     def _schedule_background_enrichment(refs: list[dict] | None, media_type: str | None, *, reason: str = "list_open", catalog: str | None = None) -> None:
         if not refs or not media_type:
             return
+        if reason == "list_open":
+            return
         from resources.lib.meta.enrichment import MetaEnrichmentQueue
 
         MetaEnrichmentQueue.schedule_run_plugin(refs, media_type, reason=reason, catalog=catalog)
@@ -356,55 +392,6 @@ class ListBuilder:
             action = "forceResumeShow"
             row_params = {"is_folder": False, "is_playable": True}
         return action, row_params
-
-    def show_list_builder(self, media_list, **params):
-        """
-        Builds a menu list of shows
-        :param media_list: List of show objects
-        :param params: Parameters to send to common_menu_builder method
-        :return: List list_items if smart_play Kwarg is True else None
-        """
-        catalog = params.pop("catalog", None)
-        content_type = self._catalog_content_type(catalog)
-        action, row_params = self._show_list_click_params()
-        params.update(row_params)
-
-        self._fast_list_defaults(params)
-        show_db = self._sync_db()
-        media_rows = show_db.get_show_list(media_list, **self._apply_list_filters(params))
-        enrichment_refs, enrichment_media_type = show_db.consume_list_enrichment_refs()
-        self._common_menu_builder(
-            media_rows,
-            content_type,
-            action,
-            enrichment_refs=enrichment_refs,
-            enrichment_media_type=enrichment_media_type,
-            **params,
-        )
-
-    def movie_menu_builder(self, media_list, **params):
-        """
-        Builds a mneu list of movies
-        :param media_list: List of movie objects
-        :param params: Parameters to send to common_menu_builder method
-        :return: List list_items if smart_play Kwarg is True else None
-        """
-        params["is_folder"] = False
-        params["is_playable"] = True
-        action = "getSources"
-
-        self._fast_list_defaults(params)
-        movie_db = self._sync_db()
-        media_rows = movie_db.get_movie_list(media_list, **self._apply_list_filters(params))
-        enrichment_refs, enrichment_media_type = movie_db.consume_list_enrichment_refs()
-        self._common_menu_builder(
-            media_rows,
-            g.CONTENT_MOVIE,
-            action,
-            enrichment_refs=enrichment_refs,
-            enrichment_media_type=enrichment_media_type,
-            **params,
-        )
 
     @staticmethod
     def _sync_dict_to_menu_row(sync_item: dict, *, _allow_catalog_poster_lookup: bool = True) -> dict | None:
@@ -438,10 +425,15 @@ class ListBuilder:
             full_item = loaded.get(int(simkl_id))
             if isinstance(full_item, dict) and full_item is not sync_item:
                 return ListBuilder._sync_dict_to_menu_row(full_item, _allow_catalog_poster_lookup=False)
+        cast = sync_item.get("cast")
+        if not isinstance(cast, list) or not cast:
+            cast = blob.get("cast") if isinstance(blob, dict) else None
+        if not isinstance(cast, list):
+            cast = []
         menu_row = {
             "info": info,
             "art": art,
-            "cast": blob.get("cast") or [],
+            "cast": cast,
         }
         if sync_item.get("args"):
             menu_row["args"] = sync_item["args"]
@@ -482,18 +474,32 @@ class ListBuilder:
         return None
 
     @staticmethod
-    def _mixed_media_content_type(catalog_hint: str | None, movie_count: int, show_count: int) -> str:
+    def _mixed_media_content_type(
+        catalog_hint: str | None,
+        movie_count: int,
+        show_count: int,
+        anime_count: int = 0,
+    ) -> str:
         if catalog_hint == "anime":
             return g.CONTENT_ANIME
-        if catalog_hint == "movie" and show_count == 0 and movie_count > 0:
+        if catalog_hint == "movie" and show_count == 0 and anime_count == 0 and movie_count > 0:
             return g.CONTENT_MOVIE
-        if catalog_hint == "tv":
+        if catalog_hint == "tv" and movie_count == 0 and anime_count == 0 and show_count > 0:
             return g.CONTENT_SHOW
-        if show_count >= movie_count:
-            return g.CONTENT_SHOW
-        if movie_count > 0 and show_count == 0:
+        if movie_count == 0 and show_count == 0 and anime_count > 0:
+            return g.CONTENT_ANIME
+        catalogs_present = sum(
+            1 for count in (movie_count, show_count, anime_count) if count > 0
+        )
+        if catalogs_present > 1:
+            return g.CONTENT_MIXED
+        if movie_count > 0:
             return g.CONTENT_MOVIE
-        return g.CONTENT_SHOW
+        if anime_count > 0:
+            return g.CONTENT_ANIME
+        if show_count > 0:
+            return g.CONTENT_SHOW
+        return g.CONTENT_MIXED
 
     def _load_milled_menu_rows(
         self,
@@ -533,7 +539,22 @@ class ListBuilder:
                 if isinstance(row, dict) and row.get("simkl_id") is not None and isinstance(row.get("info"), dict):
                     movie_rows[int(row["simkl_id"])] = row
         if show_refs:
-            for row in sync_db.get_show_list(show_refs, **filter_params) or []:
+            tv_refs: list[dict] = []
+            anime_refs: list[dict] = []
+            for item in media_list:
+                if not isinstance(item, dict) or item.get("simkl_id") is None:
+                    continue
+                if item.get("catalog") not in ("tv", "anime"):
+                    continue
+                ref = {"simkl_id": item["simkl_id"]}
+                if item.get("catalog") == "anime":
+                    anime_refs.append(ref)
+                else:
+                    tv_refs.append(ref)
+            for row in sync_db.get_show_list(tv_refs, **filter_params) or []:
+                if isinstance(row, dict) and row.get("simkl_id") is not None and isinstance(row.get("info"), dict):
+                    show_rows[int(row["simkl_id"])] = row
+            for row in sync_db.get_anime_list(anime_refs, **filter_params) or []:
                 if isinstance(row, dict) and row.get("simkl_id") is not None and isinstance(row.get("info"), dict):
                     show_rows[int(row["simkl_id"])] = row
         enrichment_batches = sync_db.consume_list_enrichment_batches()
@@ -599,7 +620,8 @@ class ListBuilder:
             if not preloaded_paint_complete:
                 preloaded_paint_complete = rows_page_paint_ready(preloaded_paint_rows, profile=paint_profile)
             movie_rows = {}
-            show_rows = {}
+            tv_rows = {}
+            anime_rows = {}
             for row in preloaded_paint_rows:
                 if not isinstance(row, dict) or row.get("simkl_id") is None:
                     continue
@@ -607,12 +629,14 @@ class ListBuilder:
                 cat = row.get("catalog") or catalog_hint
                 if cat == "movie":
                     movie_rows[sid] = row
+                elif cat == "anime":
+                    anime_rows[sid] = row
                 else:
-                    show_rows[sid] = row
+                    tv_rows[sid] = row
+            show_rows = {**tv_rows, **anime_rows}
             enrichment_batches = []
             if not preloaded_paint_complete:
                 from resources.lib.discover.sync_bridge import simkl_refs
-                from resources.lib.meta.paint_cache import _merge_cached_cast
                 from resources.lib.meta.paint_complete import partition_paint_rows
 
                 sync_db = self._sync_db()
@@ -633,50 +657,52 @@ class ListBuilder:
                         )
                         if incomplete_movies:
                             enrichment_batches.append((simkl_refs(incomplete_movies), "movie"))
-                    if show_rows:
+                    if tv_rows:
                         _complete, incomplete_shows = partition_paint_rows(
-                            list(show_rows.values()),
+                            list(tv_rows.values()),
                             "tvshow",
                             profile=paint_profile,
                             handler=handler,
                         )
                         if incomplete_shows:
                             enrichment_batches.append((simkl_refs(incomplete_shows), "tvshow"))
+                    if anime_rows:
+                        _complete, incomplete_anime = partition_paint_rows(
+                            list(anime_rows.values()),
+                            "anime",
+                            profile=paint_profile,
+                            handler=handler,
+                        )
+                        if incomplete_anime:
+                            enrichment_batches.append((simkl_refs(incomplete_anime), "anime"))
                 else:
                     if movie_rows:
-                        movie_list = list(movie_rows.values())
                         _complete, incomplete_movies = partition_paint_rows(
-                            movie_list, "movie", profile=paint_profile
+                            list(movie_rows.values()),
+                            "movie",
+                            profile=paint_profile,
+                            handler=handler,
                         )
                         if incomplete_movies:
-                            merged_movies = _merge_cached_cast(incomplete_movies, "movie", sync_db)
-                            prepared, _refs, _stats = handler.prepare_list_rows_for_paint(
-                                merged_movies,
-                                "movie",
-                                db=sync_db,
-                                profile=paint_profile,
-                                overlay_sync=False,
-                            )
-                            for row in prepared:
-                                if row.get("simkl_id") is not None:
-                                    movie_rows[int(row["simkl_id"])] = row
-                    if show_rows:
-                        show_list = list(show_rows.values())
+                            enrichment_batches.append((simkl_refs(incomplete_movies), "movie"))
+                    if tv_rows:
                         _complete, incomplete_shows = partition_paint_rows(
-                            show_list, "tvshow", profile=paint_profile
+                            list(tv_rows.values()),
+                            "tvshow",
+                            profile=paint_profile,
+                            handler=handler,
                         )
                         if incomplete_shows:
-                            merged_shows = _merge_cached_cast(incomplete_shows, "tvshow", sync_db)
-                            prepared, _refs, _stats = handler.prepare_list_rows_for_paint(
-                                merged_shows,
-                                "tvshow",
-                                db=sync_db,
-                                profile=paint_profile,
-                                overlay_sync=False,
-                            )
-                            for row in prepared:
-                                if row.get("simkl_id") is not None:
-                                    show_rows[int(row["simkl_id"])] = row
+                            enrichment_batches.append((simkl_refs(incomplete_shows), "tvshow"))
+                    if anime_rows:
+                        _complete, incomplete_anime = partition_paint_rows(
+                            list(anime_rows.values()),
+                            "anime",
+                            profile=paint_profile,
+                            handler=handler,
+                        )
+                        if incomplete_anime:
+                            enrichment_batches.append((simkl_refs(incomplete_anime), "anime"))
             else:
                 enrichment_batches = self._sync_db().consume_list_enrichment_batches()
         else:
@@ -692,6 +718,7 @@ class ListBuilder:
         list_items = []
         movie_count = 0
         show_count = 0
+        anime_count = 0
         seen_simkl: set[int] = set()
 
         try:
@@ -718,6 +745,9 @@ class ListBuilder:
                     movie_count += 1
                     action = "getSources"
                     row_params = {"is_folder": False, "is_playable": True}
+                elif catalog == "anime":
+                    anime_count += 1
+                    action, row_params = self._show_list_click_params()
                 else:
                     show_count += 1
                     action, row_params = self._show_list_click_params()
@@ -776,12 +806,21 @@ class ListBuilder:
                         menu_item=g.create_icon_dict("next", base_path=g.ICONS_PATH),
                         **page_params,
                     )
-                content_type = self._mixed_media_content_type(catalog_hint, movie_count, show_count)
+                content_type = self._mixed_media_content_type(
+                    catalog_hint,
+                    movie_count,
+                    show_count,
+                    anime_count,
+                )
                 use_cache = menu_cache if menu_cache is not None else g.kodi_menu_caching_enabled()
                 g.close_directory(content_type, sort=sort, cache=use_cache)
                 if page_params:
-                    from resources.lib.modules.page_prefetch import schedule_page_prefetch_chain
+                    from resources.lib.modules.page_prefetch import (
+                        schedule_current_page_paint,
+                        schedule_page_prefetch_chain,
+                    )
 
+                    schedule_current_page_paint(page_params)
                     schedule_page_prefetch_chain(page_params)
                 for refs, media_type in enrichment_batches:
                     self._schedule_background_enrichment(
@@ -866,8 +905,7 @@ class ListBuilder:
         sync_params = dict(params)
         sync_params["sync_path"] = True
         sync_params.setdefault("skip_mill", True)
-        if "skip_update" not in sync_params:
-            sync_params.setdefault("skip_update", False)
+        sync_params.setdefault("skip_update", True)
         sync_params.pop("preloaded_paint_rows", None)
         sync_params.pop("preloaded_paint_complete", None)
         sync_params.pop("paint_only", None)
@@ -882,14 +920,17 @@ class ListBuilder:
             if movie_rows:
                 overlaid = self._overlay_page_cdn_rows(list(movie_rows.values()), media_list)
                 movie_rows = {int(row["simkl_id"]): row for row in overlaid if row.get("simkl_id") is not None}
-        combined = list(tv) + list(anime)
-        if combined:
-            for row in db.get_show_list(combined, **sync_params):
+        if tv:
+            for row in db.get_show_list(tv, **sync_params):
                 if isinstance(row, dict) and row.get("simkl_id") is not None:
                     show_rows[int(row["simkl_id"])] = row
-            if show_rows:
-                overlaid = self._overlay_page_cdn_rows(list(show_rows.values()), media_list)
-                show_rows = {int(row["simkl_id"]): row for row in overlaid if row.get("simkl_id") is not None}
+        if anime:
+            for row in db.get_anime_list(anime, **sync_params):
+                if isinstance(row, dict) and row.get("simkl_id") is not None:
+                    show_rows[int(row["simkl_id"])] = row
+        if show_rows:
+            overlaid = self._overlay_page_cdn_rows(list(show_rows.values()), media_list)
+            show_rows = {int(row["simkl_id"]): row for row in overlaid if row.get("simkl_id") is not None}
         return movie_rows, show_rows
 
     def _discover_builder_paint_rows(self, media_list, *, fetch_rows, params):
@@ -903,7 +944,7 @@ class ListBuilder:
         sync_params = dict(params)
         sync_params["sync_path"] = True
         sync_params.setdefault("skip_mill", True)
-        sync_params.setdefault("skip_update", False)
+        sync_params.setdefault("skip_update", True)
         return self._overlay_page_cdn_rows(fetch_rows(media_list, **sync_params), media_list)
 
     @staticmethod
@@ -917,11 +958,14 @@ class ListBuilder:
     def _show_discover_builder(self, media_list, *, default_catalog: str, **params):
         """Discover TV/anime browse — Seren-style simkl_sync path."""
         catalog_hint = self._discover_catalog_hint(default_catalog, params)
+        self._active_catalog_hint = catalog_hint
         action, row_params = self._show_list_click_params()
         params.update(row_params)
+        sync_db = self._sync_db()
+        fetch_rows = sync_db.get_anime_list if catalog_hint == "anime" else sync_db.get_show_list
         rows = self._discover_builder_paint_rows(
             media_list,
-            fetch_rows=self._sync_db().get_show_list,
+            fetch_rows=fetch_rows,
             params=params,
         )
         self._common_menu_builder(
@@ -977,11 +1021,21 @@ class ListBuilder:
     @staticmethod
     def _menu_action_args(item):
         """Return routing dict from MenuRow args — encode only when building the URL."""
-        from resources.lib.simkl.ids import parse_stored_action_args
+        from resources.lib.simkl.ids import build_action_args, parse_stored_action_args
 
+        if not isinstance(item, dict):
+            return None
         raw = item.get("args")
         parsed = parse_stored_action_args(raw)
-        return parsed if parsed is not None else raw
+        if parsed is not None:
+            return parsed
+        if isinstance(raw, dict):
+            return raw
+        if item.get("simkl_id") is not None:
+            built = build_action_args(item)
+            if built.get("simkl_id") is not None and built.get("mediatype"):
+                return built
+        return None
 
     @staticmethod
     def _use_parallel_list_build(count: int, content_type: str | None = None) -> bool:
@@ -996,6 +1050,10 @@ class ListBuilder:
 
     def _action_args_for_item(self, processed, library_status=None):
         args = self._menu_action_args(processed)
+        hint = getattr(self, "_active_catalog_hint", None)
+        if isinstance(args, dict) and hint in ("movie", "tv", "anime") and args.get("catalog") != hint:
+            args = dict(args)
+            args["catalog"] = hint
         if not library_status or not isinstance(args, dict):
             return args
         stamped = dict(args)
@@ -1036,7 +1094,9 @@ class ListBuilder:
                 entry
                 for item in processed
                 if item is not None
-                for entry in [self._build_directory_item_entry(item, action, params, library_status)]
+                for entry in [
+                    self._build_directory_item_entry(item, action, dict(params), library_status)
+                ]
                 if entry is not None
             ]
 
@@ -1051,7 +1111,7 @@ class ListBuilder:
         def build_at(_position, pair):
             idx, item = pair
             entry = self._build_directory_item_entry(
-                item, action, build_params, library_status
+                item, action, dict(build_params), library_status
             )
             if entry is not None:
                 slots[idx] = entry
@@ -1150,8 +1210,12 @@ class ListBuilder:
                 use_cache = menu_cache if menu_cache is not None else g.kodi_menu_caching_enabled()
                 g.close_directory(content_type, sort=sort, cache=use_cache)
                 if page_params:
-                    from resources.lib.modules.page_prefetch import schedule_page_prefetch_chain
+                    from resources.lib.modules.page_prefetch import (
+                        schedule_current_page_paint,
+                        schedule_page_prefetch_chain,
+                    )
 
+                    schedule_current_page_paint(page_params)
                     schedule_page_prefetch_chain(page_params)
                 if enrichment_refs and enrichment_media_type:
                     enrichment_batches = [(enrichment_refs, enrichment_media_type)]
@@ -1249,10 +1313,33 @@ class ListBuilder:
             return item
 
         completed = library_status == "completed" if library_status else info.get("simkl_status") == "completed"
+        is_show_row = ListBuilder._is_serial_show_menu_row(item, info)
+        if completed and (mediatype == "season" or is_show_row):
+            from resources.lib.simkl.watch_counters import is_caught_up, not_aired_count, total_for_watch_math
+
+            episode_count = item.get("episode_count") or info.get("episode_count") or info.get("total_episodes_count")
+            watched_episodes = item.get("watched_episodes") or info.get("watched_episodes_count")
+            try:
+                episode_count = int(episode_count) if episode_count is not None else 0
+            except (TypeError, ValueError):
+                episode_count = 0
+            try:
+                watched_episodes = int(watched_episodes) if watched_episodes is not None else 0
+            except (TypeError, ValueError):
+                watched_episodes = 0
+            unwatched_eps = item.get("unwatched_episodes", info.get("unwatched_episodes"))
+            if episode_count > 0 and not is_caught_up(
+                watched_episodes,
+                total_for_watch_math(item, info) or episode_count,
+                not_aired=not_aired_count(info),
+                unwatched=unwatched_eps,
+                aired_episode_count=episode_count,
+            ):
+                completed = False
         if not completed:
             return item
 
-        if mediatype == "tvshow":
+        if is_show_row:
             episode_count = item.get("episode_count") or info.get("episode_count") or info.get("total_episodes_count")
             watched_episodes = item.get("watched_episodes") or info.get("watched_episodes_count")
             try:
@@ -1271,6 +1358,7 @@ class ListBuilder:
                 item["watched_episodes"] = max(watched_episodes, 1)
                 item["episode_count"] = item["watched_episodes"]
             info["playcount"] = 1
+            item["play_count"] = 1
         elif mediatype == "season":
             episode_count = item.get("episode_count") or info.get("episode_count")
             watched_episodes = item.get("watched_episodes") or info.get("watched_episodes_count")
@@ -1328,6 +1416,10 @@ class ListBuilder:
         catalog = item.get("catalog") or info.get("catalog")
         if catalog and not info.get("catalog"):
             info["catalog"] = catalog
+        if item.get("season") is not None and (info.get("mediatype") or "").lower() != "episode":
+            info["mediatype"] = "season"
+            if info.get("season") is None:
+                info["season"] = int(item["season"])
         mediatype = info.get("mediatype")
         ids = info.get("ids") if isinstance(info.get("ids"), dict) else {}
         is_anime_row = catalog == "anime" or info.get("mal_id") or ids.get("mal")
@@ -1354,15 +1446,9 @@ class ListBuilder:
             name = info.get("title") or item.get("name")
 
         if is_anime_row and mediatype not in ("season", "episode"):
-            from resources.lib.simkl.field_map import format_anime_display_name
-            from resources.lib.simkl.ids import sync_flat_ids_from_ids, sync_ids_from_flat
+            from resources.lib.anime.paint import menu_display_name
 
-            if item.get("mal_id") and not info.get("mal_id"):
-                info["mal_id"] = item["mal_id"]
-            sync_ids_from_flat(info)
-            sync_flat_ids_from_ids(info)
-
-            localized = format_anime_display_name(info, fallback=name, apply_dub=True)
+            localized = menu_display_name(info, fallback=name, item=item, mediatype=mediatype)
             if localized:
                 name = localized
 
@@ -1383,7 +1469,7 @@ class ListBuilder:
         if library_status and info.get("mediatype") in ("tvshow", "movie"):
             info["library_list_status"] = library_status
 
-        if info.get("mediatype") == "tvshow":
+        if ListBuilder._is_serial_show_menu_row(item, info):
             from resources.lib.simkl.watch_counters import apply_show_watch_fields
 
             aired_hint = info.get("aired_episodes")
@@ -1429,6 +1515,12 @@ class ListBuilder:
                 name = self._handle_episode_title_appending(
                     name, item, int(self.title_appends_general or 0)
                 )
+            elif getattr(self, "_specials_menu", False):
+                from resources.lib.simkl.ids import episode_num_from_info
+
+                special_num = episode_num_from_info(info)
+                if special_num is not None:
+                    name = f"0x{int(special_num):02d}. {name}"
 
         if info.get("mediatype") == "list" and self.list_title_appends == 1:
             name += f" - {g.color_string(info['username'])}"

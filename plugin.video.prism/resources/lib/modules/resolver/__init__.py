@@ -9,6 +9,7 @@ import requests
 import xbmcgui
 import xbmcvfs
 
+from resources.lib.common import source_utils
 from resources.lib.common.thread_pool import ThreadPool
 from resources.lib.debrid.all_debrid import AllDebrid
 from resources.lib.debrid.premiumize import Premiumize
@@ -116,6 +117,7 @@ class Resolver:
                     and not pack_select
                     and not silent
                     and allow_manual_prompt
+                    and self._torrent_has_playable_file(source)
                     and xbmcgui.Dialog().yesno(g.ADDON_NAME, g.get_language_string(30490))
                 ):
                     stream_link = self._resolve_debrid_source(
@@ -130,13 +132,30 @@ class Resolver:
 
             if stream_link:
                 return stream_link, source['release_title']
-            g.log(f"Failed to resolve source: {source}", "error")
+            if source.get("type") == "torrent" and not self._torrent_has_playable_file(source):
+                g.log(
+                    f"Skipping source with no playable video: {source.get('release_title')}",
+                    "info",
+                )
+            else:
+                g.log(f"Failed to resolve source: {source}", "error")
             return None, None
         except (UserCancelledSelection, NoFileSelectionAvailable):
             raise
         except ResolverFailure as e:
             g.log(f'Failed to resolve source: {e}')
             return None, None
+
+    @staticmethod
+    def _torrent_has_playable_file(source) -> bool:
+        """True when the resolved file list contains a Kodi video, or the list was never fetched."""
+        files = source.get("_prism_cached_files")
+        if not isinstance(files, list):
+            return True
+        return any(
+            isinstance(item, dict) and source_utils.is_file_ext_valid(str(item.get("path") or ""))
+            for item in files
+        )
 
     @staticmethod
     def _handle_provider_imports_resolving(source):

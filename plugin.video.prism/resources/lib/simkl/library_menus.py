@@ -108,6 +108,9 @@ def my_movies_hub() -> None:
     for status, label_id, icon, desc_id in _MOVIE_STATUSES:
         _add_status_item("movie", status, label_id, icon, desc_id)
     _add_library_item(30090, "libraryRecentlyWatched", "shows_recent", 30760, catalog="movie")
+    from resources.lib.simkl.library_list_sync import schedule_library_hub_background_warm
+
+    schedule_library_hub_background_warm("movie")
     g.close_directory(g.CONTENT_MENU)
 
 
@@ -117,6 +120,9 @@ def my_shows_hub() -> None:
     for status, label_id, icon, desc_id in _show_status_items("tv"):
         _add_status_item("tv", status, label_id, icon, desc_id)
     _add_show_library_rows("tv")
+    from resources.lib.simkl.library_list_sync import schedule_library_hub_background_warm
+
+    schedule_library_hub_background_warm("tv")
     g.close_directory(g.CONTENT_MENU)
 
 
@@ -126,6 +132,9 @@ def my_anime_hub() -> None:
     for status, label_id, icon, desc_id in _show_status_items("anime"):
         _add_status_item("anime", status, label_id, icon, desc_id)
     _add_show_library_rows("anime")
+    from resources.lib.simkl.library_list_sync import schedule_library_hub_background_warm
+
+    schedule_library_hub_background_warm("anime")
     g.close_directory(g.CONTENT_MENU)
 
 
@@ -155,17 +164,17 @@ def _render_library_browse_page(
     list_kwargs: dict,
     status: str | None = None,
     paginate_items: bool = True,
+    remember_full_list: bool = True,
 ) -> None:
     """Paint a title library list via the same path as genre browse menus."""
     from resources.lib.discover.sync_bridge import simkl_refs
-    from resources.lib.meta.list_pipeline import get_list_store, render_list_page
+    from resources.lib.meta.list_pipeline import _page_list_id, get_list_store
 
     if not items:
         g.cancel_directory()
         return
 
     store = get_list_store("library")
-    store.remember_items(catalog, list_id, items)
     if paginate_items:
         page_items, no_paging = _library_page_items(items)
     else:
@@ -175,47 +184,90 @@ def _render_library_browse_page(
         g.cancel_directory()
         return
 
-    from resources.lib.simkl.library_list_sync import prepare_library_browse_page
-
-    page_items = prepare_library_browse_page(catalog, page_items)
+    if remember_full_list and paginate_items:
+        store.remember_items(catalog, list_id, items)
+    elif not paginate_items:
+        store.remember_items(catalog, _page_list_id(list_id, g.PAGE), page_items)
 
     merged = dict(list_kwargs)
     merged["no_paging"] = no_paging
+    merged["seeded"] = True
+    merged.setdefault("library_fast_open", True)
+    merged.setdefault("paint_profile", "library")
+    merged.setdefault("browse_source", f"library:{catalog}:{status or list_id}")
     if status:
         merged.setdefault("library_status", status)
+        merged.setdefault("menu_action", f"library_{catalog}_{status}")
+        try:
+            import xbmcplugin
 
-    render_list_page(
-        "paint_first",
+            from resources.lib.simkl.statuses import status_label
+
+            xbmcplugin.setPluginCategory(g.PLUGIN_HANDLE, status_label(status))
+        except Exception:
+            pass
+
+    from resources.lib.pipeline.catalog_page import CatalogPagePipeline
+
+    refs = simkl_refs(page_items)
+    CatalogPagePipeline.open_library_browse(
         catalog,
-        page_items,
+        refs,
         list_builder,
         list_kwargs=merged,
-        refs=simkl_refs(page_items),
+        library_paint=True,
         payload_rows=page_items,
-        seeded=True,
     )
 
 
 def render_status_list(catalog: str, status: str) -> None:
+    import time
+
     from resources.lib.meta.list_pipeline import make_list_id
     from resources.lib.modules.list_builder import ListBuilder
-    from resources.lib.simkl.library_cache import load_library_list_items
+    from resources.lib.simkl.library_list_cache import (
+        library_status_page_sync_items,
+        load_library_status_refs,
+    )
     from resources.lib.simkl.library_list_sync import schedule_library_status_verify
-    from resources.lib.simkl.menu_helpers import library_status_list_kwargs
+    from resources.lib.simkl.menu_helpers import library_list_page, library_status_list_kwargs
 
-    items = load_library_list_items(catalog, status)
-    if not items:
+    started = time.time()
+    refs = load_library_status_refs(catalog, status)
+    refs_ms = int((time.time() - started) * 1000)
+    if not refs:
         g.cancel_directory()
         return
 
-    list_kwargs = library_status_list_kwargs(catalog, status, items)
+    page_refs, no_paging = library_list_page(refs)
+    page_started = time.time()
+    page_items = library_status_page_sync_items(catalog, status, page_refs)
+    page_ms = int((time.time() - page_started) * 1000)
+    g.log(
+        f"Library status page-first: {catalog}/{status} refs={len(refs)} "
+        f"page_rows={len(page_items)} refs_ms={refs_ms} page_ms={page_ms}",
+        "debug",
+    )
+    if not page_items:
+        g.cancel_directory()
+        return
+
+    list_kwargs = library_status_list_kwargs(
+        catalog,
+        status,
+        page_items,
+        membership_refs=refs,
+    )
+    list_kwargs["no_paging"] = no_paging
     _render_library_browse_page(
         catalog,
-        items,
+        page_items,
         ListBuilder(),
         list_id=make_list_id(status),
         list_kwargs=list_kwargs,
         status=status,
+        paginate_items=False,
+        remember_full_list=False,
     )
     schedule_library_status_verify(catalog, status)
 
@@ -262,6 +314,8 @@ def _recently_watched_list_kwargs(catalog: str, items: list[dict], *, no_paging:
 
 
 def render_recently_watched_shows(catalog: str) -> None:
+    import time
+
     from resources.lib.database.session import get_sync_database
     from resources.lib.meta.list_paint import rows_to_sync_items
     from resources.lib.meta.list_pipeline import make_list_id
@@ -270,17 +324,23 @@ def render_recently_watched_shows(catalog: str) -> None:
     no_paging = not paginate_simkl_lists()
     page = g.PAGE
     db = get_sync_database()
+    started = time.time()
     rows = db.get_recently_watched_shows(
         page,
         force_all=no_paging,
         catalog=catalog,
     )
+    page_ms = int((time.time() - started) * 1000)
 
     if not rows:
         g.cancel_directory()
         return
 
     items = rows_to_sync_items(rows, catalog) or rows
+    g.log(
+        f"Library recent page-first: catalog={catalog} page={page} rows={len(items)} page_ms={page_ms}",
+        "debug",
+    )
     list_kwargs = _recently_watched_list_kwargs(catalog, items, no_paging=no_paging)
     _render_library_browse_page(
         catalog,
@@ -289,6 +349,7 @@ def render_recently_watched_shows(catalog: str) -> None:
         list_id=make_list_id("recent", catalog),
         list_kwargs=list_kwargs,
         paginate_items=False,
+        remember_full_list=False,
     )
 
 
@@ -322,8 +383,12 @@ def render_watched_episodes(catalog: str) -> None:
 
     if not items:
         db = get_sync_database()
+        page_cache = getattr(db, "_watched_episodes_page_cache", None)
+        if isinstance(page_cache, dict):
+            page_cache.clear()
         refreshed = db.refresh_watched_episodes_if_empty(catalog)
         if refreshed:
+            store.forget_items(catalog, list_id)
             items = db.get_watched_episodes(page if not no_paging else 1, catalog=catalog) or []
 
     render_catalog_episodes(
@@ -411,6 +476,7 @@ def render_recently_watched_movies() -> None:
         list_id=make_list_id("recent_movies"),
         list_kwargs=list_kwargs,
         paginate_items=False,
+        remember_full_list=False,
     )
 
 

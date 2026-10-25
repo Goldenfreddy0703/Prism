@@ -1,3 +1,27 @@
+Changelog 5.0.57
+[BREAKING] Major release — wipe addon data and restart Kodi after upgrading from any build below 5.0.57 (incompatible local Simkl sync DB and settings)
+[FEATURE] All-in-one movies, TV, and anime hub with Simkl discover, library, Next Up, watchlist, progress, and enriched calendars
+[FEATURE] Search All and mixed list view for unified movie/show/anime search results
+[FEATURE] Anime catalog refactor — dedicated storage paths, title language, sub/dub presets, and improved season/episode navigation
+[FEATURE] Kodi watched bridge — native Mark as Watched on Prism URLs can sync to Simkl when enabled
+[FEATURE] My Watch History and local playback tracking
+[FEATURE] Simkl Auth V2 device flow with token refresh; improved auth and watch counter accuracy
+[FEATURE] Tag-based source sort profiles and unified codec sort/filter categories (video, HDR, audio, misc)
+[FEATURE] Preemptive termination policies per source family (torrents, hosters, cloud, adaptive, direct)
+[FEATURE] Seren-style fast menu sync path, background prefetch, serialized plugin invocations, and foreground startup gate
+[FEATURE] Smart scroll for episode and season lists; library sort UI and per-catalog provider status
+[FEATURE] TMDb Helper bridge for external playback; TMDB IDs on source metadata
+[FEATURE] Adaptive scraper support; external debrid cache and database support
+[FEATURE] Local My Files context actions and VFS moves
+[FEATURE] Configurable Simkl search (exact match, sort, limit); per-catalog browse improvements
+[FEATURE] Release notes window with changelog and news after updates
+[FEATURE] Offcloud and TorBox debrid integration (from 4.x line, included in this major release baseline)
+[IMPROVEMENT] AllDebrid flow and torrent file selection; cloud and anime episode matching
+[IMPROVEMENT] Watch toggle shared between Simkl Manager and Kodi context menus; library paint and sync gating
+[IMPROVEMENT] Background coordinator for idle maintenance, calendar prefetch, and meta enrichment
+[BUG] Router idle maintenance prefetch scoping; resolver and TorBox manual retry fixes; assorted sync and title normalization fixes
+[BUG] Kodi 21/22 compatibility (InfoTagVideo, MyVideos DB version, Python 3.8+ typing)
+
 Changelog 5.0.21
 [BUG] Kodi 21: fix startup TypeError from union type hint in globals.py (Python 3.9 compatibility)
 

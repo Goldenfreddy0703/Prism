@@ -537,6 +537,7 @@ class GlobalVariables:
     CONTENT_MOVIE = "movies"
     CONTENT_SHOW = "tvshows"
     CONTENT_ANIME = "anime"
+    CONTENT_MIXED = "videos"
     CONTENT_SEASON = "seasons"
     CONTENT_EPISODE = "episodes"
     CONTENT_GENRES = "genres"
@@ -803,7 +804,16 @@ class GlobalVariables:
             self.PARAM_STRING = ""
         self.REQUEST_PARAMS = self.legacy_params_converter(dict(parse.parse_qsl(self.PARAM_STRING)))
         if "action_args" in self.REQUEST_PARAMS:
-            self.REQUEST_PARAMS["action_args"] = tools.deconstruct_action_args(self.REQUEST_PARAMS["action_args"])
+            raw_args = tools.deconstruct_action_args(self.REQUEST_PARAMS["action_args"])
+            if isinstance(raw_args, str) and raw_args.strip().lower() in ("", "none", "null"):
+                raw_args = None
+            elif isinstance(raw_args, str):
+                from resources.lib.simkl.ids import parse_stored_action_args
+
+                parsed = parse_stored_action_args(raw_args)
+                if isinstance(parsed, dict):
+                    raw_args = parsed
+            self.REQUEST_PARAMS["action_args"] = raw_args
             if isinstance(self.REQUEST_PARAMS["action_args"], dict):
                 self.REQUEST_PARAMS["action_args"] = self.legacy_action_args_converter(
                     self.REQUEST_PARAMS["action_args"]
@@ -924,7 +934,13 @@ class GlobalVariables:
         self.SEARCH_HISTORY_DB_PATH = tools.translate_path(os.path.join(self.ADDON_USERDATA_PATH, "search.db"))
         self.SKINS_DB_PATH = tools.translate_path(os.path.join(self.ADDON_USERDATA_PATH, "skins.db"))
 
-    def get_kodi_video_db_connection(self, max_lock_retries=50, read_only=False):
+    def get_kodi_video_db_connection(
+        self,
+        max_lock_retries=50,
+        read_only=False,
+        *,
+        log_lock_failures=True,
+    ):
         config = self.get_kodi_video_db_config()
         if config["type"] == "sqlite3":
             from resources.lib.database import KodiMyVideosReadConnection, SQLiteConnection
@@ -932,7 +948,11 @@ class GlobalVariables:
             path = os.path.join(self.KODI_DATABASE_PATH, f"{config['database']}.db")
             if read_only:
                 return KodiMyVideosReadConnection(path, max_lock_retries=max_lock_retries)
-            return SQLiteConnection(path, max_lock_retries=max_lock_retries)
+            return SQLiteConnection(
+                path,
+                max_lock_retries=max_lock_retries,
+                log_lock_failures=log_lock_failures,
+            )
         elif config["type"] == "mysql":
             from resources.lib.database import MySqlConnection
 
@@ -1006,12 +1026,15 @@ class GlobalVariables:
                     g.log(f"Failed to parse advanced settings.xml: {pe}", "warning")
         return result
 
-    def clear_kodi_bookmarks(self, max_lock_retries=5):
+    def clear_kodi_bookmarks(self, max_lock_retries=5, *, quiet_on_lock=True):
         """Remove stale Kodi-native resume bookmarks for Prism plugin URLs (not watched-only rows)."""
         import sqlite3
 
         try:
-            with self.get_kodi_video_db_connection(max_lock_retries=max_lock_retries) as video_database:
+            with self.get_kodi_video_db_connection(
+                max_lock_retries=max_lock_retries,
+                log_lock_failures=not quiet_on_lock,
+            ) as video_database:
                 config = self.get_kodi_video_db_config()
                 if config.get("type") == "mysql":
                     rows = video_database.fetchall(
@@ -1040,7 +1063,8 @@ class GlobalVariables:
                         ]
                     )
         except sqlite3.OperationalError:
-            self.log("Skipping Kodi bookmark cleanup; video database is locked", "debug")
+            level = "debug" if quiet_on_lock else "warning"
+            self.log("Skipping Kodi bookmark cleanup; video database is locked", level)
 
     # region runtime settings
     def set_runtime_setting(self, setting_id, value):
@@ -1267,6 +1291,7 @@ class GlobalVariables:
             GlobalVariables.CONTENT_MOVIE: ("movie.view", "movie.view.id"),
             GlobalVariables.CONTENT_SHOW: ("show.view", "show.view.id"),
             GlobalVariables.CONTENT_ANIME: ("anime.view", "anime.view.id"),
+            GlobalVariables.CONTENT_MIXED: ("mixed.view", "mixed.view.id"),
             GlobalVariables.CONTENT_EPISODE: ("episode.view", "episode.view.id"),
             GlobalVariables.CONTENT_SEASON: ("season.view", "season.view.id"),
         }
@@ -1760,6 +1785,15 @@ class GlobalVariables:
             # Kodi half-watched overlay requires playcount 0 (not fully watched).
             info["playcount"] = 0
         elif resolved_play_count is not None:
+            if mediatype == "season" and menu_item.get("episode_count"):
+                try:
+                    ep_c = int(menu_item["episode_count"])
+                    w_eps = int(menu_item.get("watched_episodes") or 0)
+                except (TypeError, ValueError):
+                    ep_c = 0
+                    w_eps = 0
+                if ep_c > 0 and w_eps < ep_c:
+                    resolved_play_count = 0
             info["playcount"] = resolved_play_count if resolved_play_count > 0 else 0
 
         if duration and not info.get("duration"):
@@ -1923,6 +1957,14 @@ class GlobalVariables:
             xbmcplugin.addSortMethod(self.PLUGIN_HANDLE, xbmcplugin.SORT_METHOD_LABEL_IGNORE_THE)
         if sort == "episode":
             xbmcplugin.addSortMethod(self.PLUGIN_HANDLE, xbmcplugin.SORT_METHOD_EPISODE)
+        if sort == "specials":
+            # Kodi's episode mask renders season 0 as "S01"; labels already carry "0x01. ".
+            for method in (
+                xbmcplugin.SORT_METHOD_UNSORTED,
+                xbmcplugin.SORT_METHOD_DATE,
+                xbmcplugin.SORT_METHOD_EPISODE,
+            ):
+                xbmcplugin.addSortMethod(self.PLUGIN_HANDLE, method, labelMask="%L")
         if not sort:
             xbmcplugin.addSortMethod(self.PLUGIN_HANDLE, xbmcplugin.SORT_METHOD_NONE)
         xbmcplugin.setContent(self.PLUGIN_HANDLE, self.kodi_content_type(content_type))
@@ -1994,17 +2036,15 @@ class GlobalVariables:
         """Map a 0-based row index to Kodi's container index.
 
         Kodi often prepends a parent (``..``) row, so ``NumAllItems`` exceeds
-        ``NumItems`` by one. Episode rows also need an extra offset vs seasons.
+        ``NumItems`` by one. That difference is the only offset.
         """
+        del content_type
         try:
             trailing_extra = max(0, int(trailing_extra or 0))
         except (TypeError, ValueError):
             trailing_extra = 0
         leading_extra = max(0, all_items - total_items - trailing_extra)
-        if not leading_extra:
-            return base_index
-        episode_bonus = 1 if content_type == GlobalVariables.CONTENT_EPISODE else 0
-        return base_index + leading_extra + episode_bonus
+        return base_index + leading_extra
 
     def _smart_scroll(self, content_type: str) -> None:
         """Scroll episode/season lists to the next unwatched item (Otaku-style)."""
@@ -2054,7 +2094,9 @@ class GlobalVariables:
                 return
             xbmc.executebuiltin("Action(firstpage)")
             xbmc.sleep(50)
-            xbmc.executebuiltin(f"Control.SetFocus({active_id}, {target_index})")
+            # Fixed lists treat the position as an offset from the current scroll.
+            # absolute selects the container row itself (parent row included).
+            xbmc.executebuiltin(f"Control.SetFocus({active_id}, {target_index}, absolute)")
             self.smart_scroll_index = None
             self.smart_scroll_trailing_extra = 0
             return

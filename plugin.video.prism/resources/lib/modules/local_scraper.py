@@ -274,6 +274,7 @@ class LocalFileScraper(CloudScraper):
             episode_regex=self.episode_regex,
             season_regex=self.season_regex,
             simple_info=self.simple_info,
+            file_title=source_utils.build_cloud_file_title(item),
         )
 
     def _matches_local_movie(self, item):

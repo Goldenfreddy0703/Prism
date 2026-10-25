@@ -254,6 +254,28 @@ def _episode_item_has_info(item: dict | list | None) -> bool:
     return isinstance(info, dict) and info.get("simkl_id") is not None
 
 
+def _catalog_from_action_args(action_args) -> str:
+    if isinstance(action_args, dict) and action_args.get("catalog") in ("anime", "tv", "movie"):
+        return str(action_args["catalog"])
+    return "tv"
+
+
+def _serial_profile_scope(db, catalog: str):
+    from resources.lib.database.simkl_sync.serial_sync import serial_profile_scope
+
+    profile = "anime" if catalog == "anime" else "tv"
+    return serial_profile_scope(db, profile)
+
+
+def _show_sync_row(db, show_id: int, catalog: str):
+    with _serial_profile_scope(db, catalog):
+        st = db._st()
+        return db.fetchone(
+            f"SELECT info, imdb_id, tmdb_id, tvdb_id FROM {st.show} WHERE simkl_id = ?",
+            (int(show_id),),
+        )
+
+
 def _resolve_episode_show_id(db, action_args, episode_id):
     from resources.lib.simkl.ids import show_id_for_episode_action
 
@@ -261,10 +283,13 @@ def _resolve_episode_show_id(db, action_args, episode_id):
     if show_id is not None or episode_id is None:
         return show_id
 
-    row = db.fetchone(
-        "SELECT simkl_show_id FROM episodes WHERE simkl_id = ?",
-        (int(episode_id),),
-    )
+    catalog = _catalog_from_action_args(action_args)
+    with _serial_profile_scope(db, catalog):
+        st = db._st()
+        row = db.fetchone(
+            f"SELECT simkl_show_id FROM {st.episode} WHERE simkl_id = ?",
+            (int(episode_id),),
+        )
     if row and row.get("simkl_show_id") is not None:
         return int(row["simkl_show_id"])
 
@@ -302,36 +327,41 @@ def _show_id_from_video_playlist():
     return None
 
 
-def _find_episode_row_by_coords(db, show_id, season_num, episode_num):
-    row = db.fetchone(
-        """
-        SELECT simkl_id
-        FROM episodes
-        WHERE simkl_show_id = ? AND season = ? AND number = ?
-        LIMIT 1
-        """,
-        (int(show_id), int(season_num), int(episode_num)),
-    )
-    if row and row.get("simkl_id") is not None:
-        episode_row = db.get_episode(int(row["simkl_id"]), int(show_id))
-        if _episode_item_has_info(episode_row):
-            return episode_row
+def _find_episode_row_by_coords(db, show_id, season_num, episode_num, catalog: str = "tv"):
+    with _serial_profile_scope(db, catalog):
+        st = db._st()
+        row = db.fetchone(
+            f"""
+            SELECT simkl_id
+            FROM {st.episode}
+            WHERE simkl_show_id = ? AND season = ? AND number = ?
+            LIMIT 1
+            """,
+            (int(show_id), int(season_num), int(episode_num)),
+        )
+        if row and row.get("simkl_id") is not None:
+            episode_row = db.get_episode(int(row["simkl_id"]), int(show_id))
+            if _episode_item_has_info(episode_row):
+                return episode_row
 
-    rows = db.get_episode_list(
-        int(show_id),
-        season=int(season_num),
-        hide_unaired=False,
-        hide_watched=False,
-        skip_update=True,
-        skip_watch_refresh=True,
-    )
-    for candidate in rows:
-        info = candidate.get("info") or {}
-        ep_num = info.get("episode")
-        if ep_num is None:
-            ep_num = info.get("number")
-        if int(info.get("season", -1)) == int(season_num) and int(ep_num or -1) == int(episode_num):
-            return candidate
+        list_kwargs = {
+            "season": int(season_num),
+            "hide_unaired": False,
+            "hide_watched": False,
+            "skip_update": True,
+            "skip_watch_refresh": True,
+        }
+        if catalog == "anime":
+            rows = db.get_anime_episode_list(int(show_id), **list_kwargs)
+        else:
+            rows = db.get_episode_list(int(show_id), **list_kwargs)
+        for candidate in rows:
+            info = candidate.get("info") or {}
+            ep_num = info.get("episode")
+            if ep_num is None:
+                ep_num = info.get("number")
+            if int(info.get("season", -1)) == int(season_num) and int(ep_num or -1) == int(episode_num):
+                return candidate
     return None
 
 
@@ -388,22 +418,26 @@ def _load_episode_item_information(db, action_args, episode_id, show_id):
     if not episode_id or not show_id:
         return {}
 
-    episode_row = db.get_episode(episode_id, show_id)
-    if isinstance(episode_row, list):
-        episode_row = {}
-    if _episode_item_has_info(episode_row):
-        return episode_row
-
-    rows = db.get_episode_list(
-        show_id,
-        simkl_id=episode_id,
-        hide_unaired=False,
-        hide_watched=False,
-        skip_update=False,
-        skip_watch_refresh=True,
-    )
+    catalog = _catalog_from_action_args(action_args)
+    list_kwargs = {
+        "simkl_id": episode_id,
+        "hide_unaired": False,
+        "hide_watched": False,
+        "skip_update": False,
+        "skip_watch_refresh": True,
+    }
+    if catalog == "anime":
+        rows = db.get_anime_episode_list(int(show_id), **list_kwargs)
+    else:
+        episode_row = db.get_episode(episode_id, show_id)
+        if isinstance(episode_row, list):
+            episode_row = {}
+        if _episode_item_has_info(episode_row):
+            return episode_row
+        rows = db.get_episode_list(int(show_id), **list_kwargs)
     if rows:
         return rows[0]
+
     return {}
 
 
@@ -458,7 +492,13 @@ def get_item_information(action_args):
         show_id = show_id_from_args(action_args)
         season_num = season_num_from_args(action_args)
         db = get_sync_database()
-        rows = db.get_season_list(show_id, season=season_num, hide_unaired=False, hide_watched=False)
+        catalog = _catalog_from_action_args(action_args)
+        if catalog == "anime":
+            rows = db.get_anime_season_list(
+                show_id, season=season_num, hide_unaired=False, hide_watched=False
+            )
+        else:
+            rows = db.get_season_list(show_id, season=season_num, hide_unaired=False, hide_watched=False)
         item_information.update(rows[0] if rows else {})
         return _finalize(item_information)
 
@@ -527,10 +567,8 @@ def get_item_information(action_args):
             item_information.update(episode_row)
         info = item_information.get("info")
         if isinstance(info, dict) and show_id:
-            show_row = db.fetchone(
-                "SELECT info, imdb_id, tmdb_id, tvdb_id FROM shows WHERE simkl_id = ?",
-                (show_id,),
-            )
+            catalog = _catalog_from_action_args(action_args)
+            show_row = _show_sync_row(db, int(show_id), catalog)
             show_info = (show_row or {}).get("info")
             if isinstance(show_info, dict):
                 for col in ("imdb_id", "tmdb_id", "tvdb_id"):

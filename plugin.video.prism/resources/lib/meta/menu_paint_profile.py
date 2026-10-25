@@ -49,6 +49,7 @@ _ACTION_PROFILES: dict[str, MenuPaintProfile] = {
     "moviesSearchResults": MenuPaintProfile.SEARCH,
     "showsSearchResults": MenuPaintProfile.SEARCH,
     "animeSearchResults": MenuPaintProfile.SEARCH,
+    "allSearchResults": MenuPaintProfile.SEARCH,
     # Library title lists (show full membership; no widget hide-watched)
     "simklLibraryList": MenuPaintProfile.LIBRARY,
     "libraryRecentlyWatched": MenuPaintProfile.LIBRARY,
@@ -149,10 +150,15 @@ def profile_list_kwargs(
     elif profile == MenuPaintProfile.SEARCH:
         base.update(_library_hide_filters())
         base["paint_profile"] = MenuPaintProfile.SEARCH.value
+        base["sync_path"] = True
+        base["paint_only"] = False
+        base["skip_update"] = True
         base.setdefault("enrichment_reason", "search")
     elif profile == MenuPaintProfile.LIBRARY:
         base.update(_library_hide_filters())
-        base["library_paint"] = True
+        base["sync_path"] = True
+        base["paint_only"] = False
+        base["skip_update"] = True
         base.setdefault("enrichment_reason", "library")
     elif profile == MenuPaintProfile.LIBRARY_EPISODES:
         base.update(_library_hide_filters())
@@ -167,11 +173,17 @@ def profile_list_kwargs(
         base["skip_watch_refresh"] = False
         base["force_watch_refresh"] = True
         base.setdefault("enrichment_reason", "drilldown")
+        if overrides.get("drilldown_fast_open"):
+            base["drilldown_fast_open"] = True
+            base["catalog_pipeline"] = True
+            base["skip_watch_refresh"] = True
+            base["force_watch_refresh"] = False
     elif profile == MenuPaintProfile.RELATED:
         base.update(_browse_hide_filters())
         base["sync_path"] = True
         base["paint_only"] = False
         base.setdefault("no_paging", True)
+        base.setdefault("related_fast_open", True)
         base.setdefault("enrichment_reason", "related")
         if overrides.get("seeded") or overrides.get("preloaded_paint_rows") or overrides.get("preloaded_paint_complete"):
             base["skip_update"] = True

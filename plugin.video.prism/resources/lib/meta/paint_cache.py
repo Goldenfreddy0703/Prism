@@ -12,16 +12,28 @@ _PAGE_PAINT_TTL_SEC = 1800.0
 _PAGE_PAINT_MAX_ENTRIES = 32
 
 
-def _media_type_key(media_type: str) -> str:
-    return "movie" if media_type == "movie" else "show"
+def _media_type_key(media_type: str, catalog: str | None = None) -> str:
+    from resources.lib.database.simkl_sync.serial_access import paint_cache_type_for_media_type
+
+    return paint_cache_type_for_media_type(media_type, catalog)
 
 
-def _provider_type_for(media_type: str) -> str:
-    return "movie" if media_type == "movie" else "tvshow"
+def _provider_type_for(media_type: str, catalog: str | None = None) -> str:
+    key = _media_type_key(media_type, catalog)
+    if key == "movie":
+        return "movie"
+    if key == "anime":
+        return "anime"
+    return "tvshow"
 
 
-def _sync_table_for(media_type: str) -> str:
-    return "movies" if media_type == "movie" else "shows"
+def _sync_table_for(media_type: str, catalog: str | None = None) -> str:
+    key = _media_type_key(media_type, catalog)
+    if key == "movie":
+        return "movies"
+    if key == "anime":
+        return "anime"
+    return "shows"
 
 
 def _row_has_cast(row: dict[str, Any] | None) -> bool:
@@ -56,6 +68,55 @@ def sync_row_to_paint_row(sync_item: dict[str, Any]) -> dict[str, Any] | None:
         if sync_item.get(key) is not None:
             row[key] = sync_item[key]
     return row if row_has_display_meta(row) else None
+
+
+def coalesce_page_rows_paint_info(catalog: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Promote simkl_object info/art onto top-level row fields for list paint."""
+    from resources.lib.database.sync_meta_cache import row_has_plot_meta
+
+    out: list[dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            out.append(row)
+            continue
+        if row_has_plot_meta(row):
+            if not _row_has_cast(row):
+                painted = sync_row_to_paint_row(row)
+                if painted and _row_has_cast(painted):
+                    row = dict(row)
+                    row["cast"] = painted["cast"]
+            out.append(row)
+            continue
+        painted = sync_row_to_paint_row(row)
+        if not painted:
+            out.append(row)
+            continue
+        merged = dict(row)
+        info = dict(painted.get("info") or {})
+        existing = merged.get("info") if isinstance(merged.get("info"), dict) else {}
+        for key, val in existing.items():
+            if val is not None and val != "" and not info.get(key):
+                info[key] = val
+        merged["info"] = info
+        art = dict(painted.get("art") or {})
+        existing_art = merged.get("art") if isinstance(merged.get("art"), dict) else {}
+        for key, val in existing_art.items():
+            if val and not art.get(key):
+                art[key] = val
+        merged["art"] = art
+        painted_cast = painted.get("cast")
+        if isinstance(painted_cast, list) and painted_cast and not _row_has_cast(merged):
+            merged["cast"] = painted_cast
+        elif isinstance(merged.get("cast"), list) and merged["cast"]:
+            blob = merged.get("simkl_object")
+            if isinstance(blob, dict) and not blob.get("cast"):
+                blob = dict(blob)
+                blob["cast"] = merged["cast"]
+                merged["simkl_object"] = blob
+        if not merged.get("catalog"):
+            merged["catalog"] = catalog
+        out.append(merged)
+    return out
 
 
 def _merge_cached_cast(rows: list[dict[str, Any]], media_type: str, db) -> list[dict[str, Any]]:
@@ -177,7 +238,7 @@ def _apply_list_filters(row: dict[str, Any], media_type: str, *, hide_unaired: b
 
 
 def _merge_watch_overlay_fields(updated: dict[str, Any], overlay: dict[str, Any]) -> None:
-    """Merge live DB watch counters without downgrading richer list-row totals."""
+    """Merge live simkl_sync watch counters (trust DB for unwatch downgrades)."""
     watch_keys = ("episode_count", "watched_episodes", "unwatched_episodes")
     for key in watch_keys:
         if key not in overlay or overlay.get(key) is None:
@@ -186,44 +247,57 @@ def _merge_watch_overlay_fields(updated: dict[str, Any], overlay: dict[str, Any]
             overlay_val = int(overlay.get(key) or 0)
         except (TypeError, ValueError):
             continue
-        try:
-            row_val = int(updated.get(key) or 0)
-        except (TypeError, ValueError):
-            row_val = 0
-        updated[key] = max(row_val, overlay_val)
+        if key == "episode_count":
+            try:
+                row_val = int(updated.get(key) or 0)
+            except (TypeError, ValueError):
+                row_val = 0
+            updated[key] = max(row_val, overlay_val)
+        else:
+            updated[key] = overlay_val
 
     info = updated.get("info")
     if not isinstance(info, dict):
         return
-    for info_key, row_key in (
-        ("total_episodes_count", "episode_count"),
-        ("watched_episodes_count", "watched_episodes"),
-        ("unwatched_episodes", "unwatched_episodes"),
-    ):
-        info_val = info.get(info_key)
-        if info_val is None:
-            continue
-        try:
-            info_int = int(info_val)
-        except (TypeError, ValueError):
-            continue
-        try:
-            row_val = int(updated.get(row_key) or 0)
-        except (TypeError, ValueError):
-            row_val = 0
-        if info_int > row_val:
-            updated[row_key] = info_int
+    try:
+        if updated.get("episode_count") is not None:
+            info["episode_count"] = int(updated["episode_count"])
+            info["aired_episodes"] = int(updated["episode_count"])
+        if updated.get("watched_episodes") is not None:
+            info["watched_episodes_count"] = int(updated["watched_episodes"])
+        if updated.get("unwatched_episodes") is not None:
+            info["unwatched_episodes"] = int(updated["unwatched_episodes"])
+    except (TypeError, ValueError):
+        pass
 
 
 def _overlay_sync_fields(rows: list[dict[str, Any]], media_type: str, db) -> list[dict[str, Any]]:
+    from resources.lib.database.simkl_sync.serial_access import partition_simkl_ids
+    from resources.lib.meta.paint_stamp import row_has_trusted_paint_stamp
+
     simkl_ids = [int(row["simkl_id"]) for row in rows if row.get("simkl_id") is not None]
     if not simkl_ids:
         return rows
-    overlays = db.fetch_paint_overlay_fields(media_type, simkl_ids)
+    overlays: dict[int, dict] = {}
+    if media_type == "movie":
+        overlays = db.fetch_paint_overlay_fields("movie", simkl_ids)
+    else:
+        _movie_ids, tv_ids, anime_ids = partition_simkl_ids(rows)
+        if tv_ids:
+            overlays.update(db.fetch_paint_overlay_fields("tvshow", tv_ids, catalog="tv"))
+        if anime_ids:
+            overlays.update(db.fetch_paint_overlay_fields("anime", anime_ids, catalog="anime"))
+        if not tv_ids and not anime_ids:
+            overlays = db.fetch_paint_overlay_fields(media_type, simkl_ids)
     merged: list[dict[str, Any]] = []
     for row in rows:
         updated = dict(row)
         overlay = overlays.get(int(row["simkl_id"]))
+        if row_has_trusted_paint_stamp(row):
+            if overlay:
+                _merge_watch_overlay_fields(updated, overlay)
+            merged.append(updated)
+            continue
         if overlay:
             overlay_cast = overlay.get("cast")
             passthrough = {
@@ -279,17 +353,23 @@ def overlay_page_watch_fields(
         for row in rows
         if isinstance(row, dict) and row.get("simkl_id") is not None and row.get("catalog") == "movie"
     ]
-    show_rows = [
+    tv_rows = [
         row
         for row in rows
-        if isinstance(row, dict) and row.get("simkl_id") is not None and row.get("catalog") in ("tv", "anime")
+        if isinstance(row, dict) and row.get("simkl_id") is not None and row.get("catalog") == "tv"
+    ]
+    anime_rows = [
+        row
+        for row in rows
+        if isinstance(row, dict) and row.get("simkl_id") is not None and row.get("catalog") == "anime"
     ]
     by_id: dict[int, dict[str, Any]] = {}
     if movie_rows:
         for row in _overlay_sync_fields(movie_rows, "movie", db):
             by_id[int(row["simkl_id"])] = row
-    if show_rows:
-        overlaid_shows = _overlay_sync_fields(show_rows, "tvshow", db)
+    serial_rows = tv_rows + anime_rows
+    if serial_rows:
+        overlaid_shows = _overlay_sync_fields(serial_rows, "tvshow", db)
         try:
             enriched = db._enrich_show_episode_counts(overlaid_shows)
             if enriched:
@@ -353,10 +433,18 @@ def page_cache_catalog(catalog: str, refs: list[dict] | None = None, *, mixed_li
     return catalog
 
 
-def _anime_title_language_cache_key() -> int:
-    from resources.lib.modules.globals import g
+def _anime_page_paint_cache_suffix(catalog: str) -> tuple:
+    if catalog != "anime":
+        return ()
+    from resources.lib.anime.paint import cache_key_suffix
 
-    return g.get_int_setting("general.anime.titlelanguage")
+    return cache_key_suffix()
+
+
+def _anime_drilldown_paint_cache_suffix() -> tuple:
+    from resources.lib.anime.titles import title_language_setting
+
+    return (title_language_setting(),)
 
 
 def page_paint_cache_key(
@@ -371,7 +459,15 @@ def page_paint_cache_key(
     simkl_ids = tuple(
         sorted(int(ref["simkl_id"]) for ref in refs if isinstance(ref, dict) and ref.get("simkl_id") is not None)
     )
-    return (catalog, simkl_ids, hide_unaired, hide_watched, paint_profile, prefer_rich_payload, _anime_title_language_cache_key())
+    return (
+        catalog,
+        simkl_ids,
+        hide_unaired,
+        hide_watched,
+        paint_profile,
+        prefer_rich_payload,
+        *_anime_page_paint_cache_suffix(catalog),
+    )
 
 
 def episode_page_paint_cache_key(
@@ -391,7 +487,7 @@ def episode_page_paint_cache_key(
         flags["hide_watched"],
         paint_profile,
         flags["prefer_rich_payload"],
-        _anime_title_language_cache_key(),
+        *_anime_page_paint_cache_suffix(catalog),
     )
 
 
@@ -417,8 +513,72 @@ def drilldown_list_cache_key(
         hide_specials,
         str(catalog_stamp or ""),
         str(watch_stamp or ""),
-        _anime_title_language_cache_key(),
+        *_anime_drilldown_paint_cache_suffix(),
     )
+
+
+def _ensure_row_catalog(catalog: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not catalog:
+        return rows
+    stamped: list[dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            stamped.append(row)
+            continue
+        if row.get("catalog"):
+            stamped.append(row)
+            continue
+        updated = dict(row)
+        updated["catalog"] = catalog
+        stamped.append(updated)
+    return stamped
+
+
+def overlay_stamped_display_meta_page(catalog: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge trusted display_meta info/art/cast onto sync rows (warm menu path)."""
+    if not rows:
+        return rows
+    from resources.lib.meta.display_store import get_display_meta_store
+    from resources.lib.meta.paint_stamp import row_has_trusted_paint_stamp
+
+    store = get_display_meta_store()
+    rows = _ensure_row_catalog(catalog, rows)
+    movies = [row for row in rows if isinstance(row, dict) and row.get("catalog") == "movie"]
+    tv_rows = [row for row in rows if isinstance(row, dict) and row.get("catalog") == "tv"]
+    anime_rows = [row for row in rows if isinstance(row, dict) and row.get("catalog") == "anime"]
+    movie_hits = store.get_batch("movie", [int(row["simkl_id"]) for row in movies if row.get("simkl_id")])
+    tv_hits = store.get_batch("show", [int(row["simkl_id"]) for row in tv_rows if row.get("simkl_id")], catalog="tv")
+    anime_hits = store.get_batch(
+        "anime", [int(row["simkl_id"]) for row in anime_rows if row.get("simkl_id")], catalog="anime"
+    )
+    show_hits = {**tv_hits, **anime_hits}
+    merged_by_id: dict[int, dict[str, Any]] = {}
+    if movies:
+        for row in store.overlay_rows(movies, "movie"):
+            if not isinstance(row, dict) or row.get("simkl_id") is None:
+                continue
+            sid = int(row["simkl_id"])
+            if row_has_trusted_paint_stamp(movie_hits.get(sid)):
+                merged_by_id[sid] = row
+    for serial_rows in (tv_rows, anime_rows):
+        if not serial_rows:
+            continue
+        for row in store.overlay_rows(serial_rows, "tvshow"):
+            if not isinstance(row, dict) or row.get("simkl_id") is None:
+                continue
+            sid = int(row["simkl_id"])
+            if row_has_trusted_paint_stamp(show_hits.get(sid)):
+                merged_by_id[sid] = row
+    if not merged_by_id:
+        return rows
+    merged: list[dict[str, Any]] = []
+    for row in rows:
+        if isinstance(row, dict) and row.get("simkl_id") is not None:
+            sid = int(row["simkl_id"])
+            merged.append(merged_by_id.get(sid, row))
+        else:
+            merged.append(row)
+    return merged
 
 
 def overlay_display_meta_stamps(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -433,16 +593,23 @@ def overlay_display_meta_stamps(rows: list[dict[str, Any]]) -> list[dict[str, An
         for row in rows
         if isinstance(row, dict) and row.get("simkl_id") is not None and row.get("catalog") == "movie"
     ]
-    show_ids = [
+    tv_ids = [
         int(row["simkl_id"])
         for row in rows
-        if isinstance(row, dict) and row.get("simkl_id") is not None and row.get("catalog") in ("tv", "anime")
+        if isinstance(row, dict) and row.get("simkl_id") is not None and row.get("catalog") == "tv"
+    ]
+    anime_ids = [
+        int(row["simkl_id"])
+        for row in rows
+        if isinstance(row, dict) and row.get("simkl_id") is not None and row.get("catalog") == "anime"
     ]
     hits: dict[int, dict[str, Any]] = {}
     if movie_ids:
         hits.update(store.get_batch("movie", movie_ids))
-    if show_ids:
-        hits.update(store.get_batch("show", show_ids))
+    if tv_ids:
+        hits.update(store.get_batch("show", tv_ids, catalog="tv"))
+    if anime_ids:
+        hits.update(store.get_batch("anime", anime_ids, catalog="anime"))
     if not hits:
         return rows
 
@@ -703,22 +870,56 @@ def fetch_simkl_paint_rows_batch(
     media_type: str,
     simkl_ids: list[int],
     db,
+    *,
+    refs: list[dict[str, Any]] | None = None,
 ) -> dict[int, dict[str, Any]]:
     """Seren-style denormalized rows from simkl_sync RAM/DB (info, art, cast)."""
     if not simkl_ids:
         return {}
 
-    cache_media = _media_type_key(media_type)
+    from resources.lib.database.simkl_sync.serial_access import partition_simkl_ids
     from resources.lib.database.sync_meta_cache import SyncMetaCache
 
     meta_cache = SyncMetaCache()
-    hits = meta_cache.get_many_rows(cache_media, simkl_ids)
-    misses = [sid for sid in simkl_ids if sid not in hits]
-    if misses:
-        db_hits = db.fetch_paint_rows_batch(media_type, misses)
-        if db_hits:
-            meta_cache.set_many_rows(cache_media, list(db_hits.values()))
-            hits.update(db_hits)
+    hits: dict[int, dict[str, Any]] = {}
+    miss_set = set(simkl_ids)
+    if media_type == "movie":
+        cache_media = "movie"
+        hits = meta_cache.get_many_rows(cache_media, simkl_ids)
+        misses = [sid for sid in simkl_ids if sid not in hits]
+        if misses:
+            db_hits = db.fetch_paint_rows_batch("movie", misses)
+            if db_hits:
+                meta_cache.set_many_rows(cache_media, list(db_hits.values()))
+                hits.update(db_hits)
+    else:
+        ref_rows = refs or [{"simkl_id": sid} for sid in simkl_ids]
+        by_id = {
+            int(r["simkl_id"]): r
+            for r in ref_rows
+            if isinstance(r, dict) and r.get("simkl_id") is not None
+        }
+        full_refs = [by_id.get(sid, {"simkl_id": sid}) for sid in simkl_ids]
+        _movie_ids, tv_ids, anime_ids = partition_simkl_ids(full_refs)
+        uncategorized = miss_set - set(tv_ids) - set(anime_ids)
+        if uncategorized:
+            tv_ids = sorted(set(tv_ids) | uncategorized)
+        for cache_media, ids, catalog in (
+            ("show", tv_ids, "tv"),
+            ("anime", anime_ids, "anime"),
+        ):
+            if not ids:
+                continue
+            bucket_hits = meta_cache.get_many_rows(cache_media, ids)
+            hits.update(bucket_hits)
+            misses = [sid for sid in ids if sid not in bucket_hits]
+            if misses:
+                db_hits = db.fetch_paint_rows_batch(
+                    "anime" if catalog == "anime" else "tvshow", misses, catalog=catalog
+                )
+                if db_hits:
+                    meta_cache.set_many_rows(cache_media, list(db_hits.values()))
+                    hits.update(db_hits)
     return {
         sid: row
         for sid, row in hits.items()
@@ -768,9 +969,11 @@ def try_fast_paint_list(
     from resources.lib.meta.display_store import get_display_meta_store
     from resources.lib.modules.metadataHandler import MetadataHandler
 
-    paint_media = _media_type_key(media_type)
     store = get_display_meta_store()
-    display_hits = store.get_batch(paint_media, simkl_ids)
+    if media_type == "movie":
+        display_hits = store.get_batch("movie", simkl_ids)
+    else:
+        display_hits = store.get_batch_for_rows(media_list)
     from resources.lib.meta.paint_stamp import row_has_trusted_paint_stamp
 
     missing_ids = [
@@ -780,7 +983,7 @@ def try_fast_paint_list(
     ]
     sync_hits: dict[int, dict[str, Any]] = {}
     if missing_ids:
-        sync_hits = fetch_simkl_paint_rows_batch(media_type, missing_ids, db)
+        sync_hits = fetch_simkl_paint_rows_batch(media_type, missing_ids, db, refs=media_list)
     hits = dict(sync_hits)
     hits.update(display_hits)
     if len(hits) < len(simkl_ids):
@@ -841,8 +1044,10 @@ def paint_sync_list_rows(
     from resources.lib.simkl.enrich import gapfill_anime_title_rows
 
     profile = str(params.get("paint_profile") or "browse")
+    from resources.lib.anime.paint import overlay_list_rows
+
     rows = get_display_meta_store().overlay_rows(rows, media_type)
-    rows = gapfill_anime_title_rows(rows)
+    rows = overlay_list_rows(gapfill_anime_title_rows(rows))
     prepared, enrichment_refs, prepare_skipped = paint_rows_fast_or_prepare(
         rows, media_type, db, profile=profile
     )
@@ -1067,13 +1272,16 @@ def paint_discover_page_rows(
             painted.extend(_paint_bucket(movie_refs, "movie"))
             painted.extend(_paint_bucket(show_refs, "tvshow"))
         else:
-            from concurrent.futures import ThreadPoolExecutor
+            from resources.lib.common.thread_pool import ThreadPool
 
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                movie_future = pool.submit(_paint_bucket, movie_refs, "movie")
-                show_future = pool.submit(_paint_bucket, show_refs, "tvshow")
-                painted.extend(movie_future.result())
-                painted.extend(show_future.result())
+            pool = ThreadPool()
+            pool.put(_paint_bucket, movie_refs, "movie")
+            pool.put(_paint_bucket, show_refs, "tvshow")
+            results = pool.wait_completion()
+            if isinstance(results, list):
+                painted.extend(results)
+            elif results:
+                painted.append(results)
     else:
         painted.extend(_paint_bucket(movie_refs, "movie"))
         painted.extend(_paint_bucket(show_refs, "tvshow"))

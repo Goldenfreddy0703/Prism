@@ -57,7 +57,6 @@ def prism_endpoint():
         exit_prism_plugin_mode,
         plugin_action_allows_threads,
     )
-
     enter_prism_plugin_mode()
     foreground_menu = False
     plugin_slot_token = None
@@ -75,6 +74,8 @@ def prism_endpoint():
             g.init_globals(sys.argv)
             action = (g.REQUEST_PARAMS or {}).get("action")
             if plugin_action_allows_threads(action):
+                exit_prism_plugin_mode()
+            elif g.PLUGIN_HANDLE > 0 and not g.FROM_WIDGET:
                 exit_prism_plugin_mode()
             else:
                 g.set_runtime_setting("prism.inline_pool", True)

@@ -1433,7 +1433,11 @@ def format_for_calendar(
                 title = enrichment.get("title") or title
 
         if catalog == "anime":
-            from resources.lib.simkl.field_map import pick_anime_display_title, resolve_anime_titles_from_source
+            from resources.lib.anime.titles import (
+                pick_anime_display_title,
+                prefer_romaji_from_settings,
+                resolve_anime_titles_from_source,
+            )
 
             title_en, title_romaji = resolve_anime_titles_from_source(row)
             title_info = {
@@ -1441,8 +1445,7 @@ def format_for_calendar(
                 "title_en": title_en,
                 "title_romaji": title_romaji,
             }
-            prefer_romaji = g.get_int_setting("general.anime.titlelanguage") == 1
-            title = pick_anime_display_title(title_info, prefer_romaji=prefer_romaji) or title
+            title = pick_anime_display_title(title_info, prefer_romaji=prefer_romaji_from_settings()) or title
 
         ep_num = _episode_number(catalog, row)
         episode = row.get("episode") if isinstance(row.get("episode"), dict) else {}

@@ -7,8 +7,6 @@ if TYPE_CHECKING:
     from resources.lib.discover.definitions import DiscoverList
 
 _SETTING_BY_PROVIDER = {
-    "tmdb": "metadata.tmdb.enabled",
-    "tvdb": "metadata.tvdb.enabled",
     "fanart": "metadata.fanart.enabled",
     "mdblist": "metadata.mdblist.enabled",
     "imdb": "metadata.imdb.enabled",
@@ -42,7 +40,16 @@ _FANART_EXCLUSIVE_SETTINGS = frozenset(
 
 # Discover DB queries gated by provider toggles (none currently).
 
+def tmdb_features_enabled() -> bool:
+    """Actor search, multi-genre browse, and other TMDB browse APIs (always on; no setting)."""
+    return True
+
+
 def provider_enabled(provider: str) -> bool:
+    if provider == "tmdb":
+        return tmdb_artwork_enabled()
+    if provider == "tvdb":
+        return tvdb_artwork_enabled()
     setting_id = _SETTING_BY_PROVIDER.get(provider)
     if not setting_id:
         return True
@@ -52,7 +59,14 @@ def provider_enabled(provider: str) -> bool:
 
 
 def gapfill_providers_enabled() -> bool:
-    return any(provider_enabled(name) for name in ("tmdb", "tvdb"))
+    return (
+        tmdb_features_enabled()
+        or tmdb_artwork_enabled()
+        or tvdb_artwork_enabled()
+        or provider_enabled("imdb")
+        or provider_enabled("anilist")
+        or fanart_art_usable()
+    )
 
 
 def external_ids_from_row(row: dict) -> dict[str, object | None]:
@@ -90,23 +104,9 @@ def gapfill_provider_available_for_row(row: dict) -> bool:
 
     art_profile = artwork_profile_for_row(row)
     media_type = provider_media_type(art_profile)
-    if preferred_art_source_for_row(row, media_type) == ART_SIMKL:
-        return False
-    ids = external_ids_from_row(row)
-    if provider_enabled("tmdb") and ids.get("tmdb_id"):
+    if cast_gapfill_available(row, media_type):
         return True
-    if provider_enabled("tvdb") and ids.get("tvdb_id"):
-        return True
-    if provider_enabled("imdb") and ids.get("imdb_id"):
-        return True
-    from resources.lib.meta.artwork import PROFILE_ANIME_MOVIE, PROFILE_ANIME_SERIES
-
-    if art_profile in (PROFILE_ANIME_MOVIE, PROFILE_ANIME_SERIES) and provider_enabled("anilist"):
-        if ids.get("mal_id") or ids.get("anilist_id"):
-            return True
-    if fanart_art_usable() and (ids.get("tmdb_id") or ids.get("tvdb_id") or ids.get("imdb_id")):
-        return True
-    return False
+    return art_gapfill_available(row, media_type)
 
 
 def preferred_art_source_for_row(row: dict, media_type: str) -> int:
@@ -131,9 +131,6 @@ def preferred_art_source_for_row(row: dict, media_type: str) -> int:
 def cast_gapfill_available(row: dict, media_type: str) -> bool:
     if not isinstance(row, dict):
         return False
-    preferred = preferred_art_source_for_row(row, media_type)
-    if preferred == ART_SIMKL:
-        return False
     ids = external_ids_from_row(row)
     if provider_enabled("imdb") and ids.get("imdb_id"):
         return True
@@ -143,20 +140,23 @@ def cast_gapfill_available(row: dict, media_type: str) -> bool:
     if art_profile in (PROFILE_ANIME_MOVIE, PROFILE_ANIME_SERIES) and provider_enabled("anilist"):
         if ids.get("mal_id") or ids.get("anilist_id"):
             return True
+    preferred = preferred_art_source_for_row(row, media_type)
+    if preferred == ART_SIMKL:
+        return False
     if media_type == "movie":
-        if provider_enabled("tmdb") and ids.get("tmdb_id"):
+        if tmdb_artwork_enabled() and ids.get("tmdb_id"):
             return True
-        if provider_enabled("tvdb") and ids.get("tvdb_id"):
+        if tvdb_artwork_enabled() and ids.get("tvdb_id"):
             return True
         return False
-    if preferred == ART_TVDB and provider_enabled("tvdb") and ids.get("tvdb_id"):
+    if preferred == ART_TVDB and tvdb_artwork_enabled() and ids.get("tvdb_id"):
         return True
-    if preferred == ART_TMDB and provider_enabled("tmdb") and ids.get("tmdb_id"):
+    if preferred == ART_TMDB and tmdb_artwork_enabled() and ids.get("tmdb_id"):
         return True
     if preferred == ART_FANART:
-        if provider_enabled("tmdb") and ids.get("tmdb_id"):
+        if art_provider_usable("tmdb") and ids.get("tmdb_id"):
             return True
-        if provider_enabled("tvdb") and ids.get("tvdb_id"):
+        if art_provider_usable("tvdb") and ids.get("tvdb_id"):
             return True
     return False
 
@@ -173,9 +173,9 @@ def art_gapfill_available(row: dict, media_type: str = "tvshow") -> bool:
             ids.get("tmdb_id") or ids.get("tvdb_id") or ids.get("imdb_id")
         )
     if preferred == ART_TMDB:
-        return provider_enabled("tmdb") and bool(ids.get("tmdb_id"))
+        return art_provider_usable("tmdb") and bool(ids.get("tmdb_id"))
     if preferred == ART_TVDB:
-        return provider_enabled("tvdb") and bool(ids.get("tvdb_id"))
+        return art_provider_usable("tvdb") and bool(ids.get("tvdb_id"))
     return False
 
 
@@ -291,6 +291,24 @@ def fanart_enabled() -> bool:
     return g.get_bool_setting("metadata.fanart.enabled", True)
 
 
+def tmdb_artwork_enabled() -> bool:
+    from resources.lib.modules.globals import g
+
+    raw = g.get_setting("artwork.tmdb.enabled")
+    if raw is None or raw == "":
+        return g.get_bool_setting("metadata.tmdb.enabled", True)
+    return g.get_bool_setting("artwork.tmdb.enabled", True)
+
+
+def tvdb_artwork_enabled() -> bool:
+    from resources.lib.modules.globals import g
+
+    raw = g.get_setting("artwork.tvdb.enabled")
+    if raw is None or raw == "":
+        return g.get_bool_setting("metadata.tvdb.enabled", True)
+    return g.get_bool_setting("artwork.tvdb.enabled", True)
+
+
 def fanart_art_usable() -> bool:
     """True when Fanart.tv is enabled and an API key is available (user setting or context.prism info.db)."""
     if not fanart_enabled():
@@ -303,6 +321,10 @@ def fanart_art_usable() -> bool:
 def art_provider_usable(provider: str) -> bool:
     if provider == "fanart":
         return fanart_art_usable()
+    if provider == "tmdb":
+        return tmdb_artwork_enabled()
+    if provider == "tvdb":
+        return tvdb_artwork_enabled()
     return provider_enabled(provider)
 
 

@@ -123,6 +123,53 @@ class PaginatedListStore:
         )
         return items
 
+    def load_thin_page_items(
+        self,
+        catalog: str,
+        list_id: str,
+        page: int,
+        loader: Callable[[], list[dict]],
+        *,
+        disk_namespace: str | None = None,
+        schedule_upsert: bool = True,
+    ) -> list[dict]:
+        """Thin Simkl API page with optional disk TTL cache (POV lists_cache pattern)."""
+        page_id = _page_list_id(list_id, page)
+        started = time.time()
+        memory = self._memory_items(catalog, page_id)
+        if memory:
+            self._log(
+                f"list={list_id} page={page} source=memory thin=1 page_ms={int((time.time() - started) * 1000)}"
+            )
+            return memory
+
+        disk_key = f"{self.namespace}:{catalog}:{page_id}"
+        if disk_namespace:
+            from resources.lib.meta.simkl_list_disk_cache import get_cached_page, set_cached_page
+
+            disk_items = get_cached_page(disk_namespace, disk_key)
+            if disk_items:
+                self.remember_items(catalog, page_id, disk_items)
+                self._log(
+                    f"list={list_id} page={page} source=disk thin=1 page_ms={int((time.time() - started) * 1000)}"
+                )
+                return disk_items
+
+        items = loader()
+        if not items:
+            return []
+        self.remember_items(catalog, page_id, items)
+        if disk_namespace:
+            from resources.lib.meta.simkl_list_disk_cache import set_cached_page
+
+            set_cached_page(disk_namespace, disk_key, items)
+        if schedule_upsert:
+            self._schedule_catalog_upsert(catalog, page_id, items)
+        self._log(
+            f"list={list_id} page={page} source=loader thin=1 page_ms={int((time.time() - started) * 1000)}"
+        )
+        return items
+
     def load_cached_items(
         self,
         catalog: str,
@@ -492,6 +539,105 @@ def clear_ram_cache(namespace: str | None = None) -> None:
         _catalog_upsert_keys.difference_update(key for key in _catalog_upsert_keys if key[0] == namespace)
 
 
+def defer_browse_page_persist(
+    catalog: str,
+    rows: list[dict],
+    *,
+    profile: str = "browse",
+) -> None:
+    """Background seed simkl_sync + display_meta stamp after menu returns."""
+    if not rows:
+        return
+    snapshot = [dict(row) for row in rows if isinstance(row, dict)]
+
+    def _work() -> None:
+        from resources.lib.modules.globals import g
+
+        g.ensure_addon()
+        try:
+            seed_browse_page(catalog, snapshot)
+            from resources.lib.meta.page_materialize import schedule_browse_page_stamp_background
+
+            schedule_browse_page_stamp_background(catalog, simkl_refs(snapshot), profile=profile)
+        except Exception:
+            g.log_stacktrace()
+
+    from resources.lib.common.thread_pool import defer_background
+
+    defer_background(_work, name="prism-browse-persist")
+
+
+def defer_drilldown_persist(
+    show_id: int,
+    catalog: str,
+    *,
+    scope: str = "seasons",
+    season_num: int | None = None,
+) -> None:
+    """Background Simkl season/episode mill + watch refresh after drilldown menu returns."""
+    snapshot = {
+        "show_id": int(show_id),
+        "catalog": str(catalog or "tv"),
+        "scope": str(scope),
+        "season_num": season_num,
+    }
+
+    def _work() -> None:
+        from resources.lib.modules.globals import g
+
+        g.ensure_addon()
+        try:
+            from resources.lib.database.session import get_sync_database
+            from resources.lib.simkl.ids import season_key
+
+            db = get_sync_database()
+            show_id_local = snapshot["show_id"]
+            catalog_local = snapshot["catalog"]
+            scope_local = snapshot["scope"]
+            season = snapshot.get("season_num")
+
+            show_meta = db._get_single_show_meta(show_id_local) or {"simkl_id": show_id_local, "catalog": catalog_local}
+            mill_filter = None
+            mill_episodes = False
+            if scope_local == "episodes" and season is not None:
+                mill_episodes = True
+                mill_filter = frozenset({int(season)})
+            elif scope_local == "flat":
+                mill_episodes = True
+            db.force_mill_shows(
+                show_meta,
+                mill_episodes=mill_episodes,
+                skip_provider_episode_updates=True,
+                mill_season_filter=mill_filter,
+                catalog=catalog_local,
+            )
+            if catalog_local == "anime" and scope_local == "seasons":
+                db.prune_orphan_anime_seasons(show_id_local)
+            if scope_local == "seasons":
+                db._format_seasons_local(show_id_local)
+            elif scope_local == "episodes" and season is not None:
+                db._format_episodes_local(show_id_local, season_key(show_id_local, int(season)))
+            elif scope_local == "flat":
+                db._format_episodes_local(show_id_local)
+            db.refresh_show_episode_watch_state(show_id_local)
+            db._refresh_show_and_season_statistics(show_id_local)
+        except Exception:
+            g.log_stacktrace()
+
+    from resources.lib.common.thread_pool import defer_background
+
+    defer_background(_work, name="prism-drilldown-persist")
+
+
+def defer_mixed_browse_persist(rows: list[dict], *, profile: str = "browse") -> None:
+    from resources.lib.simkl.media_ref import partition_by_catalog
+
+    movies, tv, anime = partition_by_catalog(rows)
+    for catalog, group in (("movie", movies), ("tv", tv), ("anime", anime)):
+        if group:
+            defer_browse_page_persist(catalog, group, profile=profile)
+
+
 def seed_browse_page(catalog: str, items: list[dict]) -> list[dict]:
     """Hydrate sync rows and seed simkl_sync for the visible browse page.
 
@@ -552,7 +698,7 @@ def render_list_page(
     seeded: bool = True,
     **kwargs,
 ) -> None:
-    """Route browse menus through paint-first, browse_sync, or mixed_sync paths."""
+    """Route browse menus through paint-first (Seren sync) path."""
     from resources.lib.modules.globals import g
 
     if not items and not refs:
@@ -571,35 +717,17 @@ def render_list_page(
 
     if strategy == "paint_first":
         from resources.lib.discover.sync_bridge import simkl_refs
-        from resources.lib.meta.list_paint import render_catalog_discover_refs
+        from resources.lib.meta.list_paint import render_fast_title_list
+        from resources.lib.pipeline.catalog_page import CatalogPagePipeline
 
         page_refs = refs or simkl_refs(items)
-        render_catalog_discover_refs(
+        CatalogPagePipeline.open_discover(
             catalog,
             page_refs,
             list_builder,
             list_kwargs=merged,
             payload_rows=payload_rows or items,
-            prefer_catalog_payload=bool(merged.get("prefer_catalog_payload", True)),
         )
-        return
-
-    if strategy == "browse_sync":
-        from resources.lib.meta.browse_sync import render_browse_sync_page
-
-        render_browse_sync_page(
-            catalog,
-            items,
-            list_builder,
-            list_kwargs=merged,
-            defer_catalog_seed=False,
-        )
-        return
-
-    if strategy == "mixed_sync":
-        from resources.lib.simkl.media_ref import render_mixed_sync_list
-
-        render_mixed_sync_list(items, catalog_hint=catalog, **merged)
         return
 
     raise ValueError(f"Unknown list pipeline strategy: {strategy}")

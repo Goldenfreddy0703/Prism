@@ -78,19 +78,92 @@ def persist_search_pagination(action_args: Any) -> None:
         g.REQUEST_PARAMS["action_args"] = {"query": str(action_args).strip()}
 
 
+def redirect_keyboard_search(results_action: str, query: str) -> None:
+    """Replace the keyboard URL with the results URL so list refresh does not reopen the keyboard."""
+    import xbmc
+
+    url = g.create_url(g.BASE_URL, {"action": results_action, "action_args": {"query": query}})
+    escaped = url.replace("\\", "\\\\").replace('"', '\\"')
+    xbmc.executebuiltin(f'Container.Update("{escaped}",replace)')
+    g.cancel_directory()
+
+
 SEARCH_RESULTS_ACTIONS = {
     "movie": "moviesSearchResults",
     "tv": "showsSearchResults",
     "anime": "animeSearchResults",
+    "all": "allSearchResults",
 }
+
+
+def render_unified_search_results_list(query: str, page_limit: int) -> None:
+    """Paginated Simkl ``/search/all`` — mixed movies, TV, and anime."""
+    from resources.lib.meta.list_pipeline import get_list_store, make_list_id
+    from resources.lib.meta.menu_paint_profile import MenuPaintProfile, profile_list_kwargs
+    from resources.lib.simkl.media_ref import render_mixed_sync_list
+    from resources.lib.simkl.menu_helpers import paginate_refs_for_page
+    from resources.lib.simkl.search import (
+        fetch_all_search_results,
+        simkl_search_page_limit,
+        simkl_search_sort_mode,
+    )
+
+    page_limit = simkl_search_page_limit()
+    sort_mode = simkl_search_sort_mode()
+    list_id = make_list_id("search", "all", query, sort_mode)
+    page = g.PAGE
+    store = get_list_store("search")
+
+    def loader():
+        return filter_search_results(fetch_all_search_results("all", query))
+
+    all_items = store.load_cached_items("all", list_id, loader)
+    if not all_items:
+        notify_empty_search(30766)
+        return
+
+    page_items = store.load_thin_page_items(
+        "all",
+        list_id,
+        page,
+        lambda: paginate_refs_for_page(all_items, page, page_limit=page_limit),
+        disk_namespace="search",
+        schedule_upsert=False,
+    )
+    if not page_items:
+        notify_empty_search(30766)
+        return
+
+    has_next = page * page_limit < len(all_items)
+    render_mixed_sync_list(
+        page_items,
+        **profile_list_kwargs(
+            MenuPaintProfile.SEARCH,
+            hide_unaired=False,
+            hide_watched=False,
+            has_next_page=has_next,
+            next_action=SEARCH_RESULTS_ACTIONS["all"],
+            next_args={"query": query},
+            menu_action=SEARCH_RESULTS_ACTIONS["all"],
+            search_fast_open=True,
+            paint_profile=MenuPaintProfile.SEARCH.value,
+            catalog_pipeline=True,
+            mixed_list=True,
+            enrichment_reason="search",
+            browse_source=f"search:{query}",
+            thin_payload_rows=page_items,
+        ),
+    )
 
 
 def render_search_results_list(catalog: str, query: str, page_limit: int, list_builder) -> None:
     """Render a paginated Simkl title search with hybrid page-1 enrich + prefetch for next page."""
-    from resources.lib.meta.list_paint import render_catalog_discover_refs
+    if catalog == "all":
+        render_unified_search_results_list(query, page_limit)
+        return
+    from resources.lib.discover.sync_bridge import simkl_refs
     from resources.lib.meta.list_pipeline import get_list_store, make_list_id
     from resources.lib.meta.menu_paint_profile import MenuPaintProfile, profile_list_kwargs
-    from resources.lib.simkl.media_ref import persist_search_results
     from resources.lib.simkl.menu_helpers import paginate_refs_for_page
     from resources.lib.simkl.search import (
         fetch_all_search_results,
@@ -112,12 +185,19 @@ def render_search_results_list(catalog: str, query: str, page_limit: int, list_b
         notify_empty_search(30766)
         return
 
-    page_items = paginate_refs_for_page(all_items, page, page_limit=page_limit)
+    page_items = store.load_thin_page_items(
+        catalog,
+        list_id,
+        page,
+        lambda: paginate_refs_for_page(all_items, page, page_limit=page_limit),
+        disk_namespace="search",
+        schedule_upsert=False,
+    )
     if not page_items:
         notify_empty_search(30766)
         return
 
-    refs = persist_search_results(catalog, page_items)
+    refs = simkl_refs(page_items)
     has_next = page * page_limit < len(all_items)
     list_kwargs = profile_list_kwargs(
         MenuPaintProfile.SEARCH,
@@ -126,14 +206,21 @@ def render_search_results_list(catalog: str, query: str, page_limit: int, list_b
         has_next_page=has_next,
         next_action=SEARCH_RESULTS_ACTIONS[catalog],
         next_args={"query": query},
+        menu_action=SEARCH_RESULTS_ACTIONS[catalog],
+        search_fast_open=True,
+        paint_profile=MenuPaintProfile.SEARCH.value,
+        catalog_pipeline=True,
+        browse_source=f"search:{query}",
+        thin_payload_rows=page_items,
     )
 
-    render_catalog_discover_refs(
+    from resources.lib.pipeline.catalog_page import CatalogPagePipeline
+
+    CatalogPagePipeline.open_search(
         catalog,
         refs,
         list_builder,
         list_kwargs=list_kwargs,
-        prefer_catalog_payload=True,
         payload_rows=page_items,
     )
 

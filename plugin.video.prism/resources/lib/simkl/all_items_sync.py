@@ -171,8 +171,12 @@ def ingest_payload(
     db.set_sync_progress(60, g.get_language_string(31010))
     if _payload_has_items(payload):
         _seed_display_meta_from_payload(db, payload)
-    if not lean_delta:
-        _upsert_catalog_items_from_payload(payload)
+    _upsert_catalog_items_from_payload(payload)
+    if lean_delta:
+        _materialize_library_after_delta(db)
+    else:
+        _audit_catalog_external_ids(db, payload)
+        _materialize_library_after_sync(db)
     rebuild_library_cache_from_db(db)
     phase = "delta" if is_delta else "foundation"
     g.log(f"Simkl all-items ingest complete ({phase})", "info")
@@ -235,6 +239,77 @@ def _upsert_catalog_items_from_payload(payload) -> None:
                 items.append(normalized)
     if items:
         upsert_sync_items(items)
+
+
+def _materialize_library_priority_buckets() -> None:
+    """Page-1 library status stamps for fast menu open (priority buckets)."""
+    from resources.lib.meta.menu_paint_profile import MenuPaintProfile
+    from resources.lib.meta.page_materialize import materialize_refs_from_sync_db
+    from resources.lib.simkl.library_cache import _load_refs_from_sync_db
+    from resources.lib.simkl.library_list_sync import _statuses_for_catalog
+    from resources.lib.simkl.menu_helpers import library_list_page
+
+    profile = MenuPaintProfile.LIBRARY.value
+    warm_statuses = frozenset({"watching", "plantowatch", "completed", "dropped"})
+    for catalog in ("movie", "tv", "anime"):
+        for status in _statuses_for_catalog(catalog):
+            if status not in warm_statuses:
+                continue
+            refs = _load_refs_from_sync_db(catalog, status)
+            if not refs:
+                continue
+            page_refs, _ = library_list_page(refs)
+            if page_refs:
+                materialize_refs_from_sync_db(catalog, page_refs, profile=profile)
+
+
+def _materialize_library_after_sync(db: "SimklSyncDatabase") -> None:
+    _materialize_library_priority_buckets()
+
+
+def _materialize_library_after_delta(db: "SimklSyncDatabase") -> None:
+    _materialize_library_priority_buckets()
+
+
+def _audit_catalog_external_ids(db: "SimklSyncDatabase", payload) -> None:
+    """Log library titles missing external IDs Simkl provided in all-items payloads."""
+    missing: list[str] = []
+    checks = (
+        ("movie", "movies", ("tmdb", "imdb")),
+        ("tv", "shows", ("tmdb", "tvdb", "imdb")),
+        ("anime", "anime", ("tmdb", "tvdb", "mal")),
+    )
+    for catalog, media_key, id_keys in checks:
+        for entry in _unwrap_sync_items(payload, media_key):
+            normalized = simkl_entry_to_sync_dict(entry, catalog)
+            if not normalized:
+                continue
+            simkl_id = normalized.get("simkl_id")
+            ids = normalized.get("ids") or {}
+            gaps = [key for key in id_keys if ids.get(key) and not normalized.get(f"{key}_id")]
+            if gaps and simkl_id is not None:
+                missing.append(f"{catalog}:{simkl_id}({','.join(gaps)})")
+    if missing:
+        sample = ", ".join(missing[:12])
+        suffix = "..." if len(missing) > 12 else ""
+        g.log(
+            f"Simkl catalog ID audit: {len(missing)} title(s) missing mapped ID columns — {sample}{suffix}",
+            "debug",
+        )
+
+
+def _schedule_post_sync_background_warm() -> None:
+    from resources.lib.common.thread_pool import defer_background
+
+    def _warm() -> None:
+        try:
+            from resources.lib.discover.cdn_store import warm_cdn_trending_store
+
+            warm_cdn_trending_store()
+        except Exception:
+            g.log_stacktrace()
+
+    defer_background(_warm, name="prism-cdn-trending-warm")
 
 
 def _seed_display_meta_from_payload(db: "SimklSyncDatabase", payload) -> None:
@@ -415,10 +490,14 @@ def _episode_watch_cooldown_active(show_id: int) -> bool:
 
 
 def _local_watched_episode_keys(db: "SimklSyncDatabase", show_id: int) -> set[tuple[int, int]]:
+    catalog = db.show_catalog(int(show_id)) or "tv"
+    from resources.lib.database.simkl_sync.serial_sync import serial_tables
+
+    ep_table = serial_tables("anime" if catalog == "anime" else "tv").episode
     rows = db.fetchall(
-        """
+        f"""
         SELECT season, number
-        FROM episodes
+        FROM {ep_table}
         WHERE simkl_show_id=? AND season != 0 AND COALESCE(watched, 0) > 0
         """,
         (show_id,),
@@ -495,7 +574,11 @@ def _show_watch_state_matches(
             db, entry, show_id=show_id
         )
 
-    row = db.fetchone("SELECT watched_episodes FROM shows WHERE simkl_id=?", (show_id,))
+    catalog = db.show_catalog(int(show_id)) or "tv"
+    row = db.fetchone(
+        "SELECT watched_episodes FROM shows WHERE simkl_id=? AND catalog=?",
+        (show_id, catalog),
+    )
     show_watched = int((row or {}).get("watched_episodes") or 0)
     if show_watched > 0 and remote_watched > 0 and show_watched != remote_watched:
         return False
@@ -539,9 +622,12 @@ def _reconcile_show_watch_entry(
     has_episode_detail = db._entry_has_full_episode_watch_detail(stub_entry)
     has_watched_flags = db._entry_has_per_episode_watch_rows(watch_entry)
     simkl_watched_count = int(watch_entry.get("watched_episodes_count") or 0)
+    from resources.lib.database.simkl_sync.serial_sync import serial_tables
+
+    st = serial_tables(catalog)
     local_episode_rows = int(
         (db.fetchone(
-            "SELECT COUNT(*) AS c FROM episodes WHERE simkl_show_id=? AND season != 0",
+            f"SELECT COUNT(*) AS c FROM {st.episode} WHERE simkl_show_id=? AND season != 0",
             (show_id,),
         ) or {}).get("c")
         or 0
@@ -573,23 +659,107 @@ def _reconcile_show_watch_entry(
     return local_watched_after
 
 
+def ensure_show_episode_watch_aligned_for_paint(
+    db: "SimklSyncDatabase",
+    simkl_show_id: int,
+    *,
+    catalog: str | None = None,
+) -> bool:
+    """
+    Block season drilldown paint when per-episode watched flags disagree with Simkl.
+
+    Show-level totals can match while individual episode rows are stale (wrong season checkmarks).
+    """
+    if not db.simkl_api.is_authenticated():
+        return False
+
+    show_id = int(simkl_show_id)
+    if _episode_watch_cooldown_active(show_id):
+        return False
+
+    if catalog is None:
+        catalog = db.show_catalog(show_id) or "tv"
+    row = db.fetchone(
+        "SELECT simkl_status, watched_episodes FROM shows WHERE simkl_id=? AND catalog=?",
+        (show_id, catalog),
+    )
+    if not row:
+        return False
+
+    local_status = str(row.get("simkl_status") or "").strip().lower()
+    show_watched = int(row.get("watched_episodes") or 0)
+    local_keys = _local_watched_episode_keys(db, show_id)
+    if show_watched <= 0 and not local_keys:
+        return False
+
+    entry = fetch_show_watch_entry_from_sync_watched(db.simkl_api, show_id, catalog)
+    if not entry:
+        return False
+
+    remote_watched = int(entry.get("watched_episodes_count") or 0)
+    remote_status = str(entry.get("status") or "").strip().lower()
+    resolved_status = local_status or (
+        remote_status if remote_status in _LIBRARY_WATCH_STATUSES else "watching"
+    )
+
+    needs_reconcile = False
+    if remote_watched > 0 and len(local_keys) != remote_watched:
+        needs_reconcile = True
+    elif show_watched > 0 and len(local_keys) != show_watched:
+        needs_reconcile = True
+    elif db._entry_has_full_episode_watch_detail(entry) and (remote_watched > 0 or local_keys):
+        remote_keys = _remote_watched_episode_keys(db, entry, show_id=show_id, catalog=catalog)
+        if local_keys != remote_keys:
+            needs_reconcile = True
+    elif db._entry_has_explicit_episode_watch_fields(entry):
+        remote_keys = _remote_watched_episode_keys(db, entry, show_id=show_id, catalog=catalog)
+        if local_keys != remote_keys:
+            needs_reconcile = True
+
+    if not needs_reconcile:
+        return False
+
+    local_watched_after = _reconcile_show_watch_entry(
+        db, show_id, entry, catalog, resolved_status
+    )
+    try:
+        from resources.lib.meta.paint_cache import clear_session_page_paint_for_show
+
+        clear_session_page_paint_for_show(show_id)
+    except Exception:
+        pass
+    db._refresh_show_and_season_statistics(show_id)
+    g.log(
+        f"Menu perf: drilldown pre-paint watch reconcile show={show_id} -> "
+        f"{local_watched_after} watched episode(s)",
+        "info",
+    )
+    return True
+
+
 def refresh_show_episode_watch_state(db: "SimklSyncDatabase", simkl_show_id: int, *, force: bool = False) -> bool:
     """Validate per-show watch state against Simkl; reconcile only when local data drifted."""
     if not db.simkl_api.is_authenticated():
         return False
 
     show_id = int(simkl_show_id)
+    catalog = db.show_catalog(show_id) or "tv"
     row = db.fetchone(
-        "SELECT simkl_status, watched_episodes, episode_count FROM shows WHERE simkl_id=?",
-        (show_id,),
+        "SELECT simkl_status, watched_episodes, episode_count FROM shows WHERE simkl_id=? AND catalog=?",
+        (show_id, catalog),
     )
     if not row:
         return False
 
-    catalog = db.show_catalog(show_id) or "tv"
     local_status = str(row.get("simkl_status") or "").strip().lower()
 
-    if not force and _episode_watch_cooldown_active(show_id):
+    if _episode_watch_cooldown_active(show_id):
+        if not force:
+            return len(_local_watched_episode_keys(db, show_id)) > 0
+        g.log(
+            f"Simkl watch verify: skip forced reconcile for show {show_id} (recent local edit)",
+            "debug",
+        )
         return len(_local_watched_episode_keys(db, show_id)) > 0
 
     entry = fetch_show_watch_entry_from_sync_watched(db.simkl_api, show_id, catalog)
@@ -672,6 +842,7 @@ def sync_simkl_library(db: "SimklSyncDatabase", remote_activities, *, force: boo
     from resources.lib.simkl.library_cache import record_library_sync_watermark
 
     record_library_sync_watermark(db)
+    _schedule_post_sync_background_warm()
 
     _finalize_episode_sync_state(
         db,

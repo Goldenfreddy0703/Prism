@@ -19,6 +19,8 @@ def tmdb_guard_response(func):
 
         try:
             response = func(*args, **kwarg)
+            if response is None:
+                return None
             if response.status_code in [200, 201]:
                 return response
 
@@ -328,9 +330,14 @@ class TMDBAPI(ApiBase):
 
     @tmdb_guard_response
     def get(self, url, **params):
+        from resources.lib.net.sync_bridge import sync_http_request
+
         timeout = params.pop("timeout", 10)
-        return self.session.get(
+        return sync_http_request(
+            "tmdb",
+            "GET",
             parse.urljoin(self.baseUrl, url),
+            session=self.session,
             params=self._add_api_key(params),
             headers={"Accept": "application/json"},
             timeout=timeout,

@@ -39,15 +39,22 @@ def catalog_from_simkl_url(url: str | None) -> str | None:
 def resolve_item_catalog(item: dict[str, Any], list_catalog: str) -> str:
     """Map a Simkl row + browse context to movie, tv, or anime storage catalog."""
     url_catalog = catalog_from_simkl_url(item.get("url"))
-    if url_catalog == "movie" or list_catalog == "movie" or is_anime_movie_item(item, list_catalog):
+    # Anime films are stored under catalog=anime (shows row), not the Movies hub.
+    if is_anime_movie_item(item, list_catalog):
+        return "anime"
+    if url_catalog == "movie" or list_catalog == "movie":
         return "movie"
+
+    # Anime browse/search uses the anime serial tables; Simkl often labels rows type=show.
+    if list_catalog == "anime" or url_catalog == "anime":
+        return "anime"
 
     simkl_type = str(item.get("type") or item.get("endpoint_type") or "").lower()
     if simkl_type in ("movie", "movies"):
         return "movie"
     if simkl_type in ("tv", "show"):
         return "tv"
-    if simkl_type == "anime" or list_catalog == "anime" or url_catalog == "anime":
+    if simkl_type == "anime":
         return "anime"
     if url_catalog == "tv":
         return "tv"

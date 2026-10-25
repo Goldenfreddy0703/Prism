@@ -411,14 +411,16 @@ class SmartPlay:
 
         from resources.lib.database.session import get_sync_database
 
-        row = get_sync_database().fetchone(
+        db = get_sync_database()
+        catalog = db.show_catalog(int(self.show_simkl_id)) or "tv"
+        row = db.fetchone(
             """
             SELECT season, number FROM episodes
-            WHERE simkl_show_id = ? AND air_date IS NOT NULL AND season > 0
+            WHERE simkl_show_id = ? AND catalog = ? AND air_date IS NOT NULL AND season > 0
             ORDER BY season DESC, number DESC
             LIMIT 1
             """,
-            (self.show_simkl_id,),
+            (self.show_simkl_id, catalog),
         )
         if not row:
             return False

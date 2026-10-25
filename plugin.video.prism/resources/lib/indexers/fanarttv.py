@@ -19,6 +19,8 @@ def fanart_guard_response(func):
 
         try:
             response = func(*args, **kwarg)
+            if response is None:
+                return None
             if response.status_code in [200, 201]:
                 return response
 
@@ -143,7 +145,17 @@ class FanartTv(ApiBase):
         if not self.fanart_support:
             return None
         timeout = params.pop("timeout", 10)
-        return self.session.get(parse.urljoin(self.base_url, url), params=params, headers=self.headers, timeout=timeout)
+        from resources.lib.net.sync_bridge import sync_http_request
+
+        return sync_http_request(
+            "fanart",
+            "GET",
+            parse.urljoin(self.base_url, url),
+            session=self.session,
+            params=params,
+            headers=self.headers,
+            timeout=timeout,
+        )
 
     def _get_json(self, url, **params):
         response = self._get(url, **params)

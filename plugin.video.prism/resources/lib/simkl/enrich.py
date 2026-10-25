@@ -8,6 +8,22 @@ from functools import partial
 from resources.lib.database.cache import use_cache
 from resources.lib.modules.globals import g
 from resources.lib.simkl.catalog import resolve_item_catalog
+from resources.lib.simkl.detail_gates import simkl_detail_needed, simkl_detail_plot_missing
+
+
+def _parallel_map_rows(fn, rows: list):
+    if not rows:
+        return []
+    if len(rows) == 1:
+        return [fn(rows[0])]
+
+    from resources.lib.common.thread_pool import get_shared_executor
+
+    try:
+        return list(get_shared_executor().map(fn, rows))
+    except Exception:
+        g.log_stacktrace()
+        return [fn(row) for row in rows]
 
 
 @use_cache(cache_hours=12)
@@ -51,7 +67,8 @@ def _batch_load_sync_cache(items: list[dict]) -> dict[int, dict]:
     from resources.lib.database.sync_meta_cache import SyncMetaCache
 
     movie_ids: list[int] = []
-    show_ids: list[int] = []
+    tv_ids: list[int] = []
+    anime_ids: list[int] = []
     catalog_by_id: dict[int, str] = {}
 
     for item in items:
@@ -65,22 +82,28 @@ def _batch_load_sync_cache(items: list[dict]) -> dict[int, dict]:
         catalog_by_id[sid] = catalog
         if catalog == "movie":
             movie_ids.append(sid)
+        elif catalog == "anime":
+            anime_ids.append(sid)
         else:
-            show_ids.append(sid)
+            tv_ids.append(sid)
 
     meta_cache = SyncMetaCache()
     cache: dict[int, dict] = {}
 
     movie_hits, movie_misses = meta_cache.partition_complete("movie", movie_ids)
-    show_hits, show_misses = meta_cache.partition_complete("show", show_ids)
+    tv_hits, tv_misses = meta_cache.partition_complete("show", tv_ids)
+    anime_hits, anime_misses = meta_cache.partition_complete("anime", anime_ids)
 
     for sid, row in movie_hits.items():
         sync = _sync_dict_from_db_row(row, "movie")
         if sync:
             cache[sid] = sync
-    for sid, row in show_hits.items():
-        catalog = catalog_by_id.get(sid) or "tv"
-        sync = _sync_dict_from_db_row(row, catalog)
+    for sid, row in tv_hits.items():
+        sync = _sync_dict_from_db_row(row, "tv")
+        if sync:
+            cache[sid] = sync
+    for sid, row in anime_hits.items():
+        sync = _sync_dict_from_db_row(row, "anime")
         if sync:
             cache[sid] = sync
 
@@ -99,22 +122,37 @@ def _batch_load_sync_cache(items: list[dict]) -> dict[int, dict]:
             if sync:
                 cache[int(row["simkl_id"])] = sync
 
-    if show_misses:
+    if tv_misses:
         from resources.lib.database.session import get_sync_database
 
         shows_db = get_sync_database()
-        placeholders = ",".join("?" * len(show_misses))
+        placeholders = ",".join("?" * len(tv_misses))
         rows = shows_db.fetchall(
-            f"SELECT simkl_id, info, art, tmdb_id, tvdb_id, imdb_id FROM shows WHERE simkl_id IN ({placeholders})",
-            tuple(show_misses),
+            f"SELECT simkl_id, info, art, tmdb_id, tvdb_id, imdb_id FROM shows "
+            f"WHERE catalog = 'tv' AND simkl_id IN ({placeholders})",
+            tuple(tv_misses),
         )
         meta_cache.set_many_rows("show", rows or [])
         for row in rows or []:
-            sid = int(row["simkl_id"])
-            catalog = catalog_by_id.get(sid) or shows_db.show_catalog(sid)
-            sync = _sync_dict_from_db_row(row, catalog)
+            sync = _sync_dict_from_db_row(row, "tv")
             if sync:
-                cache[sid] = sync
+                cache[int(row["simkl_id"])] = sync
+
+    if anime_misses:
+        from resources.lib.database.session import get_sync_database
+
+        shows_db = get_sync_database()
+        placeholders = ",".join("?" * len(anime_misses))
+        rows = shows_db.fetchall(
+            f"SELECT simkl_id, info, art, tmdb_id, tvdb_id, imdb_id FROM shows "
+            f"WHERE catalog = 'anime' AND simkl_id IN ({placeholders})",
+            tuple(anime_misses),
+        )
+        meta_cache.set_many_rows("anime", rows or [])
+        for row in rows or []:
+            sync = _sync_dict_from_db_row(row, "anime")
+            if sync:
+                cache[int(row["simkl_id"])] = sync
 
     return cache
 
@@ -316,20 +354,6 @@ def _has_simkl_owned_metadata(info: dict) -> bool:
     return any(str(key).startswith("rating.") for key in info)
 
 
-def simkl_detail_needed(item: dict) -> bool:
-    """True when a row still needs GET /movies|tv|anime/{id} before list paint."""
-    if not isinstance(item, dict):
-        return True
-    if not _sync_row_list_paint_ready(item):
-        return True
-    info, _ = _row_info_art(item)
-    if not (info.get("plot") or info.get("overview")):
-        return True
-    if _anime_title_slots_need_detail(info):
-        return True
-    return not _has_simkl_owned_metadata(info)
-
-
 def _hydrate_sync_item_local(
     item: dict,
     *,
@@ -379,9 +403,7 @@ def hydrate_sync_items_local(items: list[dict]) -> list[dict]:
     if len(rows) <= 32:
         return [hydrator(row) for row in rows]
 
-    from resources.lib.common.thread_pool import get_shared_executor
-
-    return list(get_shared_executor().map(hydrator, rows))
+    return _parallel_map_rows(hydrator, rows)
 
 
 def _enrich_sync_item(
@@ -428,9 +450,8 @@ def _enrich_sync_item(
 
     meta_cache.clear_enrich_miss(catalog, sid)
 
-    enriched = copy.deepcopy(enriched)
-    enriched = _merge_discover_db_gaps(enriched)
-    return _apply_overlay_fields(item, enriched)
+    merged_detail = _merge_discover_db_gaps(enriched)
+    return _apply_overlay_fields(item, merged_detail)
 
 
 def enrich_sync_items(
@@ -461,9 +482,7 @@ def enrich_sync_items(
     if not use_parallel or len(rows) == 1:
         enriched = [_enrich_row(row) for row in rows]
     else:
-        from resources.lib.common.thread_pool import get_shared_executor
-
-        enriched = list(get_shared_executor().map(_enrich_row, rows))
+        enriched = _parallel_map_rows(_enrich_row, rows)
 
     enriched = [row for row in enriched if isinstance(row, dict)]
     if enriched:
@@ -476,9 +495,11 @@ def persist_enriched_items(catalog: str, items: list[dict]) -> None:
     if not items:
         return
     from resources.lib.discover.sync_bridge import insert_discover_page
+    from resources.lib.meta.paint_cache import coalesce_page_rows_paint_info
     from resources.lib.meta.paint_cache import publish_sync_rows_to_paint_store
     from resources.lib.simkl.ids import canonicalize_sync_row
 
+    items = coalesce_page_rows_paint_info(catalog, items)
     for row in items:
         canonicalize_sync_row(row)
     insert_discover_page(catalog, items, force_simkl_meta=True)
@@ -514,7 +535,6 @@ def _fetch_simkl_detail(item: dict, *, force: bool = False) -> dict:
     if not enriched:
         return item
 
-    enriched = copy.deepcopy(enriched)
     enriched["catalog"] = resolved_catalog
     merged = _merge_sync_item_rows(item, enriched)
     return _apply_overlay_fields(item, merged)
@@ -531,10 +551,7 @@ def _enrich_items(items: list[dict], *, parallel: bool, force_detail: bool = Fal
     if not parallel or len(items) == 1:
         return [_enrich_row(row) for row in items]
 
-    from resources.lib.common.thread_pool import get_shared_executor
-
-    with get_shared_executor() as executor:
-        return list(executor.map(_enrich_row, items))
+    return _parallel_map_rows(_enrich_row, items)
 
 
 def enrich_sync_items_persisted(
@@ -548,6 +565,8 @@ def enrich_sync_items_persisted(
     if not items:
         return items
 
+    from resources.lib.meta.paint_cache import coalesce_page_rows_paint_info
+
     if force_detail:
         targets = []
         for item in items:
@@ -559,6 +578,8 @@ def enrich_sync_items_persisted(
             targets.append(row)
     else:
         targets = [item for item in items if isinstance(item, dict) and simkl_detail_needed(item)]
+    if targets:
+        targets = coalesce_page_rows_paint_info(catalog, targets)
     if parallel is None:
         parallel = len(targets) > 1
 
@@ -626,7 +647,10 @@ def prepare_page_sync_for_paint(
         if ready and not page_refs_display_stamped(refs):
             publish_sync_rows_to_paint_store(catalog, ready)
 
-    if not defer_simkl_detail and any(simkl_detail_needed(item) for item in page_sync):
+    if defer_simkl_detail:
+        return page_sync
+
+    if any(simkl_detail_needed(item) for item in page_sync):
         needing = [item for item in page_sync if isinstance(item, dict) and simkl_detail_needed(item)]
         from resources.lib.modules.globals import g
 
@@ -635,26 +659,6 @@ def prepare_page_sync_for_paint(
             "info",
         )
         page_sync = enrich_page_for_paint(catalog, page_sync)
-    else:
-        thin = [item for item in page_sync if simkl_detail_needed(item)]
-        if thin:
-            from resources.lib.modules.globals import g
-
-            g.log(
-                f"Simkl library paint: fetching detail for {len(thin)} thin {catalog} row(s)",
-                "info",
-            )
-            enriched_by_id = {
-                int(row["simkl_id"]): row
-                for row in enrich_page_for_paint(catalog, thin)
-                if isinstance(row, dict) and row.get("simkl_id") is not None
-            }
-            page_sync = [
-                enriched_by_id.get(int(item["simkl_id"]), item)
-                if isinstance(item, dict) and item.get("simkl_id") is not None
-                else item
-                for item in page_sync
-            ]
     return page_sync
 
 

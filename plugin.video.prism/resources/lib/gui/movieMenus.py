@@ -30,10 +30,10 @@ class Menus:
         return SearchHistory()
 
     @cached_property
-    def bookmark_database(self):
-        from resources.lib.database.simkl_sync.bookmark import SimklSyncDatabase as BookmarkDatabase
+    def sync_database(self):
+        from resources.lib.database.session import get_sync_database
 
-        return BookmarkDatabase()
+        return get_sync_database()
 
     @cached_property
     def simkl_api(self):
@@ -147,38 +147,40 @@ class Menus:
 
     def movie_years_results(self, year):
         from resources.lib.discover.renderer import discover_list_kwargs
-        from resources.lib.meta.list_pipeline import get_list_store, make_list_id, render_list_page, seed_browse_page
+        from resources.lib.discover.sync_bridge import simkl_refs
+        from resources.lib.meta.list_pipeline import get_list_store, make_list_id
         from resources.lib.modules.globals import g
+        from resources.lib.pipeline.catalog_page import CatalogPagePipeline
 
         list_id = make_list_id(year)
         page = g.PAGE
         store = get_list_store("year")
 
-        items = store.load_page_items(
+        items = store.load_thin_page_items(
             "movie",
             list_id,
             page,
             lambda: browse.discover_by_year("movie", int(year), page, self.page_limit),
+            disk_namespace="year",
         )
         if not items:
             g.cancel_directory()
             return
 
-        seed_browse_page("movie", items)
-
-        render_list_page(
-            "paint_first",
+        CatalogPagePipeline.open_discover(
             "movie",
-            items,
+            simkl_refs(items),
             self.list_builder,
             list_kwargs=discover_list_kwargs(
                 seeded=True,
                 next_action="movieYearsMovies",
                 next_args=int(year),
                 has_next_page=len(items) >= self.page_limit,
+                catalog_pipeline=True,
+                browse_source=f"year:{year}",
+                thin_payload_rows=items,
             ),
             payload_rows=items,
-            seeded=True,
         )
 
     def movies_genres(self):

@@ -110,14 +110,25 @@ class Sources:
 
         self.source_sorter = SourceSorter(self.item_information)
 
+        from resources.lib.modules.preem_policy import (
+            PREEM_FIRST,
+            PREEM_MINIMUM,
+            PREEM_OFF,
+            load_preem_policy,
+        )
+
         self.preem_enabled = g.get_bool_setting('preem.enabled')
         self.preem_waitfor_directfiles = g.get_bool_setting("preem.waitfor.directfiles")
         self.preem_waitfor_cloudfiles = g.get_bool_setting("preem.waitfor.cloudfiles")
-        self.preem_cloudfiles = g.get_bool_setting('preem.cloudfiles')
-        self.preem_adaptive_sources = g.get_bool_setting('preem.adaptiveSources')
-        self.preem_direct_sources = g.get_bool_setting('preem.directSources')
-        self.preem_type = g.get_int_setting('preem.type')
+        self.preem_torrents_policy = load_preem_policy("torrents")
+        self.preem_hosters_policy = load_preem_policy("hosters")
+        self.preem_cloud_policy = load_preem_policy("cloud")
+        self.preem_adaptive_policy = load_preem_policy("adaptive")
+        self.preem_direct_policy = load_preem_policy("direct")
         self.preem_limit = g.get_int_setting('preem.limit')
+        self._PREEM_OFF = PREEM_OFF
+        self._PREEM_FIRST = PREEM_FIRST
+        self._PREEM_MINIMUM = PREEM_MINIMUM
         self.preem_resolutions = approved_qualities[
             g.get_int_setting("general.maxResolution") : self._get_pre_term_min()
         ]
@@ -136,10 +147,11 @@ class Sources:
             g.log(f"Pre-term-enabled: {self.preem_enabled}", 'debug')
             g.log(f"Pre-term-limit: {self.preem_limit}", 'debug')
             g.log(f"Pre-term-res: {self.preem_resolutions}", 'debug')
-            g.log(f"Pre-term-type: {self.preem_type}", 'debug')
-            g.log(f"Pre-term-cloud-files: {self.preem_cloudfiles}", 'debug')
-            g.log(f"Pre-term-adaptive-files: {self.preem_adaptive_sources}", 'debug')
-            g.log(f"Pre-term-direct-files: {self.preem_direct_sources}", 'debug')
+            g.log(f"Pre-term-torrents-policy: {self.preem_torrents_policy}", 'debug')
+            g.log(f"Pre-term-hosters-policy: {self.preem_hosters_policy}", 'debug')
+            g.log(f"Pre-term-cloud-policy: {self.preem_cloud_policy}", 'debug')
+            g.log(f"Pre-term-adaptive-policy: {self.preem_adaptive_policy}", 'debug')
+            g.log(f"Pre-term-direct-policy: {self.preem_direct_policy}", 'debug')
 
             self._handle_pre_scrape_modifiers()
             self._get_imdb_info()
@@ -478,7 +490,7 @@ class Sources:
         if self.media_type == "movie":
             return "movie"
         if self.media_type == "episode":
-            from resources.lib.simkl.anime_scraper_context import is_anime_item
+            from resources.lib.anime.scrape import is_anime_item
 
             if is_anime_item(info, self.item_information):
                 return "anime"
@@ -980,10 +992,7 @@ class Sources:
 
     @staticmethod
     def _build_simple_show_info(info):
-        from resources.lib.simkl.anime_scraper_context import (
-            build_anime_simple_info_fields,
-            is_anime_item,
-        )
+        from resources.lib.anime.scrape import build_anime_simple_info_fields, is_anime_item
         from resources.lib.simkl.field_map import tvdb_from_episode
         from resources.lib.simkl.ids import episode_num_from_info
 
@@ -1154,54 +1163,33 @@ class Sources:
         ):
             return False
 
-        if self.preem_cloudfiles and self.sources_information['statistics']['filtered']['cloudFiles']['total'] > 0:
-            monkey_requests.PRE_TERM_BLOCK = True
-            return True
-        if (
-            self.preem_adaptive_sources
-            and self.sources_information['statistics']['filtered']['adaptiveSources']['total'] > 0
-        ):
-            monkey_requests.PRE_TERM_BLOCK = True
-            return True
-        if (
-            self.preem_direct_sources
-            and self.sources_information['statistics']['filtered']['directSources']['total'] > 0
-        ):
-            monkey_requests.PRE_TERM_BLOCK = True
-            return True
-
         pre_term_log_string = 'Pre-emptively Terminated'
 
         try:
-            if (
-                self.preem_type == 0
-                and self._get_filtered_count_by_resolutions(
-                    self.preem_resolutions, self.sources_information['statistics']['filtered']['torrentsCached']
-                )
-                >= self.preem_limit
+            for policy, stats_key in (
+                (self.preem_cloud_policy, "cloudFiles"),
+                (self.preem_adaptive_policy, "adaptiveSources"),
+                (self.preem_direct_policy, "directSources"),
+                (self.preem_torrents_policy, "torrentsCached"),
+                (self.preem_hosters_policy, "hosters"),
             ):
-                return self.__preterm_block(pre_term_log_string)
-            if (
-                self.preem_type == 1
-                and self._get_filtered_count_by_resolutions(
-                    self.preem_resolutions, self.sources_information['statistics']['filtered']['hosters']
-                )
-                >= self.preem_limit
-            ):
-                return self.__preterm_block(pre_term_log_string)
-            if (
-                self.preem_type == 2
-                and self._get_filtered_count_by_resolutions(
-                    self.preem_resolutions, self.sources_information['statistics']['filtered']['torrentsCached']
-                )
-                + self._get_filtered_count_by_resolutions(
-                    self.preem_resolutions, self.sources_information['statistics']['filtered']['hosters']
-                )
-                >= self.preem_limit
-            ):
-                return self.__preterm_block(pre_term_log_string)
+                if policy == self._PREEM_OFF:
+                    continue
+                if self._preem_policy_satisfied(policy, self._preem_filtered_count(stats_key)):
+                    return self.__preterm_block(pre_term_log_string)
         except (ValueError, KeyError, IndexError) as e:
             g.log(f"Error getting data for preterm determination: {repr(e)}", "error")
+        return False
+
+    def _preem_filtered_count(self, stats_key: str) -> int:
+        bucket = self.sources_information['statistics']['filtered'][stats_key]
+        return self._get_filtered_count_by_resolutions(self.preem_resolutions, bucket)
+
+    def _preem_policy_satisfied(self, policy: int, count: int) -> bool:
+        if policy == self._PREEM_FIRST:
+            return count > 0
+        if policy == self._PREEM_MINIMUM:
+            return count >= self.preem_limit
         return False
 
     @staticmethod

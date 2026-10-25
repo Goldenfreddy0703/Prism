@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import time
 from typing import Any, NamedTuple
 
 from resources.lib.simkl.media_ref import normalize_simkl_item
@@ -15,9 +16,9 @@ from resources.lib.simkl.menu_helpers import genre_sort_segment
 
 
 def _tmdb_runtime_enabled() -> bool:
-    from resources.lib.meta.provider_settings import provider_enabled
+    from resources.lib.meta.provider_settings import tmdb_features_enabled
 
-    return provider_enabled("tmdb")
+    return tmdb_features_enabled()
 
 DISCOVER_ENDPOINTS: dict[str, dict[str, str]] = {
     "movie": {
@@ -435,15 +436,174 @@ def _should_exclude_anime_from_genre_browse(item: dict, _browse_catalog: str) ->
     return False
 
 
+def _resolve_tmdb_discover_id(tmdb_id: int, catalog: str) -> dict | None:
+    """Parallel-safe TMDB id → thin SyncRow via GET /redirect."""
+    from resources.lib.indexers.simkl import thread_simkl_api
+    from resources.lib.simkl.id_resolve import thin_sync_from_redirect
+
+    lookup_type = "movie" if catalog == "movie" else "tv"
+    match = thread_simkl_api().redirect_simkl_id(tmdb=int(tmdb_id), type=lookup_type)
+    if match:
+        simkl_id, resolved_catalog = match
+    else:
+        simkl_id = _simkl_id_from_db(tmdb_id, catalog)
+        if simkl_id is None:
+            return None
+        resolved_catalog = catalog
+    normalized = thin_sync_from_redirect(simkl_id, resolved_catalog, tmdb_id=int(tmdb_id))
+    if _should_exclude_anime_from_genre_browse(normalized, catalog):
+        return None
+    return normalized
+
+
+def _parallel_resolve_tmdb_discover_rows(rows: list[dict], catalog: str) -> dict[int, dict]:
+    tmdb_ids: list[int] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        value = row.get("id")
+        if value is None:
+            continue
+        try:
+            tmdb_ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    unique_ids = list(dict.fromkeys(tmdb_ids))
+    if not unique_ids:
+        return {}
+    from resources.lib.simkl.id_resolve import parallel_map_resolve
+
+    resolved = parallel_map_resolve(unique_ids, lambda tid: _resolve_tmdb_discover_id(tid, catalog), parallel=True)
+    return {
+        tmdb_id: row
+        for tmdb_id, row in zip(unique_ids, resolved)
+        if isinstance(row, dict) and row.get("simkl_id") is not None
+    }
+
+
+_TMDM_MULTI_GROW_CACHE: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+
+def _grow_tmdb_multi_genre_stream(
+    catalog: str,
+    with_genres: str,
+    sort_by: str,
+    min_items: int,
+) -> list[dict]:
+    """Grow TMDB multiselect results (parallel /redirect per TMDB page) until min_items or exhaust."""
+    if not _tmdb_runtime_enabled() or catalog not in ("movie", "tv"):
+        return []
+
+    key = (catalog, with_genres, sort_by)
+    state = _TMDM_MULTI_GROW_CACHE.get(key)
+    if state is None:
+        state = {
+            "items": [],
+            "tmdb_page": 1,
+            "total_pages": 1,
+            "seen_simkl_ids": set(),
+            "exhausted": False,
+        }
+        _TMDM_MULTI_GROW_CACHE[key] = state
+
+    items: list[dict] = state["items"]
+    if len(items) >= min_items or state["exhausted"]:
+        return items
+
+    tmdb = TMDBAPI()
+    media_type = "movie" if catalog == "movie" else "tv"
+    seen_simkl_ids: set[int] = state["seen_simkl_ids"]
+    current_page = int(state["tmdb_page"])
+    total_pages = int(state["total_pages"])
+    started = time.time()
+
+    while len(items) < min_items and current_page <= total_pages:
+        response = tmdb.get_json(
+            f"discover/{media_type}",
+            raw=True,
+            page=current_page,
+            language=tmdb.lang_full_code,
+            sort_by=sort_by,
+            with_genres=with_genres,
+            include_adult=False,
+        )
+        if not response:
+            state["exhausted"] = True
+            break
+        total_pages = int(response.get("total_pages") or 1)
+        rows = response.get("results") or []
+        if not rows:
+            state["exhausted"] = True
+            break
+        resolved_by_tmdb = _parallel_resolve_tmdb_discover_rows(rows, catalog)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            value = row.get("id")
+            if value is None:
+                continue
+            try:
+                tmdb_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            normalized = resolved_by_tmdb.get(tmdb_id)
+            if not normalized:
+                continue
+            simkl_id = normalized.get("simkl_id")
+            if simkl_id is not None:
+                sid = int(simkl_id)
+                if sid in seen_simkl_ids:
+                    continue
+                seen_simkl_ids.add(sid)
+            items.append(normalized)
+            if len(items) >= min_items:
+                break
+        current_page += 1
+        if current_page > total_pages:
+            state["exhausted"] = True
+            break
+
+    state["tmdb_page"] = current_page
+    state["total_pages"] = total_pages
+    elapsed_ms = int((time.time() - started) * 1000)
+    g.log(
+        f"TMDB multi-genre grow catalog={catalog} genres={with_genres} "
+        f"items={len(items)} need={min_items} tmdb_page={current_page} grow_ms={elapsed_ms}",
+        "debug",
+    )
+    return items
+
+
+def _tmdb_multi_grow_exhausted(catalog: str, with_genres: str, sort_by: str) -> bool:
+    state = _TMDM_MULTI_GROW_CACHE.get((catalog, with_genres, sort_by))
+    if not state:
+        return False
+    return bool(state.get("exhausted"))
+
+
+def _multi_genre_menu_has_next(
+    stream: list[dict],
+    chunk: list[dict],
+    page_limit: int,
+    end: int,
+    *,
+    grow_exhausted: bool,
+) -> bool:
+    if end < len(stream):
+        return True
+    return not grow_exhausted and len(chunk) >= page_limit
+
+
 def discover_by_tmdb_genres(
     catalog: str,
     genre_ids: str,
     page_limit: int,
     *,
+    menu_page: int = 1,
     tmdb_page: int = 1,
     tmdb_offset: int = 0,
 ) -> GenreBrowsePage:
-    """TMDB discover for comma-separated genre IDs (AND), bridged through Simkl."""
+    """TMDB multiselect: cached parallel redirect stream, sliced by Kodi menu page."""
     if not _tmdb_runtime_enabled():
         return GenreBrowsePage([], False)
     if catalog not in ("movie", "tv"):
@@ -459,72 +619,19 @@ def discover_by_tmdb_genres(
 
     with_genres = ",".join(str(genre_id) for genre_id in parsed_ids)
     sort_by = tmdb_sort_for_genre_setting(catalog)
-    tmdb = TMDBAPI()
-    media_type = "movie" if catalog == "movie" else "tv"
-
-    results: list[dict] = []
-    seen_simkl_ids: set[int] = set()
-    current_page = max(1, int(tmdb_page))
-    row_offset = max(0, int(tmdb_offset))
-    total_pages = current_page
-
-    while len(results) < page_limit:
-        if current_page > total_pages:
-            break
-
-        response = tmdb.get_json(
-            f"discover/{media_type}",
-            raw=True,
-            page=current_page,
-            language=tmdb.lang_full_code,
-            sort_by=sort_by,
-            with_genres=with_genres,
-            include_adult=False,
-        )
-        if not response:
-            break
-
-        total_pages = int(response.get("total_pages") or 1)
-        if current_page > total_pages:
-            break
-
-        rows = response.get("results") or []
-        if row_offset >= len(rows):
-            current_page += 1
-            row_offset = 0
-            continue
-
-        for index in range(row_offset, len(rows)):
-            row = rows[index]
-            tmdb_id = row.get("id")
-            if not tmdb_id:
-                continue
-            normalized = resolve_tmdb_to_simkl(int(tmdb_id), catalog)
-            if not normalized:
-                continue
-            if _should_exclude_anime_from_genre_browse(normalized, catalog):
-                continue
-            simkl_id = normalized.get("simkl_id")
-            if simkl_id is not None:
-                key = int(simkl_id)
-                if key in seen_simkl_ids:
-                    continue
-                seen_simkl_ids.add(key)
-            results.append(normalized)
-            if len(results) >= page_limit:
-                next_offset = index + 1
-                has_next = (next_offset < len(rows)) or (current_page < total_pages)
-                return GenreBrowsePage(
-                    results,
-                    has_next,
-                    current_page if next_offset < len(rows) else current_page + 1,
-                    next_offset if next_offset < len(rows) else 0,
-                )
-
-        current_page += 1
-        row_offset = 0
-
-    return GenreBrowsePage(results, False)
+    page_index = max(1, int(menu_page))
+    stream = _grow_tmdb_multi_genre_stream(catalog, with_genres, sort_by, page_index * page_limit)
+    start = (page_index - 1) * page_limit
+    end = start + page_limit
+    chunk = stream[start:end]
+    has_next = _multi_genre_menu_has_next(
+        stream,
+        chunk,
+        page_limit,
+        end,
+        grow_exhausted=_tmdb_multi_grow_exhausted(catalog, with_genres, sort_by),
+    )
+    return GenreBrowsePage(chunk, has_next, page_index + 1 if has_next else page_index, 0)
 
 
 def _merge_tenrai_genre_rows(*lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -588,150 +695,190 @@ def tenrai_sort_for_genre_setting() -> tuple[str, str]:
     return mapping.get(segment, ("popularity", "asc"))
 
 
-def _tenrai_genre_row_to_result(row: dict, seen_simkl_ids: set[int]) -> dict | None:
-    mal_id = row.get("mal_id")
-    if not mal_id:
+def _resolve_mal_discover_id(mal_id: int) -> dict | None:
+    from resources.lib.indexers.simkl import thread_simkl_api
+    from resources.lib.simkl.id_resolve import thin_sync_from_redirect
+
+    match = thread_simkl_api().redirect_simkl_id(mal=int(mal_id))
+    if not match:
         return None
-    normalized = resolve_mal_to_simkl(int(mal_id))
-    if not normalized:
-        return None
-    simkl_id = normalized.get("simkl_id")
-    if simkl_id is not None:
-        key = int(simkl_id)
-        if key in seen_simkl_ids:
-            return None
-        seen_simkl_ids.add(key)
-    return normalized
+    simkl_id, resolved_catalog = match
+    return thin_sync_from_redirect(simkl_id, resolved_catalog, mal_id=int(mal_id))
 
 
-def _discover_by_tenrai_genres_and(
-    tenrai,
-    genre_ids: str,
-    page_limit: int,
-    *,
-    tenrai_page: int,
-    row_offset: int,
+def _parallel_resolve_mal_rows(rows: list[dict]) -> dict[int, dict]:
+    mal_ids: list[int] = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("mal_id") is None:
+            continue
+        try:
+            mal_ids.append(int(row["mal_id"]))
+        except (TypeError, ValueError):
+            continue
+    unique_ids = list(dict.fromkeys(mal_ids))
+    if not unique_ids:
+        return {}
+    from resources.lib.simkl.id_resolve import parallel_map_resolve
+
+    resolved = parallel_map_resolve(unique_ids, _resolve_mal_discover_id, parallel=True)
+    return {
+        mal_id: row
+        for mal_id, row in zip(unique_ids, resolved)
+        if isinstance(row, dict) and row.get("simkl_id") is not None
+    }
+
+
+def _append_tenrai_resolved_rows(
+    results: list[dict],
+    rows: list[dict],
+    resolved_by_mal: dict[int, dict],
+    seen_simkl_ids: set[int],
+) -> None:
+    for row in rows:
+        if not isinstance(row, dict) or row.get("mal_id") is None:
+            continue
+        try:
+            mal_id = int(row["mal_id"])
+        except (TypeError, ValueError):
+            continue
+        normalized = resolved_by_mal.get(mal_id)
+        if not normalized:
+            continue
+        simkl_id = normalized.get("simkl_id")
+        if simkl_id is not None:
+            key = int(simkl_id)
+            if key in seen_simkl_ids:
+                continue
+            seen_simkl_ids.add(key)
+        results.append(normalized)
+
+
+_TENRAI_MULTI_GROW_CACHE: dict[tuple[str, str, str, bool, bool], dict[str, Any]] = {}
+
+
+def _grow_tenrai_multi_genre_stream(
+    with_genres: str,
     order_by: str,
     sort: str,
     sfw: bool,
-) -> GenreBrowsePage:
-    """Tenrai comma-separated genres are ANDed (all tags must match)."""
-    from resources.lib.indexers.tenrai import TENRAI_PAGE_SIZE
+    *,
+    or_mode: bool,
+    min_items: int,
+) -> list[dict]:
+    from resources.lib.indexers.tenrai import TenraiAPI, TENRAI_PAGE_SIZE
 
-    results: list[dict] = []
-    seen_simkl_ids: set[int] = set()
-    current_page = max(1, int(tenrai_page))
-    offset = max(0, int(row_offset))
+    key = (with_genres, order_by, sort, sfw, or_mode)
+    state = _TENRAI_MULTI_GROW_CACHE.get(key)
+    if state is None:
+        parsed_ids: list[int] = []
+        for part in str(with_genres or "").split(","):
+            part = part.strip()
+            if part.isdigit():
+                parsed_ids.append(int(part))
+        state = {
+            "items": [],
+            "seen_simkl_ids": set(),
+            "exhausted": False,
+            "or_mode": or_mode,
+            "parsed_ids": parsed_ids,
+            "and_page": 1,
+            "or_index": 0,
+            "or_page": 1,
+        }
+        _TENRAI_MULTI_GROW_CACHE[key] = state
 
-    while len(results) < page_limit:
-        response = tenrai.search_anime(
-            page=current_page,
-            limit=TENRAI_PAGE_SIZE,
-            genres=genre_ids,
-            order_by=order_by,
-            sort=sort,
-            sfw=sfw,
-        )
-        if not response:
-            break
+    items: list[dict] = state["items"]
+    if len(items) >= min_items or state["exhausted"]:
+        return items
 
-        pagination = response.get("pagination") or {}
-        has_next_page = bool(pagination.get("has_next_page"))
-        rows = response.get("data") or []
+    tenrai = TenraiAPI()
+    seen_simkl_ids: set[int] = state["seen_simkl_ids"]
+    started = time.time()
 
-        if offset >= len(rows):
-            if not has_next_page:
+    if not state["or_mode"]:
+        current_page = int(state["and_page"])
+        while len(items) < min_items:
+            response = tenrai.search_anime(
+                page=current_page,
+                limit=TENRAI_PAGE_SIZE,
+                genres=with_genres,
+                order_by=order_by,
+                sort=sort,
+                sfw=sfw,
+            )
+            if not response:
+                state["exhausted"] = True
+                break
+            pagination = response.get("pagination") or {}
+            rows = response.get("data") or []
+            if not rows:
+                state["exhausted"] = True
+                break
+            resolved_by_mal = _parallel_resolve_mal_rows(rows)
+            _append_tenrai_resolved_rows(items, rows, resolved_by_mal, seen_simkl_ids)
+            if len(items) >= min_items:
+                break
+            if not pagination.get("has_next_page"):
+                state["exhausted"] = True
                 break
             current_page += 1
-            offset = 0
-            continue
-
-        for index in range(offset, len(rows)):
-            normalized = _tenrai_genre_row_to_result(rows[index], seen_simkl_ids)
-            if not normalized:
+        state["and_page"] = current_page
+    else:
+        parsed_ids: list[int] = state["parsed_ids"]
+        or_index = int(state["or_index"])
+        or_page = int(state["or_page"])
+        while len(items) < min_items and or_index < len(parsed_ids):
+            genre_id = parsed_ids[or_index]
+            response = tenrai.search_anime(
+                page=or_page,
+                limit=TENRAI_PAGE_SIZE,
+                genres=str(genre_id),
+                order_by=order_by,
+                sort=sort,
+                sfw=sfw,
+            )
+            if not response:
+                or_index += 1
+                or_page = 1
                 continue
-            results.append(normalized)
-            if len(results) >= page_limit:
-                next_offset = index + 1
-                page_has_next = (next_offset < len(rows)) or has_next_page
-                return GenreBrowsePage(
-                    results,
-                    page_has_next,
-                    current_page if next_offset < len(rows) else current_page + 1,
-                    next_offset if next_offset < len(rows) else 0,
-                )
-
-        if not has_next_page:
-            break
-        current_page += 1
-        offset = 0
-
-    return GenreBrowsePage(results, False)
-
-
-def _discover_by_tenrai_genres_or(
-    tenrai,
-    parsed_ids: list[int],
-    page_limit: int,
-    *,
-    tenrai_page: int,
-    order_by: str,
-    sort: str,
-    sfw: bool,
-) -> GenreBrowsePage:
-    """Union browse when AND returns nothing (e.g. Hentai + Ecchi + Erotica)."""
-    from resources.lib.indexers.tenrai import TENRAI_PAGE_SIZE
-
-    streams: list[dict] = []
-    has_next_page = False
-    for genre_id in parsed_ids:
-        response = tenrai.search_anime(
-            page=max(1, int(tenrai_page)),
-            limit=TENRAI_PAGE_SIZE,
-            genres=str(genre_id),
-            order_by=order_by,
-            sort=sort,
-            sfw=sfw,
-        )
-        if not response:
-            streams.append({"rows": [], "index": 0})
-            continue
-        pagination = response.get("pagination") or {}
-        has_next_page = has_next_page or bool(pagination.get("has_next_page"))
-        streams.append({"rows": response.get("data") or [], "index": 0})
-
-    results: list[dict] = []
-    seen_simkl_ids: set[int] = set()
-    while len(results) < page_limit:
-        progressed = False
-        for stream in streams:
-            rows = stream["rows"]
-            index = stream["index"]
-            if index >= len(rows):
+            pagination = response.get("pagination") or {}
+            rows = response.get("data") or []
+            if not rows:
+                or_index += 1
+                or_page = 1
                 continue
-            normalized = _tenrai_genre_row_to_result(rows[index], seen_simkl_ids)
-            stream["index"] = index + 1
-            progressed = True
-            if normalized:
-                results.append(normalized)
-                if len(results) >= page_limit:
-                    return GenreBrowsePage(results, has_next_page)
-        if not progressed:
-            break
+            resolved_by_mal = _parallel_resolve_mal_rows(rows)
+            _append_tenrai_resolved_rows(items, rows, resolved_by_mal, seen_simkl_ids)
+            if len(items) >= min_items:
+                break
+            if pagination.get("has_next_page"):
+                or_page += 1
+            else:
+                or_index += 1
+                or_page = 1
+        state["or_index"] = or_index
+        state["or_page"] = or_page
+        if or_index >= len(parsed_ids):
+            state["exhausted"] = True
 
-    return GenreBrowsePage(results, has_next_page)
+    elapsed_ms = int((time.time() - started) * 1000)
+    g.log(
+        f"Tenrai multi-genre grow genres={with_genres} or_mode={or_mode} "
+        f"items={len(items)} need={min_items} grow_ms={elapsed_ms}",
+        "debug",
+    )
+    return items
 
 
 def discover_by_tenrai_genres(
     genre_ids: str,
     page_limit: int,
     *,
+    menu_page: int = 1,
     tenrai_page: int = 1,
     row_offset: int = 0,
 ) -> GenreBrowsePage:
-    """Tenrai anime search for comma-separated MAL genre ids, bridged through Simkl."""
-    from resources.lib.indexers.tenrai import TenraiAPI
-
+    """Tenrai multiselect: cached parallel redirect stream, sliced by Kodi menu page."""
     parsed_ids: list[int] = []
     for part in str(genre_ids or "").split(","):
         part = part.strip()
@@ -748,46 +895,46 @@ def discover_by_tenrai_genres(
         f"sfw={sfw} (base list={genre_sort_segment('anime')})",
         "debug",
     )
-    tenrai = TenraiAPI()
 
-    if len(parsed_ids) == 1:
-        return _discover_by_tenrai_genres_and(
-            tenrai,
+    page_index = max(1, int(menu_page))
+    min_items = page_index * page_limit
+    or_mode_used = False
+    stream = _grow_tenrai_multi_genre_stream(
+        with_genres,
+        order_by,
+        sort,
+        sfw,
+        or_mode=False,
+        min_items=min_items,
+    )
+    if not stream and len(parsed_ids) > 1:
+        g.log(
+            f"Tenrai AND genre query returned no rows for {with_genres}; retrying with OR",
+            "debug",
+        )
+        or_mode_used = True
+        stream = _grow_tenrai_multi_genre_stream(
             with_genres,
-            page_limit,
-            tenrai_page=tenrai_page,
-            row_offset=row_offset,
-            order_by=order_by,
-            sort=sort,
-            sfw=sfw,
+            order_by,
+            sort,
+            sfw,
+            or_mode=True,
+            min_items=min_items,
         )
 
-    and_page = _discover_by_tenrai_genres_and(
-        tenrai,
-        with_genres,
+    start = (page_index - 1) * page_limit
+    end = start + page_limit
+    chunk = stream[start:end]
+    tenrai_key = (with_genres, order_by, sort, sfw, or_mode_used)
+    tenrai_state = _TENRAI_MULTI_GROW_CACHE.get(tenrai_key) or {}
+    has_next = _multi_genre_menu_has_next(
+        stream,
+        chunk,
         page_limit,
-        tenrai_page=tenrai_page,
-        row_offset=row_offset,
-        order_by=order_by,
-        sort=sort,
-        sfw=sfw,
+        end,
+        grow_exhausted=bool(tenrai_state.get("exhausted")),
     )
-    if and_page.items:
-        return and_page
-
-    g.log(
-        f"Tenrai AND genre query returned no rows for {with_genres}; retrying with OR",
-        "debug",
-    )
-    return _discover_by_tenrai_genres_or(
-        tenrai,
-        parsed_ids,
-        page_limit,
-        tenrai_page=tenrai_page,
-        order_by=order_by,
-        sort=sort,
-        sfw=sfw,
-    )
+    return GenreBrowsePage(chunk, has_next, page_index + 1 if has_next else page_index, 0)
 
 
 def render_discover_endpoint(catalog: str, endpoint: str) -> bool:
@@ -799,54 +946,35 @@ def render_discover_endpoint(catalog: str, endpoint: str) -> bool:
     return True
 
 
-def _catalog_from_simkl_match(row: dict, fallback: str) -> str:
-    from resources.lib.simkl.catalog import resolve_item_catalog
-
-    return resolve_item_catalog(row, fallback)
-
-
 def _simkl_id_from_db(tmdb_id: int, catalog: str) -> int | None:
-    from resources.lib.database.simkl_sync.movies import SimklSyncDatabase as MoviesDB
-    from resources.lib.database.simkl_sync.shows import SimklSyncDatabase as ShowsDB
+    from resources.lib.database.session import get_sync_database
 
+    db = get_sync_database()
     if catalog == "movie":
-        row = MoviesDB().fetchone("SELECT simkl_id FROM movies WHERE tmdb_id = ?", (int(tmdb_id),))
+        row = db.fetchone("SELECT simkl_id FROM movies WHERE tmdb_id = ?", (int(tmdb_id),))
+    elif catalog == "anime":
+        row = db.fetchone(
+            "SELECT simkl_id FROM shows WHERE catalog = 'anime' AND tmdb_id = ?",
+            (int(tmdb_id),),
+        )
     else:
-        row = ShowsDB().fetchone("SELECT simkl_id FROM shows WHERE tmdb_id = ?", (int(tmdb_id),))
+        row = db.fetchone(
+            "SELECT simkl_id FROM shows WHERE catalog = 'tv' AND tmdb_id = ?",
+            (int(tmdb_id),),
+        )
     if row and row.get("simkl_id") is not None:
         return int(row["simkl_id"])
     return None
 
 
-def _simkl_id_from_search_row(row: dict) -> int | None:
-    ids = row.get("ids") or {}
-    value = ids.get("simkl_id") if ids.get("simkl_id") is not None else ids.get("simkl")
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _simkl_search_id_match(tmdb_id: int, catalog: str) -> tuple[int, str] | None:
-    """Resolve TMDB id via GET /search/id; return (simkl_id, catalog) or None."""
-    api = SimklAPI()
+def _simkl_redirect_tmdb_match(tmdb_id: int, catalog: str) -> tuple[int, str] | None:
+    """Resolve TMDB id via GET /redirect (Location header only)."""
     lookup_type = "movie" if catalog == "movie" else "tv"
-    payload = api.get_public_json(
-        "/search/id",
-        tmdb=int(tmdb_id),
-        type=lookup_type,
-    )
-    if not payload:
-        return None
-    row = payload[0] if isinstance(payload, list) else payload
-    if not isinstance(row, dict):
-        return None
-    simkl_id = _simkl_id_from_search_row(row)
-    if simkl_id is None:
-        return None
-    return simkl_id, _catalog_from_simkl_match(row, catalog)
+    return SimklAPI().redirect_simkl_id(tmdb=int(tmdb_id), type=lookup_type)
+
+
+def _simkl_redirect_mal_match(mal_id: int) -> tuple[int, str] | None:
+    return SimklAPI().redirect_simkl_id(mal=int(mal_id))
 
 
 def _attach_tmdb_id(sync: dict, tmdb_id: int) -> dict:
@@ -858,11 +986,23 @@ def _attach_tmdb_id(sync: dict, tmdb_id: int) -> dict:
     return sync
 
 
-def _simkl_lookup_by_tmdb_api(tmdb_id: int, catalog: str) -> dict | None:
-    match = _simkl_search_id_match(tmdb_id, catalog)
-    if not match:
-        return None
-    simkl_id, resolved_catalog = match
+def _simkl_lookup_by_tmdb_api(tmdb_id: int, catalog: str, *, with_detail: bool = True) -> dict | None:
+    from resources.lib.simkl.id_resolve import thin_sync_from_redirect
+
+    match = _simkl_redirect_tmdb_match(tmdb_id, catalog)
+    if match:
+        simkl_id, resolved_catalog = match
+    else:
+        simkl_id = _simkl_id_from_db(tmdb_id, catalog)
+        if simkl_id is None:
+            return None
+        resolved_catalog = catalog
+        g.log(
+            f"Simkl /redirect miss for tmdb={tmdb_id} ({catalog}); using local simkl_id={simkl_id}",
+            "debug",
+        )
+    if not with_detail:
+        return thin_sync_from_redirect(simkl_id, resolved_catalog, tmdb_id=int(tmdb_id))
     sync = _simkl_detail_sync_dict(simkl_id, resolved_catalog)
     if not sync:
         g.log(
@@ -874,32 +1014,22 @@ def _simkl_lookup_by_tmdb_api(tmdb_id: int, catalog: str) -> dict | None:
 
 
 @use_cache(cache_hours=24)
-def _simkl_lookup_by_tmdb_cached(tmdb_id: int, catalog: str) -> dict | None:
-    return _simkl_lookup_by_tmdb_api(tmdb_id, catalog)
+def _simkl_lookup_by_tmdb_cached(tmdb_id: int, catalog: str, with_detail: bool = True) -> dict | None:
+    return _simkl_lookup_by_tmdb_api(tmdb_id, catalog, with_detail=with_detail)
 
 
 def _simkl_lookup_by_tmdb(tmdb_id: int, catalog: str) -> dict | None:
     return _simkl_lookup_by_tmdb_cached(int(tmdb_id), catalog)
 
 
-def resolve_tmdb_to_simkl(tmdb_id: int, catalog: str) -> dict | None:
-    normalized = _simkl_lookup_by_tmdb_cached(tmdb_id, catalog)
-    if normalized:
-        normalized = copy.deepcopy(normalized)
-        if not normalized.get("catalog"):
-            normalized["catalog"] = catalog
-        return normalized
-
-    simkl_id = _simkl_id_from_db(tmdb_id, catalog)
-    if simkl_id is not None:
-        g.log(
-            f"Simkl /search/id miss for tmdb={tmdb_id} ({catalog}); trying local simkl_id={simkl_id}",
-            "debug",
-        )
-        sync = _simkl_detail_sync_dict(simkl_id, catalog)
-        if sync:
-            return copy.deepcopy(_attach_tmdb_id(sync, tmdb_id))
-    return None
+def resolve_tmdb_to_simkl(tmdb_id: int, catalog: str, *, with_detail: bool = True) -> dict | None:
+    normalized = _simkl_lookup_by_tmdb_cached(tmdb_id, catalog, with_detail=with_detail)
+    if not normalized:
+        return None
+    normalized = copy.deepcopy(normalized)
+    if not normalized.get("catalog"):
+        normalized["catalog"] = catalog
+    return normalized
 
 
 def search_people(query: str, limit: int = 20) -> list[dict]:
@@ -983,21 +1113,67 @@ def get_person_details(person_id: int) -> dict:
     return response if isinstance(response, dict) else {}
 
 
-def combined_credits_by_person(person_id: int, page: int, page_limit: int) -> list[dict]:
-    """Page through TMDB cast credits; keep only titles Simkl resolves via /search/id."""
+def _resolve_person_credit_redirect(credit: dict) -> dict | None:
+    """Parallel-safe TMDB credit → thin SyncRow via GET /redirect (per-thread Simkl client)."""
+    from resources.lib.indexers.simkl import thread_simkl_api
+    from resources.lib.simkl.id_resolve import thin_sync_from_redirect
+
+    tmdb_id = _tmdb_id_from_credit(credit)
+    if tmdb_id is None:
+        return None
+    catalog = credit_catalog(credit)
+    lookup_type = "movie" if catalog == "movie" else "tv"
+    match = thread_simkl_api().redirect_simkl_id(tmdb=int(tmdb_id), type=lookup_type)
+    if match:
+        simkl_id, resolved_catalog = match
+    else:
+        simkl_id = _simkl_id_from_db(tmdb_id, catalog)
+        if simkl_id is None:
+            return None
+        resolved_catalog = catalog
+    normalized = thin_sync_from_redirect(simkl_id, resolved_catalog, tmdb_id=int(tmdb_id))
+    role = credit.get("character") or credit.get("job")
+    if role:
+        normalized["_credit_role"] = str(role)
+    return normalized
+
+
+@use_cache(cache_hours=24)
+def _person_filmography_resolved_stream(person_id: int) -> list[dict | None]:
+    """TMDB popularity-ordered filmography rows (parallel /redirect), cached per person."""
     cast = _dedupe_person_credits(get_person_combined_cast(person_id))
+    if not cast:
+        return []
+    from resources.lib.simkl.id_resolve import parallel_map_resolve
+
+    started = time.time()
+    parallel = len(cast) > 1
+    rows = parallel_map_resolve(cast, _resolve_person_credit_redirect, parallel=parallel)
+    elapsed_ms = int((time.time() - started) * 1000)
+    hits = sum(1 for row in rows if isinstance(row, dict) and row.get("simkl_id") is not None)
+    g.log(
+        f"Actor filmography person={person_id}: parallel redirect resolve "
+        f"credits={len(cast)} hits={hits} parallel={parallel} resolve_ms={elapsed_ms}",
+        "debug",
+    )
+    return rows
+
+
+def _paginate_person_filmography_stream(
+    stream: list,
+    *,
+    page: int,
+    page_limit: int,
+) -> tuple[list[dict], int, int]:
+    """Slice a cached resolve stream (mapped-index pagination, same as legacy sequential scan)."""
     skip = max(0, (page - 1) * page_limit)
     results: list[dict] = []
     mapped = 0
     seen_simkl: set[int] = set()
+    cast_len = len(stream)
 
-    for credit in cast:
-        tmdb_id = _tmdb_id_from_credit(credit)
-        if tmdb_id is None:
-            continue
-        catalog = credit_catalog(credit)
-        normalized = resolve_tmdb_to_simkl(tmdb_id, catalog)
-        if not normalized:
+    for normalized in stream:
+        if not isinstance(normalized, dict):
             continue
         simkl_id = normalized.get("simkl_id")
         if simkl_id is None:
@@ -1010,38 +1186,28 @@ def combined_credits_by_person(person_id: int, page: int, page_limit: int) -> li
         if skip > 0:
             skip -= 1
             continue
-        role = credit.get("character") or credit.get("job")
-        if role:
-            normalized["_credit_role"] = str(role)
+        if normalized.get("_credit_role"):
             results.append(normalized)
         if len(results) >= page_limit:
             break
 
+    return results, mapped, cast_len
+
+
+def combined_credits_by_person(person_id: int, page: int, page_limit: int) -> list[dict]:
+    """Page TMDB filmography; Simkl IDs from cached parallel /redirect stream."""
+    stream = _person_filmography_resolved_stream(int(person_id))
+    results, mapped, cast_len = _paginate_person_filmography_stream(
+        stream,
+        page=page,
+        page_limit=page_limit,
+    )
     g.log(
         f"Actor filmography person={person_id} page={page}: "
-        f"{len(results)} Simkl titles ({mapped} mapped in scan, {len(cast)} TMDB credits total)",
+        f"{len(results)} Simkl titles ({mapped} mapped in scan, {cast_len} TMDB credits total)",
         "debug",
     )
     return results
-
-
-def _simkl_search_mal_match(mal_id: int) -> tuple[int, str] | None:
-    """Resolve MAL id via GET /search/id; return (simkl_id, catalog) or None."""
-    api = SimklAPI()
-    payload = api.get_public_json(
-        "/search/id",
-        mal=int(mal_id),
-        type="anime",
-    )
-    if not payload:
-        return None
-    row = payload[0] if isinstance(payload, list) else payload
-    if not isinstance(row, dict):
-        return None
-    simkl_id = _simkl_id_from_search_row(row)
-    if simkl_id is None:
-        return None
-    return simkl_id, _catalog_from_simkl_match(row, "anime")
 
 
 def _attach_mal_id(sync: dict, mal_id: int) -> dict:
@@ -1055,11 +1221,15 @@ def _attach_mal_id(sync: dict, mal_id: int) -> dict:
     return sync
 
 
-def _simkl_lookup_by_mal_api(mal_id: int) -> dict | None:
-    match = _simkl_search_mal_match(mal_id)
+def _simkl_lookup_by_mal_api(mal_id: int, *, with_detail: bool = True) -> dict | None:
+    from resources.lib.simkl.id_resolve import thin_sync_from_redirect
+
+    match = _simkl_redirect_mal_match(mal_id)
     if not match:
         return None
     simkl_id, resolved_catalog = match
+    if not with_detail:
+        return thin_sync_from_redirect(simkl_id, resolved_catalog, mal_id=int(mal_id))
     sync = _simkl_detail_sync_dict(simkl_id, resolved_catalog)
     if not sync:
         g.log(
@@ -1071,12 +1241,12 @@ def _simkl_lookup_by_mal_api(mal_id: int) -> dict | None:
 
 
 @use_cache(cache_hours=24)
-def _simkl_lookup_by_mal_cached(mal_id: int) -> dict | None:
-    return _simkl_lookup_by_mal_api(mal_id)
+def _simkl_lookup_by_mal_cached(mal_id: int, with_detail: bool = True) -> dict | None:
+    return _simkl_lookup_by_mal_api(mal_id, with_detail=with_detail)
 
 
-def resolve_mal_to_simkl(mal_id: int) -> dict | None:
-    normalized = _simkl_lookup_by_mal_cached(int(mal_id))
+def resolve_mal_to_simkl(mal_id: int, *, with_detail: bool = True) -> dict | None:
+    normalized = _simkl_lookup_by_mal_cached(int(mal_id), with_detail=with_detail)
     if not normalized:
         return None
     normalized = copy.deepcopy(normalized)

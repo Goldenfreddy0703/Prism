@@ -140,23 +140,44 @@ def run_drilldown_prefetch_invoke(params: dict[str, Any] | None) -> None:
         import time as _time
 
         from resources.lib.database.session import get_sync_database
+        from resources.lib.database.simkl_sync.milling import fetch_raw_show_episodes
 
         start = _time.time()
-        milled = premill_show_episodes(int(show_id), catalog=params.get("catalog"), max_seasons=1)
-        remaining = get_sync_database()._next_season_needing_episode_mill(int(show_id))
+        db = get_sync_database()
+        catalog = str(params.get("catalog") or db.show_catalog(int(show_id)) or "tv")
+        slug = db._meta_slug(int(show_id), "shows")
+        episodes = fetch_raw_show_episodes(int(show_id), catalog, slug=slug, api=db.simkl_api)
         g.log(
-            f"drilldown_prefetch complete show={show_id} seasons_milled={milled} "
-            f"remaining={remaining is not None} ms={(_time.time() - start) * 1000:.0f}",
+            f"drilldown_prefetch raw warm show={show_id} catalog={catalog} "
+            f"episodes={len(episodes or [])} ms={(_time.time() - start) * 1000:.0f}",
             "debug",
         )
-        if remaining is None:
-            _mark_done(key)
-        elif milled > 0 and not _should_abort_prefetch():
-            schedule_show_episode_premill(int(show_id), catalog=params.get("catalog"))
+        _mark_done(key)
     except Exception:
         g.log_stacktrace()
     finally:
         _set_in_flight(key, False)
+
+
+def schedule_watching_show_raw_prefetch(db, *, catalog: str, limit: int = 12) -> None:
+    """Warm raw episode JSON for page-1 watching shows (library hub background)."""
+    refs = db.get_shows_by_simkl_status("watching", catalog=catalog) or []
+    show_ids = [int(ref["simkl_id"]) for ref in refs[:limit] if ref.get("simkl_id") is not None]
+    if not show_ids:
+        return
+
+    def _warm() -> None:
+        from resources.lib.database.simkl_sync.milling import fetch_raw_show_episodes
+
+        for show_id in show_ids:
+            if _should_abort_prefetch():
+                return
+            slug = db._meta_slug(int(show_id), "shows")
+            fetch_raw_show_episodes(int(show_id), catalog, slug=slug, api=db.simkl_api)
+
+    from resources.lib.common.thread_pool import defer_background
+
+    defer_background(_warm, name=f"prism-library-raw-episodes-{catalog}")
 
 
 def premill_show_episodes(

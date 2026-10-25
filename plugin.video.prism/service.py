@@ -21,6 +21,13 @@ from resources.lib.modules.prismMonitor import PrismMonitor
 from resources.lib.modules.update_news import do_update_news
 from resources.lib.modules.manual_timezone import validate_timezone_detected
 
+_PLUGIN_BASE = "plugin://plugin.video.prism/"
+
+# Seren service.py: one housekeeping batch, then sleep 60 * randint(13, 17) minutes before the next.
+_MAINTENANCE_BATCH_INTERVAL_MIN = (13, 17)
+# Simkl activity sync is throttled to 5 minutes in simkl_sync; poll during the long sleep only.
+_SIMKL_SYNC_POLL_SEC = 5 * 60
+
 
 def _service_shutdown() -> None:
     """Service exit hook."""
@@ -49,7 +56,10 @@ def _run_kodi_watched_bridge_poller(monitor: PrismMonitor) -> None:
         while not monitor.abortRequested():
             if bridge_enabled():
                 try:
-                    scan_kodi_watched_bridge(trigger="poller")
+                    from resources.lib.common.background_coordinator import idle_ok_for_background_work
+
+                    if idle_ok_for_background_work():
+                        scan_kodi_watched_bridge(trigger="poller")
                 except Exception:
                     g.log_stacktrace()
             if monitor.waitForAbort(2):
@@ -58,11 +68,47 @@ def _run_kodi_watched_bridge_poller(monitor: PrismMonitor) -> None:
         g.log_stacktrace()
 
 
+def _run_parent_folder_refresh_poller(monitor: PrismMonitor) -> None:
+    """Repaint deferred parent TV lists when the user backs out of drilldown."""
+    try:
+        from resources.lib.simkl.menu_parent_refresh import poll_pending_parent_folder_refresh
+
+        while not monitor.abortRequested():
+            try:
+                from resources.lib.common.background_coordinator import idle_ok_for_background_work
+
+                if idle_ok_for_background_work():
+                    poll_pending_parent_folder_refresh()
+            except Exception:
+                g.log_stacktrace()
+            if monitor.waitForAbort(0.5):
+                break
+    except Exception:
+        g.log_stacktrace()
+
+
+def _run_plugin(action: str) -> None:
+    xbmc.executebuiltin(f'RunPlugin("{_PLUGIN_BASE}?action={action}")')
+
+
 g.init_globals(sys.argv)
 from resources.lib.common.backup_restore import apply_deferred_db_restore
 
 apply_deferred_db_restore()
 do_version_change()
+
+_migration_skip_release_notes = False
+try:
+    from resources.lib.common.maintenance import consume_deferred_wipe_at_startup
+
+    if consume_deferred_wipe_at_startup():
+        _migration_skip_release_notes = True
+    else:
+        from resources.lib.modules.release_migration import maybe_show_migration_wipe_dialog
+
+        _migration_skip_release_notes = maybe_show_migration_wipe_dialog()
+except Exception:
+    g.log_stacktrace()
 
 g.log("##################  STARTING SERVICE  ######################")
 g.log(f"### {g.ADDON_ID} {g.VERSION}")
@@ -87,6 +133,7 @@ except Exception:
 monitor = PrismMonitor()
 _long_life_thread: threading.Thread | None = None
 _bridge_poller_thread: threading.Thread | None = None
+_parent_refresh_poller_thread: threading.Thread | None = None
 try:
     _long_life_thread = threading.Thread(
         target=_run_long_life_manager,
@@ -101,8 +148,16 @@ try:
         name="prism-kodi-watched-bridge",
     )
     _bridge_poller_thread.start()
+    _parent_refresh_poller_thread = threading.Thread(
+        target=_run_parent_folder_refresh_poller,
+        args=(monitor,),
+        daemon=True,
+        name="prism-parent-folder-refresh",
+    )
+    _parent_refresh_poller_thread.start()
 
-    do_update_news()
+    if not _migration_skip_release_notes:
+        do_update_news()
     validate_timezone_detected()
     try:
         g.clear_kodi_bookmarks()
@@ -112,63 +167,37 @@ try:
             "warning",
         )
 
-    from resources.lib.modules.cache_maintenance import (
-        process_pending_torrent_cache_cleanup,
-        queue_torrent_cache_cleanup,
-    )
-
-    queue_torrent_cache_cleanup()
+    _run_plugin("torrentCacheCleanup")
 
     while not monitor.abortRequested():
-        if monitor.waitForAbort(0):
-            break
-
+        _run_plugin("runMaintenance")
+        if not g.wait_for_abort(15):
+            _run_plugin("syncSimklActivities")
+        if not g.wait_for_abort(15):
+            _run_plugin("cleanOrphanedMetadata")
+        if not g.wait_for_abort(15):
+            _run_plugin("updateLocalTimezone")
         try:
-            from resources.lib.discover.browse_catalog_seed import process_idle_browse_catalog_seed
-            from resources.lib.meta.enrichment import MetaEnrichmentQueue
-            from resources.lib.modules.cache_maintenance import process_idle_deferred_vacuum
-            from resources.lib.simkl.kodi_watched_bridge import bridge_enabled, scan_kodi_watched_bridge
+            from resources.lib.common.background_coordinator import idle_ok_for_background_work
 
-            process_pending_torrent_cache_cleanup()
-            if monitor.abortRequested():
-                break
-            MetaEnrichmentQueue.process_idle()
-            if monitor.abortRequested():
-                break
-            process_idle_browse_catalog_seed()
-            if monitor.abortRequested():
-                break
-            process_idle_deferred_vacuum()
-            if bridge_enabled():
-                scan_kodi_watched_bridge(trigger="service")
+            if idle_ok_for_background_work():
+                _run_plugin("runPrismIdleMaintenance")
         except Exception:
             g.log_stacktrace()
-
-        if monitor.abortRequested():
             break
 
-        from resources.lib.modules.cache_maintenance import service_foreground_ready
-
-        if service_foreground_ready():
-            xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=runMaintenance")')
-        if monitor.waitForAbort(15):
-            break
-        if monitor.abortRequested():
-            break
-        xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=syncSimklActivities")')
-        if monitor.waitForAbort(15):
-            break
-        if monitor.abortRequested():
-            break
-        xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=cleanOrphanedMetadata")')
-        if monitor.waitForAbort(15):
-            break
-        if monitor.abortRequested():
-            break
-        xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=updateLocalTimezone")')
-        sync_wait_minutes = randint(20, 30) if g.PLATFORM == "android" else randint(13, 17)
-        if monitor.waitForAbort(60 * sync_wait_minutes):
-            break
+        maintenance_sleep_sec = 60 * randint(*_MAINTENANCE_BATCH_INTERVAL_MIN)
+        g.log(
+            f"Prism service: next maintenance batch in {maintenance_sleep_sec // 60} minutes",
+            "debug",
+        )
+        slept = 0
+        while not monitor.abortRequested() and slept < maintenance_sleep_sec:
+            chunk = min(_SIMKL_SYNC_POLL_SEC, maintenance_sleep_sec - slept)
+            if g.wait_for_abort(chunk):
+                break
+            slept += chunk
+            _run_plugin("syncSimklActivities")
 finally:
     _service_shutdown()
     if _long_life_thread is not None and _long_life_thread.is_alive():

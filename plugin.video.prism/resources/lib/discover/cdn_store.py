@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Dict, Tuple
 
 from resources.lib.database.cache import use_cache
 from resources.lib.indexers.simkl_cdn import SimklCDN
+from resources.lib.modules.globals import g
 
 RowKey = Tuple[str, int]
 RowStore = Dict[RowKey, Dict[str, Any]]
@@ -184,12 +186,16 @@ def _ingest_dvd(store: RowStore, cdn: SimklCDN) -> None:
 
 
 @use_cache(cache_hours=1)
-def _load_store() -> RowStore:
+def warm_cdn_trending_store() -> RowStore:
+    """Download full Simkl CDN trending lists — discover hub / background only."""
+    started = time.time()
     store: RowStore = {}
     cdn = SimklCDN()
     _ingest_combined(store, cdn)
     _ingest_dvd(store, cdn)
     _persist_catalog_store(store)
+    warm_ms = int((time.time() - started) * 1000)
+    g.log(f"CDN trending warm complete: rows={len(store)} cdn_trending_warm_ms={warm_ms}", "debug")
     return store
 
 
@@ -203,19 +209,15 @@ def _persist_catalog_store(store: RowStore) -> None:
 
 
 def rows_for_catalog(catalog: str) -> list[dict[str, Any]]:
-    store = _load_store()
+    store = warm_cdn_trending_store()
     return [row for (cat, _), row in store.items() if cat == catalog]
 
 
 def get_row(catalog: str, simkl_id: int) -> dict[str, Any] | None:
-    return _load_store().get((catalog, int(simkl_id)))
+    return get_rows_by_ids(catalog, [int(simkl_id)]).get(int(simkl_id))
 
 
 def get_rows_by_ids(catalog: str, simkl_ids: list[int]) -> dict[int, dict[str, Any]]:
-    store = _load_store()
-    out: dict[int, dict[str, Any]] = {}
-    for simkl_id in simkl_ids:
-        row = store.get((catalog, int(simkl_id)))
-        if row:
-            out[int(simkl_id)] = row
-    return out
+    from resources.lib.discover.catalog_store import get_persisted_cdn_rows_by_ids
+
+    return get_persisted_cdn_rows_by_ids(catalog, simkl_ids)

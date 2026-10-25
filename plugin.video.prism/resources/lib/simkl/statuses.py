@@ -38,8 +38,24 @@ def _catalog_for_info(info: dict[str, Any]) -> str:
     return "show"
 
 
+def library_status_catalog(info: dict[str, Any]) -> str:
+    """Simkl sync table key for list status (movie, tv, or anime)."""
+    from resources.lib.simkl.catalog import is_anime_movie_info
+
+    if is_anime_movie_info(info):
+        return "anime"
+    mediatype = (info.get("mediatype") or "").lower()
+    if mediatype in ("movie", "movies"):
+        return "movie"
+    return library_hub_catalog(info)
+
+
 def library_hub_catalog(info: dict[str, Any]) -> str:
     """My Library hub key: movie, tv, or anime (for list cache + menus)."""
+    from resources.lib.simkl.catalog import is_anime_movie_info
+
+    if is_anime_movie_info(info):
+        return "anime"
     mediatype = (info.get("mediatype") or "").lower()
     if mediatype in ("movie", "movies"):
         return "movie"
@@ -164,11 +180,16 @@ def current_simkl_status(info: dict[str, Any]) -> str | None:
         if not show_id:
             return None
         from resources.lib.database.session import get_sync_database
+        from resources.lib.database.simkl_sync.serial_sync import serial_profile_scope
 
-        row = get_sync_database().fetchone(
-            "SELECT simkl_status, info FROM shows WHERE simkl_id=?",
-            (int(show_id),),
-        )
+        catalog = info.get("catalog") or library_hub_catalog(info) or library_catalog(info) or "tv"
+        profile = "anime" if catalog == "anime" else "tv"
+        db = get_sync_database()
+        with serial_profile_scope(db, profile):
+            row = db.fetchone(
+                f"SELECT simkl_status, info FROM {db._st().show} WHERE simkl_id=?",
+                (int(show_id),),
+            )
 
     if not row:
         return None
@@ -207,7 +228,7 @@ def resolved_watched_status_from_response(
     status = resolved_list_status_from_response(response)
     if status:
         return status
-    if info.get("mediatype") == "movie":
+    if (info.get("mediatype") or "").lower() in ("movie", "movies"):
         return "completed"
     return None
 
@@ -220,13 +241,19 @@ def resolved_status_from_response(response: dict[str, Any] | None, info: dict[st
 def library_row_id(info: dict[str, Any]) -> int | None:
     """Simkl row id used in movies/shows table for list status updates."""
     mediatype = (info.get("mediatype") or "").lower()
-    if mediatype == "movie":
+    if mediatype in ("movie", "movies"):
         return int(info["simkl_id"]) if info.get("simkl_id") else None
-    if mediatype == "tvshow":
+    if mediatype == "tvshow" or library_hub_catalog(info) == "anime":
         return int(info["simkl_id"]) if info.get("simkl_id") else None
     show_id = show_id_from_info(info)
     return int(show_id) if show_id else None
 
 
 def library_catalog(info: dict[str, Any]) -> str:
-    return "movie" if info.get("mediatype") == "movie" else _catalog_for_info(info)
+    from resources.lib.simkl.catalog import is_anime_movie_info
+
+    if is_anime_movie_info(info):
+        return "anime"
+    if (info.get("mediatype") or "").lower() in ("movie", "movies"):
+        return "movie"
+    return _catalog_for_info(info)

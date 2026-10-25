@@ -354,6 +354,19 @@ def attach_tv_context(
         info.setdefault("simkl_season_id", season_key(int(show_id), int(season_num)))
 
 
+def parent_show_id_from_numeric(value: int | str | None) -> int | None:
+    """Map a menu/simkl id to the parent show simkl_id (decode synthetic season row ids)."""
+    if value is None:
+        return None
+    try:
+        val = int(value)
+    except (TypeError, ValueError):
+        return None
+    if is_synthetic_season_id(val):
+        return split_synthetic_season_id(val)[0]
+    return val
+
+
 def show_id_from_info(info: dict[str, Any] | None) -> int | None:
     if not info:
         return None
@@ -362,9 +375,18 @@ def show_id_from_info(info: dict[str, Any] | None) -> int | None:
         return int(tvshow["simkl_id"])
     for key in ("simkl_show_id", "tvshow.simkl_id", "show_id"):
         if info.get(key) is not None:
-            return int(info[key])
+            parent = parent_show_id_from_numeric(info[key])
+            if parent is not None:
+                return parent
     if info.get("mediatype") == "tvshow" and info.get("simkl_id") is not None:
         return int(info["simkl_id"])
+    if info.get("simkl_id") is not None:
+        parent = parent_show_id_from_numeric(info["simkl_id"])
+        if parent is not None:
+            if is_synthetic_season_id(int(info["simkl_id"])):
+                return parent
+            if (info.get("mediatype") or "").lower() == "season":
+                return parent
     return None
 
 
@@ -372,7 +394,7 @@ def show_id_from_item(item: dict[str, Any] | None) -> int | None:
     """Resolve parent show id from a menu/sync item wrapper or flat info dict."""
     if not item:
         return None
-    show_id = item.get("simkl_show_id")
+    show_id = parent_show_id_from_numeric(item.get("simkl_show_id"))
     if show_id is not None:
         return int(show_id)
     show_id = show_id_from_info(item.get("info"))
@@ -432,9 +454,18 @@ def attach_tv_show_id(items: list[dict[str, Any]], show_id: int, slug: str | Non
             attach_tv_context(simkl_object["info"], show_id, slug=slug)
 
 
-def normalize_action_args(action_args: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not action_args:
-        return action_args
+def normalize_action_args(action_args: Any) -> dict[str, Any] | None:
+    if action_args is None:
+        return None
+    if isinstance(action_args, str):
+        if action_args.strip().lower() in ("", "none", "null"):
+            return None
+        parsed = parse_stored_action_args(action_args)
+        if parsed is None:
+            return None
+        action_args = parsed
+    if not isinstance(action_args, dict):
+        return None
 
     args = dict(action_args)
     mediatype = args.get("mediatype")
@@ -613,8 +644,9 @@ def show_id_for_episode_action(action_args: dict[str, Any] | None) -> int | None
         return None
     from resources.lib.database.session import get_sync_database
 
-    row = get_sync_database().fetchone(
-        "SELECT simkl_show_id FROM episodes WHERE simkl_id = ?",
+    db = get_sync_database()
+    row = db.fetchone(
+        "SELECT simkl_show_id FROM episodes WHERE simkl_id = ? AND catalog IN ('tv', 'anime')",
         (episode_id,),
     )
     return int(row["simkl_show_id"]) if row and row.get("simkl_show_id") is not None else None
@@ -627,8 +659,14 @@ def build_action_args(item: dict[str, Any]) -> dict[str, Any]:
 
     get = MetadataHandler.get_simkl_info
     info = MetadataHandler.info(item)
-    mediatype = get(item, "mediatype", info.get("mediatype"))
-    simkl_id = get(item, "simkl_id", info.get("simkl_id"))
+    if not info and isinstance(item.get("simkl_object"), dict):
+        info = MetadataHandler.simkl_info(item)
+    simkl_id = item.get("simkl_id")
+    if simkl_id is None:
+        simkl_id = get(item, "simkl_id", info.get("simkl_id"))
+    mediatype = item.get("mediatype") or get(item, "mediatype", info.get("mediatype"))
+    if mediatype is None and item.get("catalog") in ("movie", "tv", "anime"):
+        mediatype = "movie" if item.get("catalog") == "movie" else "tvshow"
 
     args: dict[str, Any] = {"simkl_id": simkl_id, "mediatype": mediatype}
 

@@ -228,7 +228,10 @@ class MetaEnrichmentQueue:
         if g.get_bool_runtime_setting(_IN_FLIGHT_KEY) or not cls._has_work():
             return False
         from resources.lib.modules.cache_maintenance import service_background_idle_ready
+        from resources.lib.modules.page_prefetch import foreground_browse_busy
 
+        if foreground_browse_busy():
+            return False
         if not pending_foreground and not service_background_idle_ready():
             return False
         if pending_foreground:
@@ -537,11 +540,12 @@ class MetaEnrichmentQueue:
                 WHERE m.simkl_id IN ({ids_sql})
             """
         else:
+            serial_catalog = "anime" if media_type == "anime" else "tv"
             query = f"""
                 SELECT s.simkl_id, s.info, s.[cast], s.art, s.args, s.last_updated,
                        s.tmdb_id, s.tvdb_id, s.imdb_id
                 FROM shows AS s
-                WHERE s.simkl_id IN ({ids_sql})
+                WHERE s.catalog = '{serial_catalog}' AND s.simkl_id IN ({ids_sql})
             """
         return db.fetchall(query) or []
 
@@ -619,8 +623,14 @@ class MetaEnrichmentQueue:
         movie_rows = db.fetchall(
             f"SELECT simkl_id FROM movies WHERE needs_update=1 LIMIT {int(limit // 2 or 1)}"
         )
+        remaining = int(limit - len(movie_rows or []))
+        half = max(1, remaining // 2)
         show_rows = db.fetchall(
-            f"SELECT simkl_id FROM shows WHERE needs_update=1 LIMIT {int(limit - len(movie_rows or []))}"
+            f"SELECT simkl_id FROM shows WHERE catalog = 'tv' AND needs_update=1 LIMIT {half}"
+        )
+        anime_rows = db.fetchall(
+            f"SELECT simkl_id FROM shows WHERE catalog = 'anime' AND needs_update=1 "
+            f"LIMIT {max(1, remaining - len(show_rows or []))}"
         )
         scheduled = 0
         if movie_rows:
@@ -631,8 +641,13 @@ class MetaEnrichmentQueue:
         if show_rows:
             show_ids = [int(row["simkl_id"]) for row in show_rows if row.get("simkl_id") is not None]
             if show_ids:
-                cls._merge_batch("tvshow", show_ids, reason="sync", catalog=None)
+                cls._merge_batch("tvshow", show_ids, reason="sync", catalog="tv")
                 scheduled += len(show_ids)
+        if anime_rows:
+            anime_ids = [int(row["simkl_id"]) for row in anime_rows if row.get("simkl_id") is not None]
+            if anime_ids:
+                cls._merge_batch("anime", anime_ids, reason="sync", catalog="anime")
+                scheduled += len(anime_ids)
         if scheduled:
             cls._touch_defer()
         return scheduled

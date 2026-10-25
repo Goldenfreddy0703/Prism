@@ -20,9 +20,25 @@ def _library_info(item_or_info: dict) -> dict:
     info = item_or_info.get("info")
     if isinstance(info, dict):
         merged = dict(info)
-        for key in ("mediatype", "simkl_id", "season", "episode", "catalog", "play_count", "library_status"):
+        for key in (
+            "mediatype",
+            "simkl_id",
+            "season",
+            "episode",
+            "catalog",
+            "play_count",
+            "library_status",
+            "tvdb_season",
+            "tvdb_episode",
+        ):
             if item_or_info.get(key) is not None and merged.get(key) is None:
                 merged[key] = item_or_info[key]
+        for key in ("episode_count", "watched_episodes", "unwatched_episodes"):
+            if item_or_info.get(key) is not None and merged.get(key) is None:
+                merged[key] = item_or_info[key]
+            count_alias = "watched_episodes_count" if key == "watched_episodes" else None
+            if count_alias and merged.get(count_alias) is None and item_or_info.get(key) is not None:
+                merged[count_alias] = item_or_info[key]
         action_args = item_or_info.get("action_args")
         if isinstance(action_args, dict):
             for key in ("mediatype", "simkl_id", "season", "episode", "catalog", "library_status"):
@@ -94,14 +110,16 @@ def ensure_library_row(item_or_info: dict) -> int | None:
     if row_id is None:
         return None
 
+    from resources.lib.database.simkl_sync.serial_access import sync_show_table_for_catalog
+
     catalog = library_catalog(info)
-    table = "movies" if catalog == "movie" else "shows"
+    table = "movies" if catalog == "movie" else sync_show_table_for_catalog(catalog)
     db = _library_db(catalog)
     simkl_id = int(row_id)
     if db.fetchone(f"SELECT simkl_id FROM {table} WHERE simkl_id=?", (simkl_id,)):
         return simkl_id
 
-    media_type = "movies" if catalog == "movie" else "shows"
+    media_type = "movies" if catalog == "movie" else table
     db._get_single_meta(simkl_id, media_type)
     if db.fetchone(f"SELECT simkl_id FROM {table} WHERE simkl_id=?", (simkl_id,)):
         return simkl_id
@@ -123,7 +141,7 @@ def ensure_library_row(item_or_info: dict) -> int | None:
 def resolve_status_after_watch(item_or_info: dict) -> str | None:
     info = _library_info(item_or_info)
     mediatype = (info.get("mediatype") or "").lower()
-    if mediatype == "movie":
+    if mediatype in ("movie", "movies"):
         return "completed"
 
     show_id = library_row_id(info)
@@ -131,11 +149,16 @@ def resolve_status_after_watch(item_or_info: dict) -> str | None:
         return "watching"
 
     from resources.lib.database.session import get_sync_database
+    from resources.lib.database.simkl_sync.serial_sync import serial_profile_scope
 
-    row = get_sync_database().fetchone(
-        "SELECT unwatched_episodes FROM shows WHERE simkl_id=?",
-        (int(show_id),),
-    )
+    catalog = library_hub_catalog(info) or library_catalog(info) or "tv"
+    profile = "anime" if catalog == "anime" else "tv"
+    db = get_sync_database()
+    with serial_profile_scope(db, profile):
+        row = db.fetchone(
+            f"SELECT unwatched_episodes FROM {db._st().show} WHERE simkl_id=?",
+            (int(show_id),),
+        )
     if not row:
         return "watching"
     try:
@@ -161,8 +184,17 @@ def apply_local_library_status(
     catalog = library_catalog(info)
     hub_catalog = library_hub_catalog(info)
     db = _library_db(catalog)
-    table = "movies" if catalog == "movie" else "shows"
-    prior_row = db.fetchone(f"SELECT simkl_status FROM {table} WHERE simkl_id=?", (int(simkl_id),))
+    from resources.lib.database.simkl_sync.serial_sync import serial_profile_scope
+
+    profile = "anime" if hub_catalog == "anime" else "tv"
+    with serial_profile_scope(db, profile):
+        prior_row = db.fetchone(
+            f"SELECT simkl_status FROM {db._st().show} WHERE simkl_id=?",
+            (int(simkl_id),),
+        ) if catalog != "movie" else db.fetchone(
+            "SELECT simkl_status FROM movies WHERE simkl_id=?",
+            (int(simkl_id),),
+        )
     prior_status = (prior_row or {}).get("simkl_status")
 
     db.set_simkl_status(simkl_id, catalog, status)
@@ -190,16 +222,28 @@ def apply_local_library_status(
 
     if touch_last_watched:
         now = str(db._get_datetime_now())
-        table = "movies" if catalog == "movie" else "shows"
-        row = db.fetchone(f"SELECT info FROM {table} WHERE simkl_id=?", (simkl_id,))
-        info_blob = dict(row["info"]) if row and isinstance(row.get("info"), dict) else {}
-        info_blob["last_watched_at"] = now
-        if status:
-            info_blob["simkl_status"] = status
-        db.execute_sql(
-            f"UPDATE {table} SET last_watched_at=?, info=? WHERE simkl_id=?",
-            (now, info_blob, simkl_id),
-        )
+        if catalog == "movie":
+            row = db.fetchone("SELECT info FROM movies WHERE simkl_id=?", (simkl_id,))
+            info_blob = dict(row["info"]) if row and isinstance(row.get("info"), dict) else {}
+            info_blob["last_watched_at"] = now
+            if status:
+                info_blob["simkl_status"] = status
+            db.execute_sql(
+                "UPDATE movies SET last_watched_at=?, info=? WHERE simkl_id=?",
+                (now, info_blob, simkl_id),
+            )
+        else:
+            with serial_profile_scope(db, profile):
+                show_table = db._st().show
+                row = db.fetchone(f"SELECT info FROM {show_table} WHERE simkl_id=?", (simkl_id,))
+                info_blob = dict(row["info"]) if row and isinstance(row.get("info"), dict) else {}
+                info_blob["last_watched_at"] = now
+                if status:
+                    info_blob["simkl_status"] = status
+                db.execute_sql(
+                    f"UPDATE {show_table} SET last_watched_at=?, info=? WHERE simkl_id=?",
+                    (now, info_blob, simkl_id),
+                )
 
     if queue_sync:
         queue_library_sync()

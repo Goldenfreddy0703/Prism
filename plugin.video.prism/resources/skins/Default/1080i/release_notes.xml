@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<window>
+	<coordinates>
+		<left>0</left>
+		<top>0</top>
+		<width>1920</width>
+		<height>1080</height>
+	</coordinates>
+
+	<defaultcontrol always="true">5003</defaultcontrol>
+
+	<controls>
+
+		<control type="group">
+			<top>0</top>
+			<left>0</left>
+			<width>1920</width>
+			<height>1080</height>
+
+			<control type="image">
+				<texture>white.png</texture>
+				<colordiffuse>FF000000</colordiffuse>
+			</control>
+
+			<control type="image">
+				<texture background="true">$INFO[Window().Property(prism.fanart)]</texture>
+				<colordiffuse>66FFFFFF</colordiffuse>
+			</control>
+
+			<control type="image">
+				<texture background="true">white.png</texture>
+				<colordiffuse>CC000000</colordiffuse>
+			</control>
+		</control>
+
+		<control type="label">
+			<top>25</top>
+			<left>40</left>
+			<width>100%</width>
+			<height>50</height>
+			<label>[UPPERCASE][COLOR $INFO[Window().Property(settings.color)]]Prism[/COLOR] - $ADDON[plugin.video.prism 31229] $INFO[Window().Property(prism.release.version)][/UPPERCASE]</label>
+			<font>font37</font>
+			<textcolor>white</textcolor>
+		</control>
+
+		<control type="image">
+			<centerleft>50%</centerleft>
+			<top>15</top>
+			<width>75</width>
+			<height>75</height>
+			<aspectratio align="center" aligny="center">keep</aspectratio>
+			<texture>$INFO[Window().Property(prism.logo)]</texture>
+		</control>
+
+		<!-- Changelog -->
+		<control type="group">
+			<left>20</left>
+			<top>110</top>
+			<width>930</width>
+			<height>850</height>
+
+			<control type="image">
+				<texture>white.png</texture>
+				<colordiffuse>99362e33</colordiffuse>
+			</control>
+
+			<control type="label">
+				<top>10</top>
+				<left>40</left>
+				<width>850</width>
+				<height>50</height>
+				<font>font12</font>
+				<textcolor>FFFFFFFF</textcolor>
+				<align>left</align>
+				<label>[B][UPPERCASE]$ADDON[plugin.video.prism 31230] $INFO[Window().Property(prism.release.version)][/UPPERCASE][/B]</label>
+			</control>
+
+			<control type="scrollbar" id="5101">
+				<left>10</left>
+				<top>70</top>
+				<width>20</width>
+				<height>760</height>
+				<onright>5102</onright>
+				<ondown>5003</ondown>
+				<showonepage>false</showonepage>
+				<texturesliderbackground colordiffuse="99362e33">white.png</texturesliderbackground>
+				<texturesliderbar colordiffuse="66FFFFFF">white.png</texturesliderbar>
+				<texturesliderbarfocus colordiffuse="$INFO[Window().Property(settings.color)]">white.png</texturesliderbarfocus>
+			</control>
+
+			<control type="textbox" id="5001">
+				<left>40</left>
+				<top>70</top>
+				<width>860</width>
+				<height>760</height>
+				<font>font12</font>
+				<textcolor>FFFFFFFF</textcolor>
+				<pagecontrol>5101</pagecontrol>
+				<autoscroll>false</autoscroll>
+				<label>$INFO[Window().Property(prism.release.changelog)]</label>
+			</control>
+		</control>
+
+		<!-- News -->
+		<control type="group">
+			<left>970</left>
+			<top>110</top>
+			<width>930</width>
+			<height>850</height>
+
+			<control type="image">
+				<texture>white.png</texture>
+				<colordiffuse>99362e33</colordiffuse>
+			</control>
+
+			<control type="label">
+				<top>10</top>
+				<left>40</left>
+				<width>850</width>
+				<height>50</height>
+				<font>font12</font>
+				<textcolor>FFFFFFFF</textcolor>
+				<align>left</align>
+				<label>[B][UPPERCASE]$ADDON[plugin.video.prism 31231][/UPPERCASE][/B]</label>
+			</control>
+
+			<control type="scrollbar" id="5102">
+				<left>10</left>
+				<top>70</top>
+				<width>20</width>
+				<height>760</height>
+				<onleft>5101</onleft>
+				<ondown>5003</ondown>
+				<showonepage>false</showonepage>
+				<texturesliderbackground colordiffuse="99362e33">white.png</texturesliderbackground>
+				<texturesliderbar colordiffuse="66FFFFFF">white.png</texturesliderbar>
+				<texturesliderbarfocus colordiffuse="$INFO[Window().Property(settings.color)]">white.png</texturesliderbarfocus>
+			</control>
+
+			<control type="textbox" id="5002">
+				<left>40</left>
+				<top>70</top>
+				<width>860</width>
+				<height>760</height>
+				<font>font12</font>
+				<textcolor>FFFFFFFF</textcolor>
+				<pagecontrol>5102</pagecontrol>
+				<autoscroll>false</autoscroll>
+				<label>$INFO[Window().Property(prism.release.news)]</label>
+			</control>
+		</control>
+
+		<!-- Close -->
+		<control type="group">
+			<width>430</width>
+			<left>745</left>
+			<height>90</height>
+			<top>970</top>
+
+			<control type="image">
+				<texture>white.png</texture>
+				<colordiffuse>99362e33</colordiffuse>
+			</control>
+
+			<control type="button" id="5003">
+				<top>5</top>
+				<left>40</left>
+				<width>350</width>
+				<height>80</height>
+				<onup>5101</onup>
+				<ondown>5003</ondown>
+				<onleft>5003</onleft>
+				<onright>5003</onright>
+				<textoffsetx>20</textoffsetx>
+				<texturefocus colordiffuse="$INFO[Window().Property(settings.color)]">white.png</texturefocus>
+				<texturenofocus colordiffuse="22000000">white.png</texturenofocus>
+				<label>$ADDON[plugin.video.prism 30459]</label>
+				<align>center</align>
+				<textcolor>FFFFFFFF</textcolor>
+			</control>
+		</control>
+
+	</controls>
+</window>

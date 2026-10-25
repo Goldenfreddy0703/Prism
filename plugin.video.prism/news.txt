@@ -1,0 +1,29 @@
+Prism 5.0.57 — Major release
+
+Welcome to Prism, an all-in-one Kodi addon for Movies, TV Shows, and Anime, with Simkl library sync, discover lists, themes, and optional debrid and provider packages. Prism builds on the original Seren addon by Nixgates and is maintained by the community.
+
+IMPORTANT — Upgrading from an older Prism build
+This release is not an in-place database upgrade. Local sync data, caches, and settings from older versions are incompatible (anime library storage, Simkl sync schema, and related menu metadata).
+
+You must:
+1. Use the on-screen prompt after update, or Prism → Settings → Maintenance → Wipe Addon Data
+2. Restart Kodi when asked
+3. Sign in to Simkl again, re-enable debrid accounts, reinstall or enable provider packages, and review source sort/filter presets
+
+Nothing in addon_data is preserved across this wipe. Fresh installs of 5.0.57 can skip the wipe step.
+
+What's new in 5.0.57 (highlights)
+- All-in-one discover and library for movies, TV, and anime with Simkl (watchlist, Next Up, progress, calendars)
+- Search All and mixed list view for unified title results
+- Stronger anime support (title language, sub/dub presets, dedicated catalog paths)
+- Kodi native Mark as Watched bridge to Simkl when enabled
+- My Watch History and local playback tracking
+- Playback and sources: cloud/local matching, tag-based sort profiles, per-family preemptive termination, TorBox/Offcloud and AllDebrid improvements
+- Seren-style fast menu sync path, background prefetch, and startup gating
+- Simkl Auth V2, configurable search, and calendar enrichment
+- Kodi 20–22 support; companion Context Prism for quick actions
+- Changelog and this News pane after updates (General → Show changelog after update)
+
+After you wipe and restart, review Settings for accounts, providers, and playback. Report issues on GitHub or Addons4Kodi Discord.
+
+See the Changelog pane (left) for the full 5.0.57 line list.

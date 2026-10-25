@@ -83,6 +83,7 @@ def apply_show_watch_fields(item: dict, info: dict, *, aired_episode_count: int 
         info["aired_episodes"] = aired
         info["watched_episodes_count"] = watched
         info["unwatched_episodes"] = unwatched
+        sync_show_playcount_indicator(item, info)
         return
 
     total = total_for_watch_math(item, info)
@@ -116,6 +117,32 @@ def apply_show_watch_fields(item: dict, info: dict, *, aired_episode_count: int 
     info["aired_episodes"] = aired
     info.setdefault("watched_episodes_count", watched)
     info["unwatched_episodes"] = unwatched
+    sync_show_playcount_indicator(item, info)
+
+
+def sync_show_playcount_indicator(row: dict, info: dict) -> None:
+    """Align Kodi playcount with aired-only caught-up (overrides stale display_meta stamps)."""
+    aired = _int_or(
+        row.get("episode_count"),
+        _int_or(info.get("episode_count"), _int_or(info.get("aired_episodes"))),
+    )
+    watched = _int_or(row.get("watched_episodes"), _int_or(info.get("watched_episodes_count")))
+    if aired <= 0:
+        return
+    unwatched = row.get("unwatched_episodes", info.get("unwatched_episodes"))
+    caught = is_caught_up(
+        watched,
+        total_for_watch_math(row, info) or aired,
+        not_aired=not_aired_count(info),
+        unwatched=unwatched,
+        aired_episode_count=aired,
+    )
+    if caught:
+        info["playcount"] = 1
+        row["play_count"] = 1
+    else:
+        info["playcount"] = 0
+        row.pop("play_count", None)
 
 
 def apply_season_watch_fields(item: dict, info: dict) -> None:

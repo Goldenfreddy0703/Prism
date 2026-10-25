@@ -9,7 +9,7 @@ from resources.lib.modules.globals import g
 
 MAL_DUBS_URL = "https://raw.githubusercontent.com/MAL-Dubs/MAL-Dubs/main/data/dubInfo.json"
 MAL_DUB_FILENAME = "mal_dub.json"
-MAL_DUBS_REFRESH_DAYS = 7
+MAL_DUBS_REFRESH_DAYS = 1
 
 _dub_ids: set[str] | None = None
 
