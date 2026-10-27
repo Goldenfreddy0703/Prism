@@ -43,7 +43,20 @@ def prefetch_catalog(action: str, params: dict[str, Any] | None = None, *, defau
 
 def dispatch_library_action(action: str, params: dict[str, Any] | None = None) -> bool:
     """Handle library routes. Returns True when *action* was dispatched."""
+    from resources.lib.modules.globals import g
+    from resources.lib.modules.widget_loader import mark_widget_session_loaded
+
     params = params or {}
+
+    if g.FROM_WIDGET:
+        if action == "simklLibraryList":
+            mark_widget_session_loaded(
+                f"library.{params.get('catalog', 'tv')}.{params.get('status', 'plantowatch')}"
+            )
+        elif action in _CANONICAL_ROUTES:
+            route = _CANONICAL_ROUTES[action]
+            catalog = params.get("catalog") or _ROUTE_DEFAULT_CATALOG.get(route, "tv")
+            mark_widget_session_loaded(f"library.{action}.{catalog}")
 
     if action in _HUB_ACTIONS:
         from resources.lib.gui import animeMenus, movieMenus, tvshowMenus

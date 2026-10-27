@@ -33,9 +33,9 @@ def finish_empty_widget_directory() -> None:
 def widget_stagger_enabled() -> bool:
     if g.IS_SERVICE or not g.FROM_WIDGET:
         return False
-    if not g.get_bool_setting("general.widget.stagger", False):
-        return False
-    return True
+    if g.get_bool_setting("general.widget.stagger", g.PLATFORM == "android"):
+        return True
+    return False
 
 
 def widget_request_key() -> str:

@@ -74,49 +74,8 @@ def _should_abort_prefetch() -> bool:
 
 
 def schedule_show_episode_premill(show_id: int, catalog: str | None = None) -> None:
-    """Pre-mill the next un-milled season while the user views the season list."""
-    if not show_id:
-        return
-    if g.get_bool_setting("general.flatten.episodes"):
-        return
-
-    work = {
-        "simkl_show_id": int(show_id),
-        "catalog": catalog or "tv",
-    }
-    key = _prefetch_key(work)
-    if key in _done_keys() or key in _in_flight_keys():
-        return
-
-    def _launch() -> None:
-        try:
-            time.sleep(1.5)
-            if drilldown_navigation_active():
-                return
-            for _ in range(24):
-                if not _user_browsing():
-                    break
-                time.sleep(0.25)
-            if _should_abort_prefetch():
-                return
-            if key in _done_keys() or key in _in_flight_keys():
-                return
-            import xbmc
-
-            launch = {
-                "action": "drilldownPrefetch",
-                "simkl_show_id": int(show_id),
-                "catalog": work["catalog"],
-                "prefetch_key": key,
-            }
-            url = g.create_url(g.BASE_URL, launch)
-            xbmc.executebuiltin(f'RunPlugin("{url}")')
-        except Exception:
-            g.log_stacktrace()
-
-    from resources.lib.common.thread_pool import defer_background
-
-    defer_background(_launch, name="prism-drilldown-prefetch")
+    """Deprecated: episode warm runs inline during sync / on list open (no RunPlugin prefetch)."""
+    return
 
 
 def run_drilldown_prefetch_invoke(params: dict[str, Any] | None) -> None:

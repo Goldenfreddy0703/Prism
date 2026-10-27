@@ -23,10 +23,8 @@ from resources.lib.modules.manual_timezone import validate_timezone_detected
 
 _PLUGIN_BASE = "plugin://plugin.video.prism/"
 
-# Seren service.py: one housekeeping batch, then sleep 60 * randint(13, 17) minutes before the next.
-_MAINTENANCE_BATCH_INTERVAL_MIN = (13, 17)
-# Simkl activity sync is throttled to 5 minutes in simkl_sync; poll during the long sleep only.
-_SIMKL_SYNC_POLL_SEC = 5 * 60
+_BRIDGE_POLL_INTERVAL_SEC = 30.0
+_PARENT_REFRESH_POLL_INTERVAL_SEC = 1.0
 
 
 def _service_shutdown() -> None:
@@ -39,17 +37,8 @@ def _service_shutdown() -> None:
         pass
 
 
-def _run_long_life_manager() -> None:
-    try:
-        from resources.lib.modules.providers.service_manager import ProvidersServiceManager
-
-        ProvidersServiceManager().run_long_life_manager()
-    except Exception:
-        g.log_stacktrace()
-
-
 def _run_kodi_watched_bridge_poller(monitor: PrismMonitor) -> None:
-    """Poll MyVideos for Kodi native watched toggles on Prism URLs (independent of maintenance cycle)."""
+    """Poll MyVideos for Kodi native watched toggles on Prism URLs when bridge is enabled."""
     try:
         from resources.lib.simkl.kodi_watched_bridge import bridge_enabled, scan_kodi_watched_bridge
 
@@ -62,7 +51,7 @@ def _run_kodi_watched_bridge_poller(monitor: PrismMonitor) -> None:
                         scan_kodi_watched_bridge(trigger="poller")
                 except Exception:
                     g.log_stacktrace()
-            if monitor.waitForAbort(2):
+            if monitor.waitForAbort(int(_BRIDGE_POLL_INTERVAL_SEC)):
                 break
     except Exception:
         g.log_stacktrace()
@@ -81,13 +70,21 @@ def _run_parent_folder_refresh_poller(monitor: PrismMonitor) -> None:
                     poll_pending_parent_folder_refresh()
             except Exception:
                 g.log_stacktrace()
-            if monitor.waitForAbort(0.5):
+            if monitor.waitForAbort(_PARENT_REFRESH_POLL_INTERVAL_SEC):
                 break
     except Exception:
         g.log_stacktrace()
 
 
 def _run_plugin(action: str) -> None:
+    try:
+        from resources.lib.common.background_coordinator import playback_session_busy
+
+        if playback_session_busy():
+            g.log(f"Prism service: skipped RunPlugin {action} — playback session busy", "debug")
+            return
+    except Exception:
+        pass
     xbmc.executebuiltin(f'RunPlugin("{_PLUGIN_BASE}?action={action}")')
 
 
@@ -131,23 +128,24 @@ except Exception:
     g.log_stacktrace()
 
 monitor = PrismMonitor()
-_long_life_thread: threading.Thread | None = None
 _bridge_poller_thread: threading.Thread | None = None
 _parent_refresh_poller_thread: threading.Thread | None = None
 try:
-    _long_life_thread = threading.Thread(
-        target=_run_long_life_manager,
-        daemon=True,
-        name="prism-long-life",
-    )
-    _long_life_thread.start()
-    _bridge_poller_thread = threading.Thread(
-        target=_run_kodi_watched_bridge_poller,
-        args=(monitor,),
-        daemon=True,
-        name="prism-kodi-watched-bridge",
-    )
-    _bridge_poller_thread.start()
+    _run_plugin("longLifeServiceManager")
+
+    try:
+        from resources.lib.simkl.kodi_watched_bridge import bridge_enabled
+    except Exception:
+        bridge_enabled = lambda: False  # type: ignore[assignment, misc]
+
+    if bridge_enabled():
+        _bridge_poller_thread = threading.Thread(
+            target=_run_kodi_watched_bridge_poller,
+            args=(monitor,),
+            daemon=True,
+            name="prism-kodi-watched-bridge",
+        )
+        _bridge_poller_thread.start()
     _parent_refresh_poller_thread = threading.Thread(
         target=_run_parent_folder_refresh_poller,
         args=(monitor,),
@@ -177,30 +175,9 @@ try:
             _run_plugin("cleanOrphanedMetadata")
         if not g.wait_for_abort(15):
             _run_plugin("updateLocalTimezone")
-        try:
-            from resources.lib.common.background_coordinator import idle_ok_for_background_work
-
-            if idle_ok_for_background_work():
-                _run_plugin("runPrismIdleMaintenance")
-        except Exception:
-            g.log_stacktrace()
+        if g.wait_for_abort(60 * randint(13, 17)):
             break
-
-        maintenance_sleep_sec = 60 * randint(*_MAINTENANCE_BATCH_INTERVAL_MIN)
-        g.log(
-            f"Prism service: next maintenance batch in {maintenance_sleep_sec // 60} minutes",
-            "debug",
-        )
-        slept = 0
-        while not monitor.abortRequested() and slept < maintenance_sleep_sec:
-            chunk = min(_SIMKL_SYNC_POLL_SEC, maintenance_sleep_sec - slept)
-            if g.wait_for_abort(chunk):
-                break
-            slept += chunk
-            _run_plugin("syncSimklActivities")
 finally:
     _service_shutdown()
-    if _long_life_thread is not None and _long_life_thread.is_alive():
-        _long_life_thread.join(timeout=3.0)
     del monitor
     g.deinit()

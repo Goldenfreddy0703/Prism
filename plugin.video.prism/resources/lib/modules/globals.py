@@ -1566,6 +1566,7 @@ class GlobalVariables:
         player = xbmc.Player()
         if (
             self.get_bool_runtime_setting("widget_refreshing")
+            or self.get_bool_runtime_setting("widget.refresh_pending")
             or (player.isPlaying() and not if_playing)
             or xbmc.getCondVisibility(  # Don't wait if we are playing as it will refresh after
                 "Library.IsScanningVideo"
@@ -1574,9 +1575,7 @@ class GlobalVariables:
             del player
             return
         try:
-            from resources.lib.modules.widget_loader import clear_widget_session_flags
-
-            clear_widget_session_flags()
+            g.set_runtime_setting("widget.refresh_pending", True)
             g.set_runtime_setting("widget_refreshing", True)
             while not self.abort_requested():
                 if xbmcgui.getCurrentWindowId() == 10000:
@@ -1599,6 +1598,7 @@ class GlobalVariables:
         finally:
             del player
             g.clear_runtime_setting("widget_refreshing")
+            g.clear_runtime_setting("widget.refresh_pending")
 
     def get_language_code(self, country=None):
         lang = self.json_rpc("Application.getProperties", {"properties": ["language"]}).get("language")

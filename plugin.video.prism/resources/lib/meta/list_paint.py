@@ -1406,11 +1406,6 @@ def render_catalog_seasons(show_id: int, list_builder, **kwargs) -> None:
         from resources.lib.meta.list_pipeline import defer_drilldown_persist
 
         defer_drilldown_persist(show_id, catalog, scope="seasons")
-    from resources.lib.modules.drilldown_prefetch import schedule_show_episode_premill
-
-    schedule_show_episode_premill(show_id, catalog)
-
-
 def render_catalog_drilldown_episodes(
     show_id: int,
     list_builder,

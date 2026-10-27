@@ -298,20 +298,6 @@ def _audit_catalog_external_ids(db: "SimklSyncDatabase", payload) -> None:
         )
 
 
-def _schedule_post_sync_background_warm() -> None:
-    from resources.lib.common.thread_pool import defer_background
-
-    def _warm() -> None:
-        try:
-            from resources.lib.discover.cdn_store import warm_cdn_trending_store
-
-            warm_cdn_trending_store()
-        except Exception:
-            g.log_stacktrace()
-
-    defer_background(_warm, name="prism-cdn-trending-warm")
-
-
 def _seed_display_meta_from_payload(db: "SimklSyncDatabase", payload) -> None:
     """Seed title/poster from lean sync rows; plot/fanart filled on menu open."""
     from resources.lib.meta.display_store import get_display_meta_store
@@ -361,35 +347,15 @@ def _finalize_episode_sync_state(
 ) -> None:
     """Post-ingest episode catalog warm + watch-state restore (single hook)."""
     if episode_warm_enabled():
-        if blocking_warm:
-            db.set_sync_progress(65, g.get_language_string(31012))
-            run_post_sync_episode_warm(
-                db,
-                payload=payload,
-                force=force,
-                notify_silent=db.silent,
-                on_progress=lambda c, t, title, bucket: _episode_warm_progress(db, c, t, title, bucket),
-            )
-            _reapply_episode_watch_state_after_warm(db, payload)
-            return
-
-        import threading
-
-        def _background_warm() -> None:
-            try:
-                run_post_sync_episode_warm(
-                    db,
-                    payload=payload,
-                    force=force,
-                    notify_silent=not db.silent,
-                )
-                _reapply_episode_watch_state_after_warm(db, payload)
-            except Exception:
-                g.log_stacktrace()
-
-        from resources.lib.common.thread_pool import defer_background
-
-        defer_background(_background_warm)
+        db.set_sync_progress(65, g.get_language_string(31012))
+        run_post_sync_episode_warm(
+            db,
+            payload=payload,
+            force=force,
+            notify_silent=db.silent,
+            on_progress=lambda c, t, title, bucket: _episode_warm_progress(db, c, t, title, bucket),
+        )
+        _reapply_episode_watch_state_after_warm(db, payload)
         return
 
     _reapply_episode_watch_state_after_warm(db, payload)
@@ -842,12 +808,11 @@ def sync_simkl_library(db: "SimklSyncDatabase", remote_activities, *, force: boo
     from resources.lib.simkl.library_cache import record_library_sync_watermark
 
     record_library_sync_watermark(db)
-    _schedule_post_sync_background_warm()
 
     _finalize_episode_sync_state(
         db,
         payload,
         force=force,
-        blocking_warm=first_sync,
+        blocking_warm=True,
     )
     db.set_sync_progress(100, g.get_language_string(31013))

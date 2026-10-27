@@ -1,3 +1,14 @@
+Changelog 5.0.58
+[IMPROVEMENT] Leaner background service — Seren-style loop (maintenance, Simkl sync, metadata cleanup, timezone) without mid-sleep sync or idle maintenance RunPlugin storms
+[IMPROVEMENT] Inline library list verify, browse catalog seed, and page materialize on open instead of background queue workers
+[IMPROVEMENT] Library menu cache rebuilt from the sync database when activities sync finishes; calendar warm only when stale or on open
+[IMPROVEMENT] Widget refresh coalescing, Android stagger, and widget_loaded hooks on library and discover routes
+[IMPROVEMENT] Playback and service work deferred while playback or source scraping is busy (preScrape vs getSources serialization)
+[IMPROVEMENT] Gated Kodi watched bridge poller and parent-folder poller; long-life service manager via RunPlugin when needed
+[BUG] Playing Next and Skip Outro — prevent duplicate dialogs when pause/playlist leaves overlapping player keep-alive loops (generation exit, global claim, modal guard)
+[BUG] Skip outro / playing next when the next playlist item is not a Prism getSources URL (no crash on malformed URL; safe dialog teardown)
+[IMPROVEMENT] Release tree cleanup — removed obsolete empty package folders left from refactors; addon .gitignore for Python cache artifacts
+
 Changelog 5.0.57
 [BREAKING] Major release — wipe addon data and restart Kodi after upgrading from any build below 5.0.57 (incompatible local Simkl sync DB and settings)
 [FEATURE] All-in-one movies, TV, and anime hub with Simkl discover, library, Next Up, watchlist, progress, and enriched calendars

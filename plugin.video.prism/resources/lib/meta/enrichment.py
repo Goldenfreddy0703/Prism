@@ -150,26 +150,7 @@ class MetaEnrichmentQueue:
 
     @classmethod
     def _kick_worker(cls) -> None:
-        if g.get_bool_runtime_setting(_IN_FLIGHT_KEY):
-            return
-        if not cls._has_work():
-            return
-
-        if g.get_bool_runtime_setting("prism.inline_pool"):
-            if g.PLUGIN_HANDLE > 0:
-                g.set_runtime_setting("prism.pending_meta_enrich", True)
-            return
-
-        # In-process worker when not building a directory (service / maintenance / queue action).
-        if g.PLUGIN_HANDLE <= 0:
-            from resources.lib.modules.cache_maintenance import service_background_idle_ready
-
-            if not service_background_idle_ready():
-                return
-            cls._start_worker_thread()
-            return
-
-        cls._schedule_run_plugin_launch()
+        return
 
     @classmethod
     def _schedule_run_plugin_launch(cls) -> None:
@@ -223,21 +204,7 @@ class MetaEnrichmentQueue:
 
     @classmethod
     def process_idle(cls) -> bool:
-        """Service hook: drain pending enrichment when browse/prefetch is idle."""
-        pending_foreground = g.get_bool_runtime_setting("prism.pending_meta_enrich")
-        if g.get_bool_runtime_setting(_IN_FLIGHT_KEY) or not cls._has_work():
-            return False
-        from resources.lib.modules.cache_maintenance import service_background_idle_ready
-        from resources.lib.modules.page_prefetch import foreground_browse_busy
-
-        if foreground_browse_busy():
-            return False
-        if not pending_foreground and not service_background_idle_ready():
-            return False
-        if pending_foreground:
-            g.clear_runtime_setting("prism.pending_meta_enrich")
-        cls._start_worker_thread()
-        return True
+        return False
 
     @classmethod
     def enrich_simkl_ids_blocking(
@@ -275,6 +242,8 @@ class MetaEnrichmentQueue:
     ) -> None:
         if not refs:
             return
+        if reason == "list_open":
+            return
 
         from resources.lib.meta.registry import filter_pending
 
@@ -282,11 +251,8 @@ class MetaEnrichmentQueue:
         simkl_ids = filter_pending(media_type, simkl_ids)
         if not simkl_ids:
             return
-
-        cls._merge_batch(media_type, simkl_ids, reason=reason, catalog=catalog)
-        cls._touch_defer()
-        g.log(f"Scheduling meta enrichment ({reason}) for {len(simkl_ids)} items", "debug")
-        cls._kick_worker()
+        g.log(f"Inline meta enrichment ({reason}) for {len(simkl_ids)} items", "debug")
+        cls.enrich_simkl_ids_blocking(simkl_ids, media_type, reason=reason, catalog=catalog)
 
     @classmethod
     def schedule_show_children(
@@ -304,88 +270,12 @@ class MetaEnrichmentQueue:
             job["season_row_id"] = int(season_row_id)
         if episode_ids:
             job["episode_ids"] = sorted({int(episode_id) for episode_id in episode_ids})
-        cls._enqueue_child_job(job)
-        cls._touch_defer()
-        g.log(f"Scheduling {kind} enrichment for show {simkl_show_id}", "debug")
-        cls._kick_worker()
+        cls._process_child_jobs([job])
 
     @classmethod
     def process_request(cls, action_args: dict | None) -> None:
-        cls._merge_from_action_args(action_args)
-        while True:
-            if g.get_bool_runtime_setting(_IN_FLIGHT_KEY):
-                return
-            if not cls._has_work() or g.abort_requested():
-                return
-            try:
-                g.set_runtime_setting(_IN_FLIGHT_KEY, True)
-                enriched_count = 0
-                while cls._has_work() and not g.abort_requested():
-                    defer_until = g.get_int_runtime_setting(_DEFER_KEY, 0)
-                    wait_ms = defer_until - int(time.time() * 1000)
-                    if wait_ms > 0:
-                        g.wait_for_abort(wait_ms / 1000.0)
-
-                    pending = cls._load_pending()
-                    if not cls._has_work(pending):
-                        break
-
-                    skip_idle_gate = cls._should_skip_idle_gate(pending)
-                    if g.PLUGIN_HANDLE <= 0 and not skip_idle_gate:
-                        from resources.lib.modules.cache_maintenance import service_background_idle_ready
-
-                        if not service_background_idle_ready():
-                            break
-
-                    child_jobs = list(pending.get("child_jobs") or [])
-                    batches = {
-                        media_type: dict(batch)
-                        for media_type, batch in (pending.get("batches") or {}).items()
-                    }
-                    cls._save_pending(_empty_pending())
-
-                    from resources.lib.meta.registry import mark_enriched
-                    from resources.lib.modules.global_lock import GlobalLock
-
-                    for media_type, batch in batches.items():
-                        simkl_ids = batch.get("simkl_ids") or []
-                        if not simkl_ids:
-                            continue
-                        reason = (batch.get("reasons") or ["list_open"])[0]
-                        catalog = batch.get("catalog")
-                        g.log(
-                            f"Meta enrichment processing {len(simkl_ids)} {media_type} ({reason})",
-                            "info",
-                        )
-                        with GlobalLock(cls._enrich_lock_name(media_type)):
-                            enriched_count += cls._process_entity_batch(
-                                simkl_ids,
-                                media_type,
-                                reason=reason,
-                                catalog=catalog,
-                            )
-                        mark_enriched(media_type, simkl_ids, reason=reason)
-
-                    if child_jobs:
-                        with GlobalLock(cls._enrich_lock_name("tvshow")):
-                            enriched_count += cls._process_child_jobs(child_jobs)
-
-                    if not cls._has_work():
-                        break
-
-                if enriched_count:
-                    g.trigger_widget_refresh(if_playing=False)
-            except Exception:
-                g.log_stacktrace()
-            finally:
-                g.set_runtime_setting(_IN_FLIGHT_KEY, False)
-
-            if not g.get_bool_runtime_setting("prism.inline_pool"):
-                if cls._has_work():
-                    cls._kick_worker()
-                return
-            if not cls._has_work() or g.abort_requested():
-                return
+        """Legacy router hook — enrichment is inline during list/sync invokers."""
+        return
 
     @classmethod
     def _process_child_jobs(cls, jobs: list[dict]) -> int:
@@ -613,44 +503,7 @@ class MetaEnrichmentQueue:
 
     @classmethod
     def schedule_needs_update(cls, limit: int = 50) -> int:
-        """Queue rows flagged needs_update after sync/maintenance."""
-        if limit <= 0:
-            return 0
-
-        from resources.lib.database.session import get_sync_database
-
-        db = get_sync_database()
-        movie_rows = db.fetchall(
-            f"SELECT simkl_id FROM movies WHERE needs_update=1 LIMIT {int(limit // 2 or 1)}"
-        )
-        remaining = int(limit - len(movie_rows or []))
-        half = max(1, remaining // 2)
-        show_rows = db.fetchall(
-            f"SELECT simkl_id FROM shows WHERE catalog = 'tv' AND needs_update=1 LIMIT {half}"
-        )
-        anime_rows = db.fetchall(
-            f"SELECT simkl_id FROM shows WHERE catalog = 'anime' AND needs_update=1 "
-            f"LIMIT {max(1, remaining - len(show_rows or []))}"
-        )
-        scheduled = 0
-        if movie_rows:
-            movie_ids = [int(row["simkl_id"]) for row in movie_rows if row.get("simkl_id") is not None]
-            if movie_ids:
-                cls._merge_batch("movie", movie_ids, reason="sync", catalog="movie")
-                scheduled += len(movie_ids)
-        if show_rows:
-            show_ids = [int(row["simkl_id"]) for row in show_rows if row.get("simkl_id") is not None]
-            if show_ids:
-                cls._merge_batch("tvshow", show_ids, reason="sync", catalog="tv")
-                scheduled += len(show_ids)
-        if anime_rows:
-            anime_ids = [int(row["simkl_id"]) for row in anime_rows if row.get("simkl_id") is not None]
-            if anime_ids:
-                cls._merge_batch("anime", anime_ids, reason="sync", catalog="anime")
-                scheduled += len(anime_ids)
-        if scheduled:
-            cls._touch_defer()
-        return scheduled
+        return 0
 
 
 def enrich_simkl_sync_items(items: list[dict], **kwargs) -> list[dict]:

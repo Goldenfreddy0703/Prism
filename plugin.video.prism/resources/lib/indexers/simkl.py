@@ -315,6 +315,14 @@ class SimklAPI:
             return response
 
         self._log_http_failure(response, quiet=quiet_errors)
+        if response.status_code == 401 and not send_bearer:
+            try:
+                body = response.json()
+                err = body.get("error") if isinstance(body, dict) else None
+            except (json.JSONDecodeError, ValueError):
+                err = None
+            if err:
+                g.log(f"Simkl catalog 401 detail: {err}", "debug")
         if send_bearer and response.status_code == 401 and self._has_auth_credentials():
             self._notify_reauth_if_needed()
         return None

@@ -7,10 +7,7 @@ from resources.lib.modules.metadataHandler import MetadataHandler
 from resources.lib.simkl.ids import build_action_args
 
 def _home_enabled(setting_id: str, default: bool = True) -> bool:
-    value = g.get_setting(setting_id)
-    if value in (None, ""):
-        return default
-    return g.get_bool_setting(setting_id)
+    return g.get_bool_setting(setting_id, default)
 
 
 def _show_display_title(show_id: int) -> str:
@@ -277,11 +274,12 @@ def _spec_is_renderable(spec: dict | None) -> bool:
 
 
 def _collect_playback_history_specs(page: int = 1) -> list[dict]:
-    """Entries that can actually be painted into the history folder (Prism playback only)."""
+    """Paintable history rows: in-progress bookmarks, Prism-stamped playback, then Simkl watch activity."""
     db = get_sync_database()
     in_progress = db.get_global_continue_watching() or []
     history = db.get_global_playback_history(page) or []
-    combined = list(in_progress) + list(history)
+    sync_recent = db.get_global_sync_recent_activity() or []
+    combined = list(in_progress) + list(history) + list(sync_recent)
 
     specs: list[dict] = []
     seen_keys: set[tuple[str, int]] = set()
@@ -300,6 +298,13 @@ def _collect_playback_history_specs(page: int = 1) -> list[dict]:
         spec = _menu_row_for_entry(entry)
         if _spec_is_renderable(spec):
             specs.append(spec)
+    # #region agent log
+    g.log(
+        f"watch_history specs: in_progress={len(in_progress)} local={len(history)} "
+        f"sync_recent={len(sync_recent)} renderable={len(specs)}",
+        "debug",
+    )
+    # #endregion
     return specs
 
 

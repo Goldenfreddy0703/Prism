@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from resources.lib.common.thread_pool import defer_background, prism_plugin_no_threads
+from resources.lib.common.thread_pool import defer_background
 
 
 class LibrarySyncService:
@@ -11,10 +11,7 @@ class LibrarySyncService:
 
     @staticmethod
     def schedule_verify(catalog: str, status: str, worker: Callable[[], None]) -> None:
-        if prism_plugin_no_threads():
-            worker()
-            return
-        defer_background(worker, name="prism-library-verify")
+        worker()
 
     @staticmethod
     def schedule_materialize(catalog: str, refs: list[dict], *, profile: str = "library") -> None:

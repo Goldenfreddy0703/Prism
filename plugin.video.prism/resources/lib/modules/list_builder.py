@@ -182,6 +182,12 @@ class ListBuilder:
             rows = overlay_parent_context_on_rows(rows, show_ctx)
         else:
             rows = media_list
+        try:
+            from resources.lib.pipeline.drilldown_page import merge_watch_state_light
+
+            rows = merge_watch_state_light(self._sync_db(), int(show_id), rows or [])
+        except Exception:
+            g.log_stacktrace()
         show_status = None
         try:
             db = self._sync_db()

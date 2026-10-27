@@ -282,6 +282,10 @@ class DiscoverRenderer:
         return page_refs_display_stamped(page_refs)
 
     def render_list(self, catalog: Catalog, list_id: str):
+        if g.FROM_WIDGET:
+            from resources.lib.modules.widget_loader import mark_widget_session_loaded
+
+            mark_widget_session_loaded(f"discover.{catalog}.{list_id}")
         discover_list = get_list(catalog, list_id)
         if discover_list is None:
             xbmcgui.Dialog().ok(g.ADDON_NAME, f"Unknown discover list: {list_id}")

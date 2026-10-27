@@ -122,13 +122,6 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
             self._update_all_shows_statisics()
             self._update_all_season_statistics()
 
-        try:
-            from resources.lib.meta.enrichment import MetaEnrichmentQueue
-
-            MetaEnrichmentQueue.schedule_needs_update()
-        except Exception:
-            g.log_stacktrace()
-
         return self.sync_errors
 
     def _finalize_process(self, update_time):
@@ -139,6 +132,12 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
 
         if not self.sync_errors:
             self._update_activity_record("all_activities", update_time)
+            try:
+                from resources.lib.simkl.all_items_sync import rebuild_library_cache_from_db
+
+                rebuild_library_cache_from_db(self)
+            except Exception:
+                g.log_stacktrace()
             xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=widgetRefresh&playing=False")')
 
     def _do_sync_activities(self, remote_activities):

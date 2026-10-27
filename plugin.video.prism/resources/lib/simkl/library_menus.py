@@ -108,9 +108,6 @@ def my_movies_hub() -> None:
     for status, label_id, icon, desc_id in _MOVIE_STATUSES:
         _add_status_item("movie", status, label_id, icon, desc_id)
     _add_library_item(30090, "libraryRecentlyWatched", "shows_recent", 30760, catalog="movie")
-    from resources.lib.simkl.library_list_sync import schedule_library_hub_background_warm
-
-    schedule_library_hub_background_warm("movie")
     g.close_directory(g.CONTENT_MENU)
 
 
@@ -120,9 +117,6 @@ def my_shows_hub() -> None:
     for status, label_id, icon, desc_id in _show_status_items("tv"):
         _add_status_item("tv", status, label_id, icon, desc_id)
     _add_show_library_rows("tv")
-    from resources.lib.simkl.library_list_sync import schedule_library_hub_background_warm
-
-    schedule_library_hub_background_warm("tv")
     g.close_directory(g.CONTENT_MENU)
 
 
@@ -132,9 +126,6 @@ def my_anime_hub() -> None:
     for status, label_id, icon, desc_id in _show_status_items("anime"):
         _add_status_item("anime", status, label_id, icon, desc_id)
     _add_show_library_rows("anime")
-    from resources.lib.simkl.library_list_sync import schedule_library_hub_background_warm
-
-    schedule_library_hub_background_warm("anime")
     g.close_directory(g.CONTENT_MENU)
 
 

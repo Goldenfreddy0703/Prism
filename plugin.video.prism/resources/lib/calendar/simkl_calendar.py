@@ -1564,29 +1564,7 @@ def prefetch_all_calendars(*, force_refresh: bool = False) -> int:
 
 
 def maybe_prefetch_calendars() -> None:
-    """Background warm once per Kodi session when weekly cache is missing."""
-    if not prefetch_calendars_enabled():
-        return
-    if g.get_bool_runtime_setting("calendar.prefetch.session_done"):
-        return
-    if weekly_cache_warm():
-        g.set_runtime_setting("calendar.prefetch.session_done", True)
-        return
-
-    import threading
-
-    def _run():
-        try:
-            g.ensure_addon()
-            prefetch_all_calendars()
-        except Exception:
-            g.log_stacktrace()
-        finally:
-            g.set_runtime_setting("calendar.prefetch.session_done", True)
-
-    from resources.lib.common.thread_pool import defer_background
-
-    defer_background(_run, name="prism-calendar-prefetch")
+    """No-op — weekly calendar is built on open or when cache is stale (~7d)."""
 
 
 def get_calendar_items(catalog: str, *, window_days: int = DEFAULT_WINDOW_DAYS) -> tuple[list[dict[str, Any]], str]:

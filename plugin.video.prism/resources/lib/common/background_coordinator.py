@@ -3,17 +3,33 @@ from __future__ import annotations
 
 import time
 
+import xbmc
+
 from resources.lib.modules.globals import g
 
 _BACKGROUND_BUSY_KEY = "background.maintenance_busy"
 _DEFAULT_THROTTLE_SEC = 86400.0
 
 
+def playback_session_busy() -> bool:
+    """True while PrismPlayer owns an active playback session (binge / smart play)."""
+    if g.get_bool_runtime_setting("playback.session_busy"):
+        return True
+    if g.get_bool_runtime_setting("playback.pipeline_busy"):
+        return True
+    try:
+        if xbmc.Player().isPlaying():
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def idle_ok_for_background_work() -> bool:
     """True when heavy idle maintenance may start (not playing, not scraping pipeline)."""
-    if g.get_bool_runtime_setting(_BACKGROUND_BUSY_KEY):
+    if playback_session_busy():
         return False
-    if g.get_bool_runtime_setting("playback.pipeline_busy"):
+    if g.get_bool_runtime_setting(_BACKGROUND_BUSY_KEY):
         return False
     try:
         from resources.lib.modules.page_prefetch import foreground_browse_busy

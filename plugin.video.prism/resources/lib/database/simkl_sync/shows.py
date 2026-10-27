@@ -2449,8 +2449,8 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             if show_ids:
                 from resources.lib.meta.enrichment import MetaEnrichmentQueue
 
-                MetaEnrichmentQueue.schedule_run_plugin(
-                    [{"simkl_id": show_id, "catalog": catalog_hint} for show_id in show_ids],
+                MetaEnrichmentQueue.enrich_simkl_ids_blocking(
+                    show_ids,
                     "tvshow",
                     reason="mixed_episode_list",
                     catalog=catalog_hint,

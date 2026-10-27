@@ -335,8 +335,13 @@ def dispatch(params):
 
     elif action == "preScrape":
 
+        from resources.lib.common.background_coordinator import playback_session_busy
         from resources.lib.database.skinManager import SkinManager
         from resources.lib.modules import helpers
+
+        if playback_session_busy() and g.get_bool_runtime_setting("playback.pipeline_busy"):
+            g.log("preScrape: deferred — getSources pipeline active", "debug")
+            return
 
         try:
             from resources.lib.common import tools
@@ -990,41 +995,6 @@ def dispatch(params):
 
         run_maintenance()
 
-    elif action == "prefetchCalendars":
-        from resources.lib.calendar.simkl_calendar import (
-            prefetch_all_calendars,
-            prefetch_calendars_enabled,
-            weekly_cache_warm,
-        )
-        from resources.lib.modules.cache_maintenance import service_background_idle_ready
-        from resources.lib.modules.page_prefetch import foreground_browse_busy
-
-        if prefetch_calendars_enabled() and not weekly_cache_warm():
-            if not g.is_addon_visible() and not foreground_browse_busy() and service_background_idle_ready():
-                prefetch_all_calendars()
-
-    elif action == "runPrismIdleMaintenance":
-        from resources.lib.common.maintenance import run_prism_idle_maintenance
-
-        run_prism_idle_maintenance()
-
-    elif action == "processMetaEnrichmentQueue":
-        from resources.lib.meta.enrichment import MetaEnrichmentQueue
-
-        try:
-            MetaEnrichmentQueue.process_request(action_args)
-        except Exception:
-            g.log_stacktrace()
-
-    elif action == "refreshLibraryCache":
-        from resources.lib.simkl.library_cache import refresh_library_cache_background
-
-        if isinstance(action_args, dict):
-            refresh_library_cache_background(
-                action_args.get("catalog"),
-                action_args.get("status"),
-            )
-
     elif action == "torrentCacheCleanup":
         from resources.lib.database import torrentCache
 
@@ -1034,11 +1004,6 @@ def dispatch(params):
         from resources.lib.modules.page_prefetch import run_page_prefetch_invoke
 
         run_page_prefetch_invoke(params)
-
-    elif action == "drilldownPrefetch":
-        from resources.lib.modules.drilldown_prefetch import run_drilldown_prefetch_invoke
-
-        run_drilldown_prefetch_invoke(params)
 
     elif action == "chooseTimeZone":
         from resources.lib.modules.manual_timezone import choose_timezone

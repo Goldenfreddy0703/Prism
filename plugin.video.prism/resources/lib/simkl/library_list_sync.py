@@ -298,21 +298,7 @@ def materialize_library_priority_page_one(catalog: str) -> int:
 
 
 def schedule_library_hub_background_warm(catalog: str) -> None:
-    """After library hub closes: warm page-1 stamps + raw episode trees for watching shows."""
-    from resources.lib.common.thread_pool import defer_background
-
-    def _warm() -> None:
-        try:
-            materialize_library_priority_page_one(catalog)
-            if catalog in ("tv", "anime"):
-                from resources.lib.database.session import get_sync_database
-                from resources.lib.modules.drilldown_prefetch import schedule_watching_show_raw_prefetch
-
-                schedule_watching_show_raw_prefetch(get_sync_database(), catalog=catalog)
-        except Exception:
-            g.log_stacktrace()
-
-    defer_background(_warm, name=f"prism-library-hub-warm-{catalog}")
+    """Reserved for API compatibility — hub warm removed (Seren-style: sync + list open only)."""
 
 
 def materialize_library_catalog_metadata(catalog: str) -> int:

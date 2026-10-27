@@ -159,13 +159,8 @@ def schedule_browse_page_materialize(
 
 
 def _schedule_materialize_background(work) -> bool:
-    """Run materialize on a daemon thread when Kodi allows background workers."""
-    from resources.lib.common.thread_pool import defer_background, prism_plugin_no_threads
-
-    if prism_plugin_no_threads():
-        return False
-    defer_background(work, name="prism-materialize")
-    return True
+    """Seren-aligned: materialize in the same invoker as list build (no background thread)."""
+    return False
 
 
 def schedule_browse_page_materialize_background(

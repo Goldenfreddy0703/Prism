@@ -24,6 +24,51 @@ from resources.lib.modules.globals import (
 )
 from resources.lib.modules import locale_playback, playback_streams
 
+_KEEP_ALIVE_GENERATION = 0
+_DIALOGS_CLAIM_PREFIX = "playback.player_dialogs.claim."
+
+
+# region agent log
+def _debug_dialog_log(hypothesis_id: str, message: str, data: dict) -> None:
+    try:
+        payload = {
+            "sessionId": "a54591",
+            "hypothesisId": hypothesis_id,
+            "location": "player.py",
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        log_path = g.translate_path("special://temp/debug-a54591.log")
+        with open(log_path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
+    g.log(f"PRISM_DEBUG_DIALOG: {message} | {data}", "debug")
+
+
+# endregion
+
+
+def _dialogs_claim_key(simkl_id) -> str:
+    return f"{_DIALOGS_CLAIM_PREFIX}{simkl_id}"
+
+
+def _try_claim_player_dialogs(simkl_id) -> bool:
+    if simkl_id is None:
+        return True
+    key = _dialogs_claim_key(simkl_id)
+    if g.get_bool_runtime_setting(key):
+        return False
+    g.set_runtime_setting(key, True)
+    return True
+
+
+def _clear_player_dialogs_claim(simkl_id) -> None:
+    if simkl_id is None:
+        return
+    g.clear_runtime_setting(_dialogs_claim_key(simkl_id))
+
 
 class PrismPlayer(xbmc.Player):
     """
@@ -158,6 +203,7 @@ class PrismPlayer(xbmc.Player):
         self.introdb_segments = []
         self.introdb_fired = set()
         self._running_path = None
+        self._keep_alive_generation = 0
 
     @cached_property
     def _simkl_api(self):
@@ -195,6 +241,16 @@ class PrismPlayer(xbmc.Player):
         self.smart_module = smartPlay.SmartPlay(item_information)
         self.mediatype = self.item_information["info"]["mediatype"]
         self.simkl_id = self.item_information["info"]["simkl_id"]
+        _clear_player_dialogs_claim(self.simkl_id)
+
+        global _KEEP_ALIVE_GENERATION
+        _KEEP_ALIVE_GENERATION += 1
+        self._keep_alive_generation = _KEEP_ALIVE_GENERATION
+        _debug_dialog_log(
+            "A",
+            "play_source keep_alive generation",
+            {"generation": self._keep_alive_generation, "simkl_id": self.simkl_id},
+        )
 
         if self.item_information.get("resume", "false") == "true":
             self._try_get_bookmark()
@@ -436,6 +492,7 @@ class PrismPlayer(xbmc.Player):
             self.resumed = True
 
         self.playback_started = True
+        g.set_runtime_setting("playback.session_busy", True)
         self.playback_timestamp = time.time()
         self._running_path = self.getPlayingFile()
 
@@ -452,6 +509,8 @@ class PrismPlayer(xbmc.Player):
             playback_streams.apply_anime_streams(self, catalog=catalog)
 
     def _end_playback(self):
+        g.clear_runtime_setting("playback.session_busy")
+        _clear_player_dialogs_claim(self.simkl_id)
         self._finalize_playback_progress()
         self._handle_bookmark()
         self._simkl_stop_watching()
@@ -674,7 +733,15 @@ class PrismPlayer(xbmc.Player):
 
         self._log_debug_information()
 
+        generation = self._keep_alive_generation
         while not g.wait_for_abort(0.5) and self._is_file_playing():  # This order is correct! Wait then check.
+            if generation != _KEEP_ALIVE_GENERATION:
+                _debug_dialog_log(
+                    "A",
+                    "stale keep_alive exiting",
+                    {"generation": generation, "current": _KEEP_ALIVE_GENERATION, "simkl_id": self.simkl_id},
+                )
+                return
             self._update_progress()
 
             if not self.scrobble_started:
@@ -693,8 +760,7 @@ class PrismPlayer(xbmc.Player):
                 self._handle_introdb_segments()
 
             if self.dialogs_enabled and not self.dialogs_triggered and time_left <= self.playing_next_time:
-                xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=runPlayerDialogs")')
-                self.dialogs_triggered = True
+                self._run_player_dialogs_plugin("time_left")
 
         if not self._playback_has_stopped():  # Kodi does not fire the onPlaybackStopped event if early in playback
             self._end_playback()
@@ -706,6 +772,24 @@ class PrismPlayer(xbmc.Player):
         if self.pre_scrape_enabled and not self.pre_scrape_initiated:
             self.smart_module.pre_scrape()
             self.pre_scrape_initiated = True
+
+    def _run_player_dialogs_plugin(self, source: str) -> None:
+        if self.dialogs_triggered:
+            return
+        if not _try_claim_player_dialogs(self.simkl_id):
+            _debug_dialog_log(
+                "B",
+                "skipped duplicate runPlayerDialogs claim",
+                {"source": source, "simkl_id": self.simkl_id, "generation": self._keep_alive_generation},
+            )
+            return
+        self.dialogs_triggered = True
+        _debug_dialog_log(
+            "B",
+            "scheduling runPlayerDialogs",
+            {"source": source, "simkl_id": self.simkl_id, "generation": self._keep_alive_generation},
+        )
+        xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=runPlayerDialogs")')
 
     def _fetch_introdb_segments(self):
         # Clear any stale outro flag from a previous item before (re)loading segments.
@@ -836,8 +920,7 @@ class PrismPlayer(xbmc.Player):
                 {"start": start, "end": end, "type": "credits"}
             )
             if plausible and not self.dialogs_triggered:
-                xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=runPlayerDialogs")')
-                self.dialogs_triggered = True
+                self._run_player_dialogs_plugin("credits_outro")
             return
 
         if g.get_bool_setting(f"introdb.{seg_type}.autoskip"):
@@ -947,29 +1030,48 @@ class PlayerDialogs(xbmc.Player):
         :return: None
         :rtype: None
         """
-        try:
-            self.playing_file = self.getPlayingFile()
-        except RuntimeError:
-            g.log("Kodi did not return a playing file, killing playback dialogs", "error")
+        if g.get_bool_runtime_setting("playback.player_dialogs.modal_active"):
+            _debug_dialog_log("C", "runPlayerDialogs skipped — modal already active", {})
             return
-        if g.PLAYLIST.size() > 0 and g.PLAYLIST.getposition() != (g.PLAYLIST.size() - 1):
-            if g.get_bool_setting("smartplay.stillwatching") and self._still_watching_calc():
-                target = self._show_still_watching
-            elif g.get_bool_setting("smartplay.playingnextdialog"):
-                target = self._show_skip_outro if self._outro_available() else self._show_playing_next
-            else:
+        g.set_runtime_setting("playback.player_dialogs.modal_active", True)
+        try:
+            try:
+                self.playing_file = self.getPlayingFile()
+            except RuntimeError:
+                g.log("Kodi did not return a playing file, killing playback dialogs", "error")
                 return
+            if g.PLAYLIST.size() > 0 and g.PLAYLIST.getposition() != (g.PLAYLIST.size() - 1):
+                if g.get_bool_setting("smartplay.stillwatching") and self._still_watching_calc():
+                    target = self._show_still_watching
+                elif g.get_bool_setting("smartplay.playingnextdialog"):
+                    target = self._show_skip_outro if self._outro_available() else self._show_playing_next
+                else:
+                    return
 
-            if self.playing_file != self.getPlayingFile():
-                return
+                if self.playing_file != self.getPlayingFile():
+                    return
 
-            if not self.isPlayingVideo():
-                return
+                if not self.isPlayingVideo():
+                    return
 
-            if not self._is_video_window_open():
-                return
+                if not self._is_video_window_open():
+                    return
 
-            target()
+                if target is not self._show_still_watching and self._get_next_item_item_information() is None:
+                    g.log(
+                        "Playing next / skip outro skipped: next playlist entry is not a Prism getSources URL",
+                        "debug",
+                    )
+                    _debug_dialog_log(
+                        "D",
+                        "dialog skipped invalid next playlist url",
+                        {"position": g.PLAYLIST.getposition(), "size": g.PLAYLIST.size()},
+                    )
+                    return
+
+                target()
+        finally:
+            g.clear_runtime_setting("playback.player_dialogs.modal_active")
 
     @staticmethod
     def _still_watching_calc():
@@ -985,47 +1087,77 @@ class PlayerDialogs(xbmc.Player):
         from resources.lib.gui.windows.playing_next import PlayingNext
         from resources.lib.database.skinManager import SkinManager
 
+        item_information = self._get_next_item_item_information()
+        if not item_information:
+            return
+        window = None
         try:
             window = PlayingNext(
                 *SkinManager().confirm_skin_path("playing_next.xml"),
-                item_information=self._get_next_item_item_information(),
+                item_information=item_information,
             )
             window.doModal()
         finally:
-            del window
+            if window is not None:
+                del window
 
     def _show_skip_outro(self):
         from resources.lib.gui.windows.skip_outro import SkipOutro
         from resources.lib.database.skinManager import SkinManager
 
+        item_information = self._get_next_item_item_information()
+        if not item_information:
+            return
+        window = None
         try:
             window = SkipOutro(
                 *SkinManager().confirm_skin_path("skip_outro.xml"),
-                item_information=self._get_next_item_item_information(),
+                item_information=item_information,
             )
             window.doModal()
         finally:
-            del window
+            if window is not None:
+                del window
 
     def _show_still_watching(self):
         from resources.lib.gui.windows.still_watching import StillWatching
         from resources.lib.database.skinManager import SkinManager
 
+        item_information = self._get_next_item_item_information()
+        if not item_information:
+            return
+        window = None
         try:
             window = StillWatching(
                 *SkinManager().confirm_skin_path("still_watching.xml"),
-                item_information=self._get_next_item_item_information(),
+                item_information=item_information,
             )
             window.doModal()
         finally:
-            del window
+            if window is not None:
+                del window
 
     @staticmethod
     def _get_next_item_item_information():
         current_position = g.PLAYLIST.getposition()
-        url = g.PLAYLIST[current_position + 1].getPath()  # pylint: disable=unsubscriptable-object
-        params = dict(parse.parse_qsl(parse.unquote(url.split("?")[1])))
-        return tools.get_item_information(tools.deconstruct_action_args(params.get("action_args")))
+        next_index = current_position + 1
+        if next_index >= g.PLAYLIST.size():
+            return None
+        url = g.PLAYLIST[next_index].getPath()  # pylint: disable=unsubscriptable-object
+        if not url or "?" not in url:
+            _debug_dialog_log("D", "next playlist item has no query", {"url": (url or "")[:160]})
+            return None
+        query = url.split("?", 1)[1]
+        params = dict(parse.parse_qsl(parse.unquote(query)))
+        action_args = params.get("action_args")
+        if not action_args:
+            _debug_dialog_log("D", "next playlist item missing action_args", {"url": url[:160]})
+            return None
+        try:
+            return tools.get_item_information(tools.deconstruct_action_args(action_args))
+        except Exception:
+            g.log_stacktrace()
+            return None
 
     @staticmethod
     def _is_video_window_open():

@@ -215,14 +215,6 @@ def service_background_idle_ready(*, block_when_enrichment_busy: bool = False) -
     if block_when_enrichment_busy:
         if g.get_bool_runtime_setting(_ENRICH_IN_FLIGHT_KEY):
             return False
-        try:
-            from resources.lib.meta.enrichment import MetaEnrichmentQueue
-
-            if MetaEnrichmentQueue._has_work() and g.get_bool_runtime_setting(_ENRICH_IN_FLIGHT_KEY):
-                return False
-        except Exception:
-            g.log_stacktrace()
-            return False
     started_at = g.get_float_runtime_setting(_SERVICE_STARTED_KEY, 0)
     if started_at and time.time() - started_at < _startup_grace_seconds():
         return False
@@ -232,13 +224,7 @@ def service_background_idle_ready(*, block_when_enrichment_busy: bool = False) -
 def _deferred_vacuum_idle_ready() -> bool:
     if not service_background_idle_ready(block_when_enrichment_busy=True):
         return False
-    try:
-        from resources.lib.meta.enrichment import MetaEnrichmentQueue
-
-        if MetaEnrichmentQueue._has_work() and g.get_bool_runtime_setting(_ENRICH_IN_FLIGHT_KEY):
-            return False
-    except Exception:
-        g.log_stacktrace()
+    if g.get_bool_runtime_setting(_ENRICH_IN_FLIGHT_KEY):
         return False
     return True
 

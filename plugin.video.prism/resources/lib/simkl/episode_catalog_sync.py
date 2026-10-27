@@ -96,11 +96,15 @@ def fetch_catalog_change_ids(db: "SimklSyncDatabase", *, force: bool = False) ->
         "%Y-%m-%d"
     )
     payload = db.simkl_api.get_changes(date_from=date_from)
+    if not isinstance(payload, dict):
+        g.log(
+            f"Simkl /changes poll skipped (no payload); date_from={date_from}; last_poll unchanged",
+            "debug",
+        )
+        return set()
+
     db.execute_sql("UPDATE activities SET last_changes_poll=? WHERE sync_id=1", (now,))
     db.refresh_activities()
-
-    if not isinstance(payload, dict):
-        return set()
 
     changed: set[int] = set()
     for key in ("shows", "anime"):
