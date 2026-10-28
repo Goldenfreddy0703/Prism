@@ -337,10 +337,9 @@ class DiscoverRenderer:
         list_kwargs = discover_list_kwargs(
             enrichment_reason="discover",
             discover_fast_open=True,
-            catalog_pipeline=True,
             seeded=True,
             browse_source=f"discover:{discover_list.list_id}",
-            thin_payload_rows=thin_rows,
+            paint_profile="browse",
         )
         list_kwargs["display_rating_priority"] = display_rating_priority_for_discover(
             catalog,

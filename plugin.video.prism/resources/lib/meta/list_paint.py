@@ -541,6 +541,91 @@ def _merged_seren_menu_kwargs(paint_overrides: dict) -> dict:
     return merged
 
 
+def _merged_seren_direct_menu_kwargs(paint_overrides: dict) -> dict:
+    """ListBuilder kwargs for Seren-style menu open: one simkl_sync SQL read, no pre-resolve."""
+    merged = browse_list_kwargs(**paint_overrides)
+    merged.pop("preloaded_paint_rows", None)
+    merged.pop("preloaded_paint_complete", None)
+    merged.pop("paint_only", None)
+    merged.pop("catalog_pipeline", None)
+    merged.setdefault("skip_mill", True)
+    merged.setdefault("sync_path", True)
+    merged.setdefault("skip_update", True)
+    merged.setdefault("seren_direct_db", True)
+    merged.setdefault("seren_menu_sql", True)
+    return merged
+
+
+def _seren_direct_db_menu(
+    paint_overrides: dict,
+    *,
+    library_paint: bool,
+    simkl_detail_paint: bool,
+    prefer_catalog_payload: bool,
+    catalog_fast_open: bool,
+    fast_profile: str,
+) -> bool:
+    """Skip paint resolve / window page cache — match Seren: refs → get_*_list → ListItems."""
+    if paint_overrides.get("seren_direct_db") is False:
+        return False
+    if paint_overrides.get("seren_direct_db") is True:
+        return True
+    if library_paint or simkl_detail_paint or prefer_catalog_payload:
+        return False
+    if paint_overrides.get("catalog_pipeline"):
+        return False
+    if paint_overrides.get("preloaded_paint_rows") or paint_overrides.get("preloaded_paint_complete"):
+        return False
+    if not catalog_fast_open:
+        return False
+    if fast_profile in ("library",):
+        return False
+    return True
+
+
+def prepare_seren_menu_refs(catalog: str, items: list[dict]) -> list[dict]:
+    """Otaku/Seren-style: write browse rows into simkl_sync, then list via get_*_list only."""
+    from resources.lib.discover.sync_bridge import simkl_refs
+    from resources.lib.meta.list_pipeline import seed_browse_page
+
+    if not items:
+        return []
+    seed_browse_page(catalog, items)
+    return simkl_refs(items)
+
+
+def render_seren_menu_page(
+    catalog: str,
+    items: list[dict],
+    list_builder,
+    *,
+    list_kwargs: dict | None = None,
+    **kwargs,
+) -> None:
+    """Seed simkl_sync from page payload and paint with seren_direct_db (no catalog pipeline)."""
+    refs = prepare_seren_menu_refs(catalog, items)
+    if not refs:
+        from resources.lib.modules.globals import g
+
+        g.cancel_directory()
+        return
+    paint_kwargs = dict(list_kwargs or {})
+    paint_kwargs.setdefault("seeded", True)
+    paint_kwargs["seren_direct_db"] = True
+    paint_kwargs["seren_menu_sql"] = True
+    merged = browse_list_kwargs(**paint_kwargs)
+    merged.pop("catalog_pipeline", None)
+    merged.pop("prefer_catalog_payload", None)
+    render_fast_title_list(
+        catalog,
+        refs,
+        list_builder,
+        list_kwargs=merged,
+        seeded=True,
+        **kwargs,
+    )
+
+
 def render_seren_browse_page(
     catalog: str,
     items: list[dict],
@@ -591,6 +676,10 @@ def render_fast_title_list(
         g.cancel_directory()
         return
 
+    from resources.lib.meta.browse_settings_snapshot import begin_browse_menu_snapshot
+
+    begin_browse_menu_snapshot()
+
     paint_overrides = dict(list_kwargs or {})
     paint_overrides.update(kwargs)
     library_paint, simkl_detail_paint, prefer_catalog_payload, _genre_paint = _resolve_catalog_paint_flags(
@@ -608,6 +697,14 @@ def render_fast_title_list(
     catalog_fast_open, fast_profile = _catalog_fast_open_profile(paint_overrides)
     genre_fast_open = catalog_fast_open and fast_profile == "genre"
     resolve_profile = fast_profile if catalog_fast_open else profile
+    seren_direct_db = _seren_direct_db_menu(
+        paint_overrides,
+        library_paint=library_paint,
+        simkl_detail_paint=simkl_detail_paint,
+        prefer_catalog_payload=prefer_catalog_payload,
+        catalog_fast_open=catalog_fast_open,
+        fast_profile=fast_profile,
+    )
     stamp_after_open: tuple[str, list[dict]] | None = None
     defer_persist: tuple[str, list[dict], str] | None = None
     defer_mixed_persist: tuple[list[dict], str] | None = None
@@ -618,46 +715,146 @@ def render_fast_title_list(
 
     trace_catalog = "mixed" if mixed_list else catalog
     with trace_menu_open(action, catalog=trace_catalog) as perf:
+        if seren_direct_db:
+            merged = _merged_seren_direct_menu_kwargs(paint_overrides)
+            perf["path"] = "seren_direct_db"
+            builder_started = time.time()
+            if mixed_list:
+                catalog_hint = paint_overrides.get("catalog_hint")
+                label2_for_item = paint_overrides.get("label2_for_item")
+                merged.pop("catalog_hint", None)
+                merged.pop("label2_for_item", None)
+                list_builder._mixed_media_from_sync_dicts(
+                    refs,
+                    catalog_hint=catalog_hint,
+                    label2_for_item=label2_for_item,
+                    **merged,
+                )
+            else:
+                _run_title_list_builder(catalog, refs, list_builder, merged)
+            note_phase_ms(perf, "builder_ms", builder_started)
+            return
+
         merged = _merged_seren_menu_kwargs(paint_overrides)
+        hide_unaired = bool(merged.get("hide_unaired", g.get_bool_setting("general.hideUnAired")))
+        hide_watched = bool(merged.get("hide_watched", g.get_bool_setting("general.hideWatched")))
+        prefer_rich = bool(
+            prefer_catalog_payload or library_paint or simkl_detail_paint or genre_fast_open
+        )
+        from resources.lib.meta.list_window_cache import (
+            get_window_page_items,
+            page_list_window_key,
+            serialize_page_rows_for_window,
+            set_window_page_items,
+        )
+        from resources.lib.meta.paint_cache import (
+            page_cache_catalog,
+            page_paint_cache_key,
+            set_session_page_paint,
+        )
+
+        cache_catalog = page_cache_catalog(catalog, refs, mixed_list=mixed_list)
+        window_key = page_list_window_key(
+            catalog,
+            refs,
+            mixed_list=mixed_list,
+            paint_profile=resolve_profile,
+            hide_unaired=hide_unaired,
+            hide_watched=hide_watched,
+            prefer_rich_payload=prefer_rich,
+        )
+        session_key = page_paint_cache_key(
+            cache_catalog,
+            refs,
+            hide_unaired=hide_unaired,
+            hide_watched=hide_watched,
+            paint_profile=resolve_profile,
+            prefer_rich_payload=prefer_rich,
+        )
+        cached_window = get_window_page_items(window_key)
+        use_catalog_pipeline = bool(paint_overrides.get("catalog_pipeline"))
         sync_started = time.time()
-        if mixed_list:
+        if cached_window and not use_catalog_pipeline:
+            rows = cached_window
+            open_path = "kodi_window"
+            note_phase_ms(perf, "sync_db_ms", sync_started)
+            note_phase_ms(perf, "finalize_ms", sync_started)
+        elif mixed_list:
             from resources.lib.simkl.media_ref import partition_by_catalog
 
             movies, tv, anime = partition_by_catalog(refs)
-            rows: list[dict] = []
+            rows = []
             for item_catalog, group in (("movie", movies), ("tv", tv), ("anime", anime)):
                 if group:
                     rows.extend(sync_db_rows_for_refs(item_catalog, group))
+            note_phase_ms(perf, "sync_db_ms", sync_started)
+            finalize_started = time.time()
+            if paint_overrides.get("catalog_pipeline"):
+                from resources.lib.pipeline.page_resolve import resolve_catalog_page_rows
+
+                rows, open_path = resolve_catalog_page_rows(
+                    catalog,
+                    refs,
+                    rows,
+                    resolve_profile,
+                    catalog_fast_open=catalog_fast_open,
+                    paint_overrides=paint_overrides,
+                )
+            elif catalog_fast_open:
+                rows, open_path = _seren_sync_resolve_page_rows_time_to_list(
+                    catalog,
+                    refs,
+                    rows,
+                    resolve_profile,
+                    paint_overrides=paint_overrides,
+                )
+            else:
+                rows, open_path = _seren_sync_resolve_page_rows(catalog, refs, rows, profile)
+            note_phase_ms(perf, "finalize_ms", finalize_started)
+            if not use_catalog_pipeline:
+                set_window_page_items(window_key, serialize_page_rows_for_window(rows))
+                set_session_page_paint(session_key, rows)
         else:
             rows = sync_db_rows_for_refs(catalog, refs)
-        note_phase_ms(perf, "sync_db_ms", sync_started)
-        finalize_started = time.time()
-        if paint_overrides.get("catalog_pipeline"):
-            from resources.lib.pipeline.page_resolve import resolve_catalog_page_rows
+            note_phase_ms(perf, "sync_db_ms", sync_started)
+            finalize_started = time.time()
+            if paint_overrides.get("catalog_pipeline"):
+                from resources.lib.pipeline.page_resolve import resolve_catalog_page_rows
 
-            rows, open_path = resolve_catalog_page_rows(
-                catalog,
-                refs,
-                rows,
-                resolve_profile,
-                catalog_fast_open=catalog_fast_open,
-                paint_overrides=paint_overrides,
-            )
-        elif catalog_fast_open:
-            rows, open_path = _seren_sync_resolve_page_rows_time_to_list(
-                catalog,
-                refs,
-                rows,
-                resolve_profile,
-                paint_overrides=paint_overrides,
-            )
-        else:
-            rows, open_path = _seren_sync_resolve_page_rows(catalog, refs, rows, profile)
-        note_phase_ms(perf, "finalize_ms", finalize_started)
+                rows, open_path = resolve_catalog_page_rows(
+                    catalog,
+                    refs,
+                    rows,
+                    resolve_profile,
+                    catalog_fast_open=catalog_fast_open,
+                    paint_overrides=paint_overrides,
+                )
+            elif catalog_fast_open:
+                rows, open_path = _seren_sync_resolve_page_rows_time_to_list(
+                    catalog,
+                    refs,
+                    rows,
+                    resolve_profile,
+                    paint_overrides=paint_overrides,
+                )
+            else:
+                rows, open_path = _seren_sync_resolve_page_rows(catalog, refs, rows, profile)
+            note_phase_ms(perf, "finalize_ms", finalize_started)
+            if not use_catalog_pipeline:
+                set_window_page_items(window_key, serialize_page_rows_for_window(rows))
+                set_session_page_paint(session_key, rows)
         perf["path"] = open_path
         merged["preloaded_paint_rows"] = rows
         paint_complete_profile = resolve_profile if catalog_fast_open else profile
-        preloaded_complete = open_path in ("stamp", "browse_resolve", "browse_stamp")
+        preloaded_complete = open_path in (
+            "stamp",
+            "browse_resolve",
+            "browse_stamp",
+            "kodi_window",
+        ) or (
+            bool(rows)
+            and all(isinstance(r, dict) and r.get("_menu_display_ready") for r in rows)
+        )
         merged["preloaded_paint_complete"] = preloaded_complete
         note_paint_rows(perf, rows, profile=paint_complete_profile)
         builder_started = time.time()
@@ -1175,6 +1372,7 @@ def render_catalog_episodes(
     list_kwargs["catalog_hint"] = catalog
 
     from resources.lib.meta.menu_paint_profile import MenuPaintProfile
+    from resources.lib.pipeline.browse_materialize import materialize_episode_page
 
     paint_profile = str(
         list_kwargs.get("paint_profile") or MenuPaintProfile.LIBRARY_EPISODES.value
@@ -1184,6 +1382,13 @@ def render_catalog_episodes(
         from resources.lib.simkl.menu_helpers import paginate_refs_for_page
 
         visible_rows = paginate_refs_for_page(episode_rows, g.PAGE)
+
+    visible_rows = materialize_episode_page(
+        catalog,
+        visible_rows,
+        profile=paint_profile,
+        library_paint=library_paint,
+    )
 
     cached_rows = peek_episode_page_cache(
         catalog,

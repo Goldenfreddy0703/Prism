@@ -657,7 +657,10 @@ def get_session_page_paint(cache_key: tuple) -> list[dict[str, Any]] | None:
         if db_store is not None:
             db_store.pop(cache_key, None)
         return None
-    return overlay_display_meta_stamps([dict(row) for row in rows])
+    rows = [dict(row) for row in rows]
+    if rows and all(isinstance(r, dict) and r.get("_menu_display_ready") for r in rows):
+        return rows
+    return overlay_display_meta_stamps(rows)
 
 
 def set_session_page_paint(cache_key: tuple, rows: list[dict[str, Any]]) -> None:

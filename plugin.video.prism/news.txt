@@ -1,20 +1,7 @@
-Prism 5.0.58 — Stability and background polish
+Prism 5.0.59 — Seren-smooth menus
 
-This update refines 5.0.57 with a quieter service, less background plugin traffic, and safer binge playback dialogs.
+Browse navigation matches Seren: light plugin entry, bulk ListItems on the menu thread, and Kodi menucaching for instant Back/reopen.
 
-What's new in 5.0.58 (highlights)
-- Lighter service loop and fewer background RunPlugin jobs while you browse or watch
-- Library and browse lists verify or warm metadata when you open them, not in idle storms
-- Widget refreshes coalesce better on Android and after library sync
-- Fixes duplicate Playing Next / Skip Outro prompts after pause or playlist changes
-- Safer handling when the next queue item is not a Prism source URL
+Title browse lists (discover, search, genre, library, related, and more) materialize the visible page into simkl_sync with full list art, then open with one SQL read (seren_direct_db). Episode menus use the same materialize-first pattern.
 
-Upgrading from 5.0.57
-No data wipe required — update in place, restart Kodi once, and continue watching.
-
-Upgrading from below 5.0.57
-You still need a full wipe and Simkl sign-in as described in the 5.0.57 notes (see Changelog 5.0.57).
-
-Report issues on GitHub or Addons4Kodi Discord.
-
-See the Changelog pane (left) for the full 5.0.58 line list.
+Enable general.menucaching in settings for best results. Restart Kodi after install.

@@ -439,6 +439,7 @@ def render_mixed_sync_list(
     *,
     catalog_hint: str | None = None,
     label2_for_item: Callable[[dict[str, Any]], str | None] | None = None,
+    list_id: str | None = None,
     **list_kwargs,
 ) -> None:
     """Render mixed movie/tv/anime via unified catalog browse pipeline."""
@@ -456,9 +457,9 @@ def render_mixed_sync_list(
     paint_overrides.setdefault("no_paging", True)
     paint_overrides.update(list_kwargs or {})
     paint_overrides.update(resolve_list_flags(paint_overrides, seeded=True))
-    paint_overrides.setdefault("catalog_pipeline", True)
     paint_overrides.setdefault("seeded", True)
-    paint_overrides.setdefault("prefer_catalog_payload", True)
+    if list_id:
+        paint_overrides.setdefault("list_id", list_id)
 
     builder = ListBuilder()
     CatalogPagePipeline.open_mixed_browse(
@@ -467,6 +468,7 @@ def render_mixed_sync_list(
         list_kwargs=paint_overrides,
         catalog_hint=catalog_hint,
         label2_for_item=label2_for_item,
+        list_id=paint_overrides.get("list_id"),
     )
 
 

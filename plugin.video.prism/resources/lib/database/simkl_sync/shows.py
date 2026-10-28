@@ -380,7 +380,8 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             return self._get_recently_watched_shows_scoped(page, force_all, catalog)
 
     def _get_recently_watched_shows_scoped(self, page=1, force_all=False, catalog=None):
-        # tv/anime use serial_profile_scope table — no giant IN (all anime ids) filter.
+        from resources.lib.database.simkl_sync.serial_sync import catalog_filter_sql
+
         catalog_ids = None
         if catalog and catalog not in ("tv", "anime"):
             catalog_ids = self._show_ids_for_catalog(catalog)
@@ -389,7 +390,11 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
 
         params: list = []
         catalog_clause = ""
-        if catalog_ids is not None:
+        if catalog in ("tv", "anime"):
+            cat_sql, cat_params = catalog_filter_sql(self._st(), "s")
+            catalog_clause = cat_sql
+            params.extend(cat_params)
+        elif catalog_ids is not None:
             placeholders = ",".join("?" * len(catalog_ids))
             catalog_clause = f" AND s.simkl_id IN ({placeholders})"
             params.extend(int(show_id) for show_id in catalog_ids)
@@ -410,7 +415,45 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             query += " LIMIT ? OFFSET ?"
             params.extend((self.page_limit, self.page_limit * (page - 1)))
 
-        return self.fetchall(query, tuple(params) if params else None)
+        rows = self.fetchall(query, tuple(params) if params else None)
+        # #region agent log
+        if catalog in ("tv", "anime") and rows:
+            try:
+                import json
+                import time
+
+                mism = sum(
+                    1
+                    for row in rows
+                    if row.get("simkl_id") is not None
+                    and (self.show_catalog(int(row["simkl_id"])) or "tv") != catalog
+                )
+                with open(
+                    r"C:\Users\jenki\Desktop\Prism\debug-a54591.log",
+                    "a",
+                    encoding="utf-8",
+                ) as _h:
+                    _h.write(
+                        json.dumps(
+                            {
+                                "sessionId": "a54591",
+                                "hypothesisId": "catalog",
+                                "location": "shows._get_recently_watched_shows_scoped",
+                                "message": "recently_watched catalog check",
+                                "data": {
+                                    "catalog": catalog,
+                                    "rows": len(rows),
+                                    "catalog_mismatch": mism,
+                                },
+                                "timestamp": int(time.time() * 1000),
+                            }
+                        )
+                        + "\n"
+                    )
+            except Exception:
+                pass
+        # #endregion
+        return rows
 
     @staticmethod
     def _show_episode_count_from_info(info: dict | None) -> int:
@@ -789,6 +832,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         skip_update = params.pop("skip_update", False)
         paint_only = params.pop("paint_only", False)
         sync_path = params.pop("sync_path", False)
+        seren_menu_sql = bool(params.pop("seren_menu_sql", False) or params.pop("seren_direct_db", False))
         if skip_update and paint_only and not sync_path:
             from resources.lib.meta.paint_cache import try_fast_paint_list
 
@@ -817,12 +861,18 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             statement += " AND (s.episode_count = 0 OR s.watched_episodes < s.episode_count)"
 
         rows = self.fetchall(statement)
-        meta_cache.set_many_rows("show", rows or [])
-
         if not sync_path:
-            from resources.lib.meta.display_store import get_display_meta_store
+            meta_cache.set_many_rows("show", rows or [])
 
-            rows = get_display_meta_store().overlay_rows(rows, "tvshow")
+        from resources.lib.meta.display_store import get_display_meta_store
+
+        rows = get_display_meta_store().finalize_menu_list_rows(
+            rows,
+            "tvshow",
+            sync_path=sync_path,
+            seren_menu_sql=seren_menu_sql,
+        )
+
         if skip_update and not sync_path:
             from resources.lib.meta.paint_cache import paint_sync_list_rows
 
@@ -2507,6 +2557,18 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             from collections import defaultdict
 
             from resources.lib.meta.enrichment import MetaEnrichmentQueue
+            from resources.lib.meta.profiles import MetaProfile
+            from resources.lib.meta.storage import slim_db_row
+
+            slimmed: list[dict] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    slimmed.append(row)
+                    continue
+                item = slim_db_row(row, profile=MetaProfile.LIST, slim_art=False)
+                item["_menu_display_ready"] = True
+                slimmed.append(item)
+            rows = slimmed
 
             groups: dict[tuple[int, int | None], list[int]] = defaultdict(list)
             for item in media_items:
@@ -3539,6 +3601,11 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 return entry[1]
 
         st = self._st()
+        cat_sql, cat_params = ("", ())
+        if catalog in ("tv", "anime"):
+            from resources.lib.database.simkl_sync.serial_sync import catalog_filter_sql
+
+            cat_sql, cat_params = catalog_filter_sql(st, "s")
         base_query = f"""
                 SELECT e.simkl_id,
                        e.number  AS episode_x,
@@ -3557,6 +3624,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                          LEFT JOIN {st.show_meta} AS sm
                                ON e.simkl_show_id = sm.id AND sm.type = 'simkl'
             WHERE (COALESCE(e.watched, 0) > 0 OR e.last_watched_at IS NOT NULL)
+            {cat_sql}
             """
         if not catalog:
             rows = self.fetchall(
@@ -3564,12 +3632,11 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 (page_limit, offset),
             )
         else:
-            # Serial profile already scopes tv vs anime episode tables.
             rows = self.fetchall(
                 f"""{base_query}
                 ORDER BY e.last_watched_at DESC
                         LIMIT ? OFFSET ?""",
-                (page_limit, offset),
+                cat_params + (page_limit, offset),
             )
         result = self.wrap_in_simkl_object(rows)
         if not hasattr(self, "_watched_episodes_page_cache"):
@@ -3589,16 +3656,18 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
     def _refresh_watched_episodes_if_empty_scoped(self, catalog: str, *, limit: int = 12) -> int:
         from resources.lib.simkl.all_items_sync import refresh_show_episode_watch_state
 
+        cat_sql, cat_params = self._catalog_sql()
         rows = self.fetchall(
             f"""
             SELECT simkl_id
             FROM {self._st().show}
-            WHERE COALESCE(watched_episodes, 0) > 0
-               OR simkl_status IN ('watching', 'completed')
+            WHERE (COALESCE(watched_episodes, 0) > 0
+               OR simkl_status IN ('watching', 'completed'))
+            {cat_sql}
             ORDER BY last_watched_at DESC
             LIMIT ?
             """,
-            (limit * 4,),
+            cat_params + (limit * 4,),
         )
         refreshed = 0
         for row in rows or []:

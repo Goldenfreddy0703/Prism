@@ -35,10 +35,14 @@ def _ttl_for_namespace(namespace: str) -> float:
 
 def get_cached_page(namespace: str, cache_key: str) -> list[dict[str, Any]] | None:
     from resources.lib.database.session import get_sync_database
+    from resources.lib.meta.list_window_cache import get_window_page_items
     from resources.lib.modules.globals import g
 
     if not g.kodi_menu_caching_enabled():
         return None
+    window_items = get_window_page_items(cache_key)
+    if window_items is not None:
+        return window_items
     db = get_sync_database()
     _ensure_table(db)
     row = db.fetchone(
@@ -57,15 +61,20 @@ def get_cached_page(namespace: str, cache_key: str) -> list[dict[str, Any]] | No
         return None
     if not isinstance(payload, list):
         return None
+    from resources.lib.meta.list_window_cache import set_window_page_items
+
+    set_window_page_items(cache_key, payload)
     return payload
 
 
 def set_cached_page(namespace: str, cache_key: str, items: list[dict[str, Any]]) -> None:
     from resources.lib.database.session import get_sync_database
+    from resources.lib.meta.list_window_cache import set_window_page_items
     from resources.lib.modules.globals import g
 
     if not g.kodi_menu_caching_enabled() or not items:
         return
+    set_window_page_items(cache_key, items)
     db = get_sync_database()
     _ensure_table(db)
     ttl = _ttl_for_namespace(namespace)

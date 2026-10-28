@@ -7,9 +7,50 @@ import time
 from typing import Any
 
 _SESSION_TTL_SEC = 30 * 60
-_MAX_PAYLOAD_BYTES = 60000
+_MAX_PAYLOAD_BYTES = 180000
 _PROP_PREFIX = "prism_list_cache_"
 _EXPIRE_PREFIX = "prism_list_cache_exp_"
+
+
+def page_list_window_key(
+    catalog: str,
+    refs: list[dict],
+    *,
+    mixed_list: bool,
+    paint_profile: str,
+    hide_unaired: bool,
+    hide_watched: bool,
+    prefer_rich_payload: bool = False,
+) -> str:
+    """Stable key for Otaku-style Kodi window list cache (survives plugin invoker exit)."""
+    from resources.lib.meta.paint_cache import page_cache_catalog, page_paint_cache_key
+
+    cache_catalog = page_cache_catalog(catalog, refs, mixed_list=mixed_list)
+    key_tuple = page_paint_cache_key(
+        cache_catalog,
+        refs,
+        hide_unaired=hide_unaired,
+        hide_watched=hide_watched,
+        paint_profile=paint_profile,
+        prefer_rich_payload=prefer_rich_payload,
+    )
+    return hashlib.sha1(repr(key_tuple).encode("utf-8")).hexdigest()
+
+
+def serialize_page_rows_for_window(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Slim rows for window property storage (pre-built list payloads, no cast blobs)."""
+    from resources.lib.meta.profiles import MetaProfile
+    from resources.lib.meta.storage import slim_db_row
+
+    packed: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        slim = slim_db_row(row, profile=MetaProfile.LIST, slim_art=False)
+        slim.pop("simkl_object", None)
+        slim["_menu_display_ready"] = True
+        packed.append(slim)
+    return packed
 
 
 def _cache_key(disk_key: str) -> str:

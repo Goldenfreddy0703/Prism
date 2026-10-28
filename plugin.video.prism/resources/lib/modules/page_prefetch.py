@@ -11,7 +11,6 @@ from resources.lib.modules.globals import g
 
 _DONE_KEY = "page_prefetch.done_keys"
 _IN_FLIGHT_KEY = "page_prefetch.in_flight"
-_MENU_ACTIVE_KEY = "browse.menu_active"
 _PREFETCH_PAGES_DEFAULT = 0
 _PREFETCH_PAGES_MAX = 5
 _MAX_DONE_KEYS = 256
@@ -30,13 +29,9 @@ def prefetch_next_page_enabled() -> bool:
     return g.kodi_menu_caching_enabled() and prefetch_page_depth() > 0
 
 
-def set_foreground_menu_active(active: bool) -> None:
-    """Mark a user-facing directory build so background work yields."""
-    g.set_runtime_setting(_MENU_ACTIVE_KEY, bool(active))
-
-
 def _menu_active() -> bool:
-    return g.get_bool_runtime_setting(_MENU_ACTIVE_KEY)
+    """Seren-style browse does not set a foreground menu flag."""
+    return False
 
 
 def _schedule_background_prefetch(page_params: dict[str, Any]) -> None:

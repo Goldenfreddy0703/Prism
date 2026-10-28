@@ -208,6 +208,7 @@ def _render_library_browse_page(
         list_kwargs=merged,
         library_paint=True,
         payload_rows=page_items,
+        list_id=list_id,
     )
 
 

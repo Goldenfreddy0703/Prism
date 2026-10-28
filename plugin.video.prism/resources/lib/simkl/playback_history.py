@@ -278,8 +278,44 @@ def _collect_playback_history_specs(page: int = 1) -> list[dict]:
     db = get_sync_database()
     in_progress = db.get_global_continue_watching() or []
     history = db.get_global_playback_history(page) or []
-    sync_recent = db.get_global_sync_recent_activity() or []
+    # Same Simkl rows as library Recently Watched — only when no Prism local_playback history yet.
+    sync_recent: list[dict] = []
+    if page == 1 and not history:
+        sync_recent = db.get_global_sync_recent_activity() or []
     combined = list(in_progress) + list(history) + list(sync_recent)
+
+    # #region agent log
+    try:
+        import json
+        import time
+
+        with open(
+            r"C:\Users\jenki\Desktop\Prism\debug-a54591.log",
+            "a",
+            encoding="utf-8",
+        ) as _h:
+            _h.write(
+                json.dumps(
+                    {
+                        "sessionId": "a54591",
+                        "hypothesisId": "history_sources",
+                        "location": "playback_history._collect_playback_history_specs",
+                        "message": "watch history source counts",
+                        "data": {
+                            "page": page,
+                            "in_progress": len(in_progress),
+                            "local_history": len(history),
+                            "sync_recent": len(sync_recent),
+                            "combined": len(combined),
+                        },
+                        "timestamp": int(time.time() * 1000),
+                    }
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
 
     specs: list[dict] = []
     seen_keys: set[tuple[str, int]] = set()
@@ -298,13 +334,6 @@ def _collect_playback_history_specs(page: int = 1) -> list[dict]:
         spec = _menu_row_for_entry(entry)
         if _spec_is_renderable(spec):
             specs.append(spec)
-    # #region agent log
-    g.log(
-        f"watch_history specs: in_progress={len(in_progress)} local={len(history)} "
-        f"sync_recent={len(sync_recent)} renderable={len(specs)}",
-        "debug",
-    )
-    # #endregion
     return specs
 
 

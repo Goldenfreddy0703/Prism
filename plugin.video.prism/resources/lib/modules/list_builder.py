@@ -603,10 +603,36 @@ class ListBuilder:
         preloaded_paint_rows = params.pop("preloaded_paint_rows", None)
         preloaded_paint_complete = params.pop("preloaded_paint_complete", False)
         sync_path = params.pop("sync_path", False)
-        paint_profile = str(params.get("paint_profile") or "browse")
+        paint_profile = str(params.pop("paint_profile", None) or "browse")
         if paint_profile in ("browse", "related", "airing") and not preloaded_paint_rows:
             sync_path = True
         if sync_path and not preloaded_paint_rows:
+            # #region agent log
+            try:
+                import json
+                import time
+
+                _log_path = r"C:\Users\jenki\Desktop\Prism\debug-a54591.log"
+                with open(_log_path, "a", encoding="utf-8") as _h:
+                    _h.write(
+                        json.dumps(
+                            {
+                                "sessionId": "a54591",
+                                "hypothesisId": "A",
+                                "location": "list_builder._mixed_media_from_sync_dicts",
+                                "message": "load_seren_browse_rows kwargs",
+                                "data": {
+                                    "paint_profile": paint_profile,
+                                    "params_has_paint_profile": "paint_profile" in params,
+                                },
+                                "timestamp": int(time.time() * 1000),
+                            }
+                        )
+                        + "\n"
+                    )
+            except Exception:
+                pass
+            # #endregion
             movie_rows, show_rows = self._load_seren_browse_rows(
                 media_list,
                 hide_unaired=hide_unaired,
@@ -622,7 +648,6 @@ class ListBuilder:
             from resources.lib.meta.paint_complete import rows_page_paint_ready
 
             preloaded_paint_rows = overlay_display_meta_stamps(preloaded_paint_rows)
-            paint_profile = str(params.get("paint_profile") or "browse")
             if not preloaded_paint_complete:
                 preloaded_paint_complete = rows_page_paint_ready(preloaded_paint_rows, profile=paint_profile)
             movie_rows = {}
@@ -647,7 +672,6 @@ class ListBuilder:
 
                 sync_db = self._sync_db()
                 handler = sync_db.metadataHandler
-                paint_profile = str(params.get("paint_profile") or "browse")
                 if enrichment_reason == "library":
                     g.log(
                         f"Library list: fast paint for {len(preloaded_paint_rows)} row(s); "
@@ -912,6 +936,8 @@ class ListBuilder:
         sync_params["sync_path"] = True
         sync_params.setdefault("skip_mill", True)
         sync_params.setdefault("skip_update", True)
+        if params.get("seren_direct_db") or params.get("seren_menu_sql"):
+            sync_params["seren_menu_sql"] = True
         sync_params.pop("preloaded_paint_rows", None)
         sync_params.pop("preloaded_paint_complete", None)
         sync_params.pop("paint_only", None)
@@ -924,8 +950,9 @@ class ListBuilder:
                 if isinstance(row, dict) and row.get("simkl_id") is not None:
                     movie_rows[int(row["simkl_id"])] = row
             if movie_rows:
-                overlaid = self._overlay_page_cdn_rows(list(movie_rows.values()), media_list)
-                movie_rows = {int(row["simkl_id"]): row for row in overlaid if row.get("simkl_id") is not None}
+                if self._browse_page_items_rich(media_list):
+                    overlaid = self._overlay_page_cdn_rows(list(movie_rows.values()), media_list)
+                    movie_rows = {int(row["simkl_id"]): row for row in overlaid if row.get("simkl_id") is not None}
         if tv:
             for row in db.get_show_list(tv, **sync_params):
                 if isinstance(row, dict) and row.get("simkl_id") is not None:
@@ -935,9 +962,23 @@ class ListBuilder:
                 if isinstance(row, dict) and row.get("simkl_id") is not None:
                     show_rows[int(row["simkl_id"])] = row
         if show_rows:
-            overlaid = self._overlay_page_cdn_rows(list(show_rows.values()), media_list)
-            show_rows = {int(row["simkl_id"]): row for row in overlaid if row.get("simkl_id") is not None}
+            if self._browse_page_items_rich(media_list):
+                overlaid = self._overlay_page_cdn_rows(list(show_rows.values()), media_list)
+                show_rows = {int(row["simkl_id"]): row for row in overlaid if row.get("simkl_id") is not None}
         return movie_rows, show_rows
+
+    @staticmethod
+    def _browse_page_items_rich(page_items: list[dict]) -> bool:
+        """True when page_items carry titles/payload beyond bare simkl_id refs."""
+        for item in page_items or []:
+            if not isinstance(item, dict):
+                continue
+            if isinstance(item.get("simkl_object"), dict):
+                return True
+            info = item.get("info")
+            if isinstance(info, dict) and (info.get("title") or info.get("name")):
+                return True
+        return False
 
     def _discover_builder_paint_rows(self, media_list, *, fetch_rows, params):
         """Use preloaded library/search paint rows when present; else simkl_sync + CDN overlay."""
@@ -951,7 +992,12 @@ class ListBuilder:
         sync_params["sync_path"] = True
         sync_params.setdefault("skip_mill", True)
         sync_params.setdefault("skip_update", True)
-        return self._overlay_page_cdn_rows(fetch_rows(media_list, **sync_params), media_list)
+        if params.get("seren_direct_db") or params.get("seren_menu_sql"):
+            sync_params["seren_menu_sql"] = True
+        rows = fetch_rows(media_list, **sync_params)
+        if self._browse_page_items_rich(media_list):
+            return self._overlay_page_cdn_rows(rows, media_list)
+        return rows
 
     @staticmethod
     def _catalog_content_type(catalog: str | None) -> str:
@@ -1045,14 +1091,9 @@ class ListBuilder:
 
     @staticmethod
     def _use_parallel_list_build(count: int, content_type: str | None = None) -> bool:
-        from resources.lib.common.thread_pool import prism_plugin_no_threads
-        from resources.lib.modules.globals import g
-
-        if prism_plugin_no_threads():
-            return False
-        if content_type == g.CONTENT_EPISODE:
-            return count > 0
-        return count > 3
+        """Seren builds ListItems on the menu thread — avoids Kodi GUI stalls during focus."""
+        del count, content_type
+        return False
 
     def _action_args_for_item(self, processed, library_status=None):
         args = self._menu_action_args(processed)
@@ -1393,6 +1434,63 @@ class ListBuilder:
             copied["info"] = dict(info)
         return copied
 
+    def _post_process_display_ready(self, item, prepend_date=False, mixed_list=False):
+        """Cached display_meta / window page rows — skip per-row SQL and rating passes."""
+        info = item.get("info")
+        if not isinstance(info, dict):
+            return None
+
+        mediatype = info.get("mediatype")
+        catalog = item.get("catalog") or info.get("catalog")
+        name = info.get("title") or item.get("name")
+        is_anime_row = catalog == "anime" or info.get("mal_id")
+        if is_anime_row and mediatype not in ("season", "episode"):
+            from resources.lib.anime.paint import menu_display_name
+
+            localized = menu_display_name(info, fallback=name, item=item, mediatype=mediatype)
+            if localized:
+                name = localized
+
+        if not name and mediatype == "season":
+            from resources.lib.simkl.field_map import ensure_season_title
+
+            ensure_season_title(info)
+            name = info.get("title")
+
+        if not name and mediatype == "episode":
+            from resources.lib.simkl.field_map import ensure_episode_title
+
+            ensure_episode_title(info)
+            name = info.get("title") or item.get("name")
+
+        if not name:
+            return None
+
+        if mediatype != "list" and not self.hide_unaired and not self.is_aired(item):
+            name = g.color_string(tools.italic_string(name), "red")
+
+        if mediatype == "episode":
+            if mixed_list:
+                style = int(self.title_appends_mixed or 0)
+                if style > 0:
+                    name = self._handle_episode_title_appending(name, item, style)
+            elif int(self.title_appends_general or 0) > 0:
+                name = self._handle_episode_title_appending(
+                    name, item, int(self.title_appends_general or 0)
+                )
+
+        if mediatype != "list" and prepend_date:
+            if release_date := g.utc_to_local(item.get("air_date", info.get("aired", None))):
+                release_day = tools.parse_datetime(release_date, date_only=False).strftime(
+                    f"%a %d %b @ {g.KODI_TIME_NO_SECONDS_FORMAT}"
+                )
+                name = f"[{release_day}] {name}"
+
+        item.update({"name": name})
+        info["title"] = name
+        item["info"] = info
+        return item
+
     def _post_process(
         self,
         item,
@@ -1406,6 +1504,13 @@ class ListBuilder:
 
         if self._skip_watched_widget_item(item, library_status=library_status):
             return None
+
+        if item.get("_menu_display_ready") and not library_status:
+            return self._post_process_display_ready(
+                item,
+                prepend_date=prepend_date,
+                mixed_list=mixed_list,
+            )
 
         item = self._apply_completed_watched_display(item, library_status=library_status)
 

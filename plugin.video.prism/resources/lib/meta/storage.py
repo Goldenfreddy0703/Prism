@@ -357,7 +357,7 @@ def slim_formatted_item(item: dict[str, Any], *, profile: str | None = None) -> 
     return slimmed
 
 
-def slim_db_row(row: dict[str, Any], *, profile: str | None = None) -> dict[str, Any]:
+def slim_db_row(row: dict[str, Any], *, profile: str | None = None, slim_art: bool = True) -> dict[str, Any]:
     """Slim info/art/cast on a sync DB list row."""
     if not isinstance(row, dict):
         return row
@@ -366,7 +366,7 @@ def slim_db_row(row: dict[str, Any], *, profile: str | None = None) -> dict[str,
     info = row.get("info")
     if isinstance(info, dict):
         out["info"] = slim_info_dict(info, simkl=True)
-    if isinstance(row.get("art"), dict):
+    if slim_art and isinstance(row.get("art"), dict):
         from resources.lib.meta.artwork import art_limits_media_type, artwork_profile_for_row
 
         info_dict = out.get("info") if isinstance(out.get("info"), dict) else info

@@ -52,7 +52,12 @@ def mark_service_migrations_ready() -> None:
 
 
 def service_foreground_ready() -> bool:
-    """True when foreground menus may run without contending with cold-start service work."""
+    """Menus are never blocked on cold start (Seren parity)."""
+    return True
+
+
+def service_background_ready() -> bool:
+    """True when deferred service maintenance may run (post-migration grace)."""
     if g.get_bool_runtime_setting(_FOREGROUND_READY_KEY):
         return True
     if g.abort_requested():
@@ -64,18 +69,8 @@ def service_foreground_ready() -> bool:
     if elapsed < _foreground_grace_seconds():
         return False
     g.set_runtime_setting(_FOREGROUND_READY_KEY, True)
-    g.log(f"PRISM: Foreground startup gate open ({elapsed:.1f}s after migrations)", "info")
+    g.log(f"PRISM: Service background maintenance ready ({elapsed:.1f}s after migrations)", "info")
     return True
-
-
-def startup_gate_progress_percent() -> int:
-    """Rough 0-99 progress while waiting for the post-migration grace window."""
-    migrations_at = g.get_float_runtime_setting(_MIGRATIONS_READY_AT_KEY, 0)
-    if not migrations_at:
-        return 5
-    elapsed = time.time() - migrations_at
-    grace = max(_foreground_grace_seconds(), 1)
-    return min(99, max(5, int(elapsed / grace * 100)))
 
 
 def queue_torrent_cache_cleanup() -> None:
@@ -86,7 +81,7 @@ def process_pending_torrent_cache_cleanup() -> bool:
     """Service hook: run torrent cache cleanup after the foreground gate opens."""
     if not g.get_bool_runtime_setting(_TORRENT_CLEANUP_PENDING_KEY):
         return False
-    if not service_foreground_ready():
+    if not service_background_ready():
         return False
     try:
         from resources.lib.modules.page_prefetch import foreground_browse_busy

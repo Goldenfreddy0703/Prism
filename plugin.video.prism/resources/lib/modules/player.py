@@ -28,28 +28,6 @@ _KEEP_ALIVE_GENERATION = 0
 _DIALOGS_CLAIM_PREFIX = "playback.player_dialogs.claim."
 
 
-# region agent log
-def _debug_dialog_log(hypothesis_id: str, message: str, data: dict) -> None:
-    try:
-        payload = {
-            "sessionId": "a54591",
-            "hypothesisId": hypothesis_id,
-            "location": "player.py",
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        log_path = g.translate_path("special://temp/debug-a54591.log")
-        with open(log_path, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload) + "\n")
-    except Exception:
-        pass
-    g.log(f"PRISM_DEBUG_DIALOG: {message} | {data}", "debug")
-
-
-# endregion
-
-
 def _dialogs_claim_key(simkl_id) -> str:
     return f"{_DIALOGS_CLAIM_PREFIX}{simkl_id}"
 
@@ -246,11 +224,6 @@ class PrismPlayer(xbmc.Player):
         global _KEEP_ALIVE_GENERATION
         _KEEP_ALIVE_GENERATION += 1
         self._keep_alive_generation = _KEEP_ALIVE_GENERATION
-        _debug_dialog_log(
-            "A",
-            "play_source keep_alive generation",
-            {"generation": self._keep_alive_generation, "simkl_id": self.simkl_id},
-        )
 
         if self.item_information.get("resume", "false") == "true":
             self._try_get_bookmark()
@@ -736,11 +709,6 @@ class PrismPlayer(xbmc.Player):
         generation = self._keep_alive_generation
         while not g.wait_for_abort(0.5) and self._is_file_playing():  # This order is correct! Wait then check.
             if generation != _KEEP_ALIVE_GENERATION:
-                _debug_dialog_log(
-                    "A",
-                    "stale keep_alive exiting",
-                    {"generation": generation, "current": _KEEP_ALIVE_GENERATION, "simkl_id": self.simkl_id},
-                )
                 return
             self._update_progress()
 
@@ -777,18 +745,8 @@ class PrismPlayer(xbmc.Player):
         if self.dialogs_triggered:
             return
         if not _try_claim_player_dialogs(self.simkl_id):
-            _debug_dialog_log(
-                "B",
-                "skipped duplicate runPlayerDialogs claim",
-                {"source": source, "simkl_id": self.simkl_id, "generation": self._keep_alive_generation},
-            )
             return
         self.dialogs_triggered = True
-        _debug_dialog_log(
-            "B",
-            "scheduling runPlayerDialogs",
-            {"source": source, "simkl_id": self.simkl_id, "generation": self._keep_alive_generation},
-        )
         xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=runPlayerDialogs")')
 
     def _fetch_introdb_segments(self):
@@ -1031,7 +989,6 @@ class PlayerDialogs(xbmc.Player):
         :rtype: None
         """
         if g.get_bool_runtime_setting("playback.player_dialogs.modal_active"):
-            _debug_dialog_log("C", "runPlayerDialogs skipped — modal already active", {})
             return
         g.set_runtime_setting("playback.player_dialogs.modal_active", True)
         try:
@@ -1061,11 +1018,6 @@ class PlayerDialogs(xbmc.Player):
                     g.log(
                         "Playing next / skip outro skipped: next playlist entry is not a Prism getSources URL",
                         "debug",
-                    )
-                    _debug_dialog_log(
-                        "D",
-                        "dialog skipped invalid next playlist url",
-                        {"position": g.PLAYLIST.getposition(), "size": g.PLAYLIST.size()},
                     )
                     return
 
@@ -1145,13 +1097,11 @@ class PlayerDialogs(xbmc.Player):
             return None
         url = g.PLAYLIST[next_index].getPath()  # pylint: disable=unsubscriptable-object
         if not url or "?" not in url:
-            _debug_dialog_log("D", "next playlist item has no query", {"url": (url or "")[:160]})
             return None
         query = url.split("?", 1)[1]
         params = dict(parse.parse_qsl(parse.unquote(query)))
         action_args = params.get("action_args")
         if not action_args:
-            _debug_dialog_log("D", "next playlist item missing action_args", {"url": url[:160]})
             return None
         try:
             return tools.get_item_information(tools.deconstruct_action_args(action_args))

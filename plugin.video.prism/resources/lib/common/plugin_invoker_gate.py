@@ -8,7 +8,6 @@ import threading
 import time
 
 import xbmc
-import xbmcgui
 
 from resources.lib.modules.globals import g
 
@@ -73,7 +72,7 @@ def _wait_abort(seconds: float) -> None:
 
 
 def should_hold_plugin_slot_from_argv() -> bool:
-    """True for in-addon browsing invokers (not widgets / background RunPlugin)."""
+    """Reserved for long-running invokers only — normal menu browse is Seren-like (no slot)."""
     from resources.lib.common.thread_pool import _peek_plugin_action_from_argv, plugin_action_allows_threads
 
     try:
@@ -83,7 +82,7 @@ def should_hold_plugin_slot_from_argv() -> bool:
     if handle <= 0:
         return False
     action = _peek_plugin_action_from_argv()
-    if plugin_action_allows_threads(action):
+    if not plugin_action_allows_threads(action):
         return False
     plugin_name = xbmc.getInfoLabel("Container.PluginName")
     if plugin_name and plugin_name != "plugin.video.prism":
@@ -156,50 +155,11 @@ def release_prism_plugin_slot(token: str | None) -> None:
 
 
 def prepare_foreground_plugin_invoke() -> bool:
-    """Return False when the startup gate is still closed (caller should show wait UI)."""
-    from resources.lib.modules.cache_maintenance import service_foreground_ready
-
-    return service_foreground_ready()
-
-
-def _poll_startup_gate(
-    label: str,
-    *,
-    max_wait_sec: float = 45.0,
-    progress_dialog: xbmcgui.DialogProgressBG | None = None,
-) -> bool:
-    from resources.lib.modules.cache_maintenance import service_foreground_ready, startup_gate_progress_percent
-
-    wait_started = time.time()
-    while not _abort_requested():
-        if service_foreground_ready():
-            if progress_dialog is not None:
-                progress_dialog.update(100, label)
-            return True
-        if time.time() - wait_started >= max_wait_sec:
-            g.log("PRISM: Startup wait timeout — continuing without full service ready", "warning")
-            return False
-        if progress_dialog is not None:
-            progress_dialog.update(startup_gate_progress_percent(), label)
-        _wait_abort(0.25)
-    return False
+    """Menus are never blocked on service startup (Seren parity)."""
+    return True
 
 
 def ensure_startup_ready_for_foreground(max_wait_sec: float = 45.0) -> bool:
-    """Block until the service startup gate opens (SimKL-style progress dialog)."""
-    if prepare_foreground_plugin_invoke():
-        return True
-
-    label = g.get_language_string(31087)
-    dialog = xbmcgui.DialogProgressBG()
-    dialog.create(g.ADDON_NAME, label)
-    try:
-        ready = _poll_startup_gate(label, max_wait_sec=max_wait_sec, progress_dialog=dialog)
-    finally:
-        try:
-            dialog.close()
-        except Exception:
-            pass
-    if not ready:
-        g.cancel_directory()
-    return ready
+    """No-op — kept for callers; never blocks menus on service startup."""
+    _ = max_wait_sec
+    return True

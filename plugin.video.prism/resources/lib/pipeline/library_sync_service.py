@@ -11,7 +11,7 @@ class LibrarySyncService:
 
     @staticmethod
     def schedule_verify(catalog: str, status: str, worker: Callable[[], None]) -> None:
-        worker()
+        defer_background(worker, name=f"library-verify-{catalog}-{status}")
 
     @staticmethod
     def schedule_materialize(catalog: str, refs: list[dict], *, profile: str = "library") -> None:

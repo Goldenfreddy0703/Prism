@@ -110,9 +110,18 @@ def schedule_drilldown_parent_refreshes(show_id: int) -> None:
     schedule_season_list_folder_refresh(show_id)
 
 
+def _container_updating() -> bool:
+    try:
+        return xbmc.getCondVisibility("Container.IsUpdating")
+    except Exception:
+        return False
+
+
 def _apply_pending_refresh(pending_key: str) -> bool:
     pending = (g.get_runtime_setting(pending_key) or "").strip()
     if not pending:
+        return False
+    if _container_updating():
         return False
     if not g.is_addon_visible():
         return False
@@ -129,6 +138,8 @@ def _apply_pending_refresh(pending_key: str) -> bool:
 
 def poll_pending_parent_folder_refresh() -> None:
     """Service poller: refresh parent folders when the user lands on them after Back."""
+    if _container_updating():
+        return
     if _apply_pending_refresh(_PENDING_SEASON_LIST_REFRESH_KEY):
         g.log("Applied deferred season-list refresh", "debug")
         return

@@ -477,7 +477,7 @@ def set_video_info_tag(item, info, cast=None, unique_ids=None):
             artists = [a.strip() for a in artists.split(",") if a.strip()]
         if isinstance(artists, (list, set)):
             info_tag.setArtists(list(artists))
-    
+
     # Cast (needs xbmc.Actor objects)
     if cast:
         actors = normalize_cast_to_actors(cast)
@@ -1644,169 +1644,179 @@ class GlobalVariables:
         if self.studio_limit:
             self.handle_studio_icon_skin_workaround(item, info)
 
-        if "unwatched_episodes" in menu_item:
-            item.setProperty("UnWatchedEpisodes", str(menu_item["unwatched_episodes"]))
-        if "watched_episodes" in menu_item:
-            item.setProperty("WatchedEpisodes", str(menu_item["watched_episodes"]))
-
-        mediatype = (info.get("mediatype") or "").lower()
-        from resources.lib.simkl.watch_counters import (
-            airable_unwatched,
-            is_caught_up,
-            not_aired_count,
-            total_for_watch_math,
+        hub_icon_row = (
+            not info
+            and "art" in menu_item
+            and not (set(menu_item.keys()) - {"art"})
         )
 
-        if mediatype in ("tvshow", "season") and menu_item.get("episode_count", 0):
-            ep_count = int(menu_item["episode_count"])
-            watched_eps = int(menu_item.get("watched_episodes") or 0)
-            unwatched_eps = menu_item.get("unwatched_episodes")
-            # Aired-only caught up: full watched indicator when every aired episode is watched
-            # (including shows still in Simkl "Watching" while the series is ongoing).
-            caught_up = is_caught_up(
-                watched_eps,
-                total_for_watch_math(menu_item, info) or ep_count,
-                not_aired=not_aired_count(info),
-                unwatched=unwatched_eps,
-                aired_episode_count=ep_count,
+        if not hub_icon_row:
+            if "unwatched_episodes" in menu_item:
+                item.setProperty("UnWatchedEpisodes", str(menu_item["unwatched_episodes"]))
+            if "watched_episodes" in menu_item:
+                item.setProperty("WatchedEpisodes", str(menu_item["watched_episodes"]))
+
+            mediatype = (info.get("mediatype") or "").lower()
+            from resources.lib.simkl.watch_counters import (
+                airable_unwatched,
+                is_caught_up,
+                not_aired_count,
+                total_for_watch_math,
             )
-            if caught_up:
-                if mediatype == "season" and ep_count <= 1:
-                    info["playcount"] = 0
-                else:
-                    info["playcount"] = 1
-            elif watched_eps > 0 and ep_count > 0:
-                item.setProperty(
-                    "WatchedProgress",
-                    str(max(1, int((float(watched_eps) / float(ep_count)) * 100))),
+
+            if mediatype in ("tvshow", "season") and menu_item.get("episode_count", 0):
+                ep_count = int(menu_item["episode_count"])
+                watched_eps = int(menu_item.get("watched_episodes") or 0)
+                unwatched_eps = menu_item.get("unwatched_episodes")
+                # Aired-only caught up: full watched indicator when every aired episode is watched
+                # (including shows still in Simkl "Watching" while the series is ongoing).
+                caught_up = is_caught_up(
+                    watched_eps,
+                    total_for_watch_math(menu_item, info) or ep_count,
+                    not_aired=not_aired_count(info),
+                    unwatched=unwatched_eps,
+                    aired_episode_count=ep_count,
                 )
-        if (
-            menu_item.get("watched_episodes", 0) == 0
-            and menu_item.get("episode_count", 0)
-            and menu_item.get("episode_count", 0) > 0
-        ):
-            if "unwatched_episodes" not in menu_item:
-                item.setProperty("WatchedEpisodes", str(0))
-                item.setProperty("UnWatchedEpisodes", str(menu_item.get("episode_count", 0)))
-        elif (
-            mediatype in ("tvshow", "season")
-            and "unwatched_episodes" not in menu_item
-            and menu_item.get("episode_count")
-            and menu_item.get("watched_episodes") is not None
-        ):
-            try:
-                total = total_for_watch_math(menu_item, info) or int(menu_item["episode_count"])
-                unwatched = airable_unwatched(
-                    total,
-                    int(menu_item["watched_episodes"]),
-                    not_aired_count(info),
-                )
-                if unwatched > 0:
-                    item.setProperty("UnWatchedEpisodes", str(unwatched))
-            except (TypeError, ValueError):
-                pass
-        if "episode_count" in menu_item:
-            item.setProperty("TotalEpisodes", str(menu_item["episode_count"]))
-        if "season_count" in menu_item:
-            item.setProperty("TotalSeasons", str(menu_item["season_count"]))
-
-        resolved_play_count = None
-        if menu_item.get("play_count") is not None:
-            try:
-                resolved_play_count = int(menu_item["play_count"])
-            except (TypeError, ValueError):
-                resolved_play_count = 0
-        episode_watched = resolved_play_count is not None and resolved_play_count > 0
-
-        resume_time = menu_item.get("resume_time")
-        if resume_time is None and menu_item.get("progress") is not None:
-            resume_time = menu_item.get("progress")
-            menu_item["resume_time"] = resume_time
-
-        partial_percent = 0.0
-        try:
-            partial_percent = float(menu_item.get("percent_played") or 0)
-        except (TypeError, ValueError):
-            partial_percent = 0.0
-
-        has_resume_time = False
-        try:
-            has_resume_time = resume_time is not None and int(resume_time) > 0
-        except (TypeError, ValueError):
-            has_resume_time = False
-
-        force_resume_indicator = bool(menu_item.get("force_resume_indicator"))
-        has_active_partial = (0 < partial_percent < 100) or has_resume_time
-        if episode_watched and not force_resume_indicator:
-            # Completed episodes show a checkmark; stale bookmarks must not keep the half-circle.
-            episode_in_progress = False
-            resume_time = None
-            has_resume_time = False
-            partial_percent = 0.0
-        else:
-            episode_in_progress = has_active_partial
-
-        duration = info.get("duration")
-        if not duration:
-            runtime = info.get("runtime")
-            try:
-                duration = int(float(runtime)) * 60 if runtime else None
-            except Exception:
-                duration = None
-
-        is_playable_item = bool(params.get("is_playable", False))
-
-        if episode_in_progress:
-            if partial_percent > 0:
-                item.setProperty("percentplayed", str(partial_percent))
-            if has_resume_time:
-                # Playable rows use Kodi's native resume UI (setResumePoint below).
-                # Do not also bake resume into the URL or Prism prompts twice.
-                if is_playable_item:
-                    params["kodiresumehandled"] = "true"
-                else:
-                    params["resume"] = str(resume_time)
-                item.setProperty("resumetime", str(resume_time))
-                if duration:
-                    item.setProperty("totaltime", str(int(duration)))
-
-            watched_progress_set = False
-            try:
-                if duration and float(duration) > 0 and has_resume_time:
-                    progress = int((float(resume_time) / float(duration)) * 100)
-                    progress = max(0, min(100, progress))
-                    item.setProperty("WatchedProgress", str(progress))
-                    watched_progress_set = True
-            except Exception:
-                pass
-            if not watched_progress_set and 0 < partial_percent < 100:
-                item.setProperty("WatchedProgress", str(int(round(partial_percent))))
-
-            # Kodi half-watched overlay requires playcount 0 (not fully watched).
-            info["playcount"] = 0
-        elif resolved_play_count is not None:
-            if mediatype == "season" and menu_item.get("episode_count"):
+                if caught_up:
+                    if mediatype == "season" and ep_count <= 1:
+                        info["playcount"] = 0
+                    else:
+                        info["playcount"] = 1
+                elif watched_eps > 0 and ep_count > 0:
+                    item.setProperty(
+                        "WatchedProgress",
+                        str(max(1, int((float(watched_eps) / float(ep_count)) * 100))),
+                    )
+            if (
+                menu_item.get("watched_episodes", 0) == 0
+                and menu_item.get("episode_count", 0)
+                and menu_item.get("episode_count", 0) > 0
+            ):
+                if "unwatched_episodes" not in menu_item:
+                    item.setProperty("WatchedEpisodes", str(0))
+                    item.setProperty("UnWatchedEpisodes", str(menu_item.get("episode_count", 0)))
+            elif (
+                mediatype in ("tvshow", "season")
+                and "unwatched_episodes" not in menu_item
+                and menu_item.get("episode_count")
+                and menu_item.get("watched_episodes") is not None
+            ):
                 try:
-                    ep_c = int(menu_item["episode_count"])
-                    w_eps = int(menu_item.get("watched_episodes") or 0)
+                    total = total_for_watch_math(menu_item, info) or int(menu_item["episode_count"])
+                    unwatched = airable_unwatched(
+                        total,
+                        int(menu_item["watched_episodes"]),
+                        not_aired_count(info),
+                    )
+                    if unwatched > 0:
+                        item.setProperty("UnWatchedEpisodes", str(unwatched))
                 except (TypeError, ValueError):
-                    ep_c = 0
-                    w_eps = 0
-                if ep_c > 0 and w_eps < ep_c:
-                    resolved_play_count = 0
-            info["playcount"] = resolved_play_count if resolved_play_count > 0 else 0
+                    pass
+            if "episode_count" in menu_item:
+                item.setProperty("TotalEpisodes", str(menu_item["episode_count"]))
+            if "season_count" in menu_item:
+                item.setProperty("TotalSeasons", str(menu_item["season_count"]))
 
-        if duration and not info.get("duration"):
-            info["duration"] = duration
-        if "air_date" in menu_item and menu_item.get("air_date") is not None:
-            # shows.air_date is often min(episode air_date) for hide-unaired SQL — not show premiere.
-            if info.get("mediatype") != "tvshow" or not (info.get("premiered") or info.get("aired")):
-                info["premiered"] = menu_item["air_date"]
-                info["aired"] = menu_item["air_date"]
+            resolved_play_count = None
+            if menu_item.get("play_count") is not None:
+                try:
+                    resolved_play_count = int(menu_item["play_count"])
+                except (TypeError, ValueError):
+                    resolved_play_count = 0
+            episode_watched = resolved_play_count is not None and resolved_play_count > 0
+
+            resume_time = menu_item.get("resume_time")
+            if resume_time is None and menu_item.get("progress") is not None:
+                resume_time = menu_item.get("progress")
+                menu_item["resume_time"] = resume_time
+
+            partial_percent = 0.0
+            try:
+                partial_percent = float(menu_item.get("percent_played") or 0)
+            except (TypeError, ValueError):
+                partial_percent = 0.0
+
+            has_resume_time = False
+            try:
+                has_resume_time = resume_time is not None and int(resume_time) > 0
+            except (TypeError, ValueError):
+                has_resume_time = False
+
+            force_resume_indicator = bool(menu_item.get("force_resume_indicator"))
+            has_active_partial = (0 < partial_percent < 100) or has_resume_time
+            if episode_watched and not force_resume_indicator:
+                # Completed episodes show a checkmark; stale bookmarks must not keep the half-circle.
+                episode_in_progress = False
+                resume_time = None
+                has_resume_time = False
+                partial_percent = 0.0
+            else:
+                episode_in_progress = has_active_partial
+
+            duration = info.get("duration")
+            if not duration:
+                runtime = info.get("runtime")
+                try:
+                    duration = int(float(runtime)) * 60 if runtime else None
+                except Exception:
+                    duration = None
+
+            is_playable_item = bool(params.get("is_playable", False))
+
+            if episode_in_progress:
+                if partial_percent > 0:
+                    item.setProperty("percentplayed", str(partial_percent))
+                if has_resume_time:
+                    # Playable rows use Kodi's native resume UI (setResumePoint below).
+                    # Do not also bake resume into the URL or Prism prompts twice.
+                    if is_playable_item:
+                        params["kodiresumehandled"] = "true"
+                    else:
+                        params["resume"] = str(resume_time)
+                    item.setProperty("resumetime", str(resume_time))
+                    if duration:
+                        item.setProperty("totaltime", str(int(duration)))
+
+                watched_progress_set = False
+                try:
+                    if duration and float(duration) > 0 and has_resume_time:
+                        progress = int((float(resume_time) / float(duration)) * 100)
+                        progress = max(0, min(100, progress))
+                        item.setProperty("WatchedProgress", str(progress))
+                        watched_progress_set = True
+                except Exception:
+                    pass
+                if not watched_progress_set and 0 < partial_percent < 100:
+                    item.setProperty("WatchedProgress", str(int(round(partial_percent))))
+
+                # Kodi half-watched overlay requires playcount 0 (not fully watched).
+                info["playcount"] = 0
+            elif resolved_play_count is not None:
+                if mediatype == "season" and menu_item.get("episode_count"):
+                    try:
+                        ep_c = int(menu_item["episode_count"])
+                        w_eps = int(menu_item.get("watched_episodes") or 0)
+                    except (TypeError, ValueError):
+                        ep_c = 0
+                        w_eps = 0
+                    if ep_c > 0 and w_eps < ep_c:
+                        resolved_play_count = 0
+                info["playcount"] = resolved_play_count if resolved_play_count > 0 else 0
+
+            if duration and not info.get("duration"):
+                info["duration"] = duration
+            if "air_date" in menu_item and menu_item.get("air_date") is not None:
+                # shows.air_date is often min(episode air_date) for hide-unaired SQL — not show premiere.
+                if info.get("mediatype") != "tvshow" or not (info.get("premiered") or info.get("aired")):
+                    info["premiered"] = menu_item["air_date"]
+                    info["aired"] = menu_item["air_date"]
+            if menu_item.get("user_rating"):
+                item.setProperty("userrating", str(menu_item["user_rating"]))
+        else:
+            episode_in_progress = False
+
         if "description" in params:
             info["plot"] = info["overview"] = info["description"] = params.pop("description", None)
-        if menu_item.get("user_rating"):
-            item.setProperty("userrating", str(menu_item["user_rating"]))
 
         special_sort = params.pop("special_sort", None)
         if special_sort is not None:
@@ -1916,11 +1926,23 @@ class GlobalVariables:
 
         return info_dict
 
+    _KODI_MENU_CACHE_PROP = "prism.kodi_menu_cache"
+
     def kodi_menu_caching_enabled(self) -> bool:
         """When true, Kodi may reuse cached folder listings (instant back navigation)."""
         if (self.REQUEST_PARAMS or {}).get("prism_reload") == "true":
             return False
-        return self.get_bool_setting("general.menucaching", True) and not self.FROM_WIDGET
+        if self.FROM_WIDGET:
+            return False
+        import xbmcgui
+
+        win = xbmcgui.Window(10000)
+        cached = win.getProperty(self._KODI_MENU_CACHE_PROP)
+        if cached in ("true", "false"):
+            return cached == "true"
+        enabled = self.get_bool_setting("general.menucaching", True)
+        win.setProperty(self._KODI_MENU_CACHE_PROP, "true" if enabled else "false")
+        return enabled
 
     def refresh_visible_container(self) -> bool:
         """Rebuild the active Prism folder so list art/meta repaint after background actions."""
@@ -1968,11 +1990,11 @@ class GlobalVariables:
         if not sort:
             xbmcplugin.addSortMethod(self.PLUGIN_HANDLE, xbmcplugin.SORT_METHOD_NONE)
         xbmcplugin.setContent(self.PLUGIN_HANDLE, self.kodi_content_type(content_type))
-        if self.FROM_WIDGET:
+        if cache is False:
             menu_caching = False
-        elif not self.get_bool_setting("general.menucaching", True):
-            menu_caching = bool(cache) if cache is not None else False
-        elif cache is False:
+        elif cache is True:
+            menu_caching = True
+        elif not self.kodi_menu_caching_enabled():
             menu_caching = False
         else:
             menu_caching = True
@@ -1982,8 +2004,10 @@ class GlobalVariables:
             and self.get_bool_setting("general.smart.scroll.enable", True)
         )
         if smart_scroll:
-            self._apply_view_type_for_smart_scroll(content_type)
-            self._smart_scroll(content_type)
+            from resources.lib.common import tools
+
+            tools.run_threaded(self._apply_view_type_for_smart_scroll, content_type)
+            tools.run_threaded(self._smart_scroll, content_type)
         else:
             self.set_view_type(content_type)
 

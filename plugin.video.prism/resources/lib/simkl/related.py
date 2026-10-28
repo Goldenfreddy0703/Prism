@@ -141,6 +141,7 @@ def _render_sync_items(sync_items: list[dict[str, Any]], *, browse_source: str =
             related_fast_open=True,
             seeded=True,
             browse_source=browse_source,
+            paint_profile=MenuPaintProfile.RELATED.value,
         ),
     )
 

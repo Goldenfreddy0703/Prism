@@ -34,6 +34,10 @@ class PrismMonitor(xbmc.Monitor):
 
         warm_settings_dict()
         ui_settings_changed = before_ui != {k: g.get_setting(k) for k in _UI_REFRESH_SETTING_KEYS}
+        if before_ui.get("general.menucaching") != g.get_setting("general.menucaching"):
+            import xbmcgui
+
+            xbmcgui.Window(10000).clearProperty(g._KODI_MENU_CACHE_PROP)
         try:
             if g.is_addon_visible() and ui_settings_changed:
                 g.refresh_visible_container()

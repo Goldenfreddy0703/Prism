@@ -147,12 +147,11 @@ def render_unified_search_results_list(query: str, page_limit: int) -> None:
             menu_action=SEARCH_RESULTS_ACTIONS["all"],
             search_fast_open=True,
             paint_profile=MenuPaintProfile.SEARCH.value,
-            catalog_pipeline=True,
             mixed_list=True,
             enrichment_reason="search",
             browse_source=f"search:{query}",
-            thin_payload_rows=page_items,
         ),
+        list_id=list_id,
     )
 
 
@@ -209,10 +208,9 @@ def render_search_results_list(catalog: str, query: str, page_limit: int, list_b
         menu_action=SEARCH_RESULTS_ACTIONS[catalog],
         search_fast_open=True,
         paint_profile=MenuPaintProfile.SEARCH.value,
-        catalog_pipeline=True,
         browse_source=f"search:{query}",
-        thin_payload_rows=page_items,
     )
+    list_kwargs["list_id"] = list_id
 
     from resources.lib.pipeline.catalog_page import CatalogPagePipeline
 

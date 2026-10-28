@@ -11,19 +11,14 @@ from resources.lib.modules.globals import g
 
 _DONE_KEY = "drilldown_prefetch.done_keys"
 _IN_FLIGHT_KEY = "drilldown_prefetch.in_flight"
-_NAV_ACTIVE_KEY = "drilldown.user_navigating"
 _MAX_DONE_KEYS = 128
 
 _DRILLDOWN_MENU_ACTIONS = frozenset({"showSeasons", "seasonEpisodes", "flatEpisodes"})
 
 
-def set_drilldown_navigation_active(active: bool) -> None:
-    """Shared across plugin processes — blocks background episode pre-mill during drilldown."""
-    g.set_runtime_setting(_NAV_ACTIVE_KEY, bool(active))
-
-
 def drilldown_navigation_active() -> bool:
-    return g.get_bool_runtime_setting(_NAV_ACTIVE_KEY)
+    """Seren-style browse does not set drilldown navigation flags."""
+    return False
 
 
 def _prefetch_key(work: dict[str, Any]) -> str:
@@ -66,7 +61,7 @@ def _set_in_flight(key: str, active: bool) -> None:
 
 
 def _user_browsing() -> bool:
-    return g.get_bool_runtime_setting("browse.menu_active")
+    return False
 
 
 def _should_abort_prefetch() -> bool:

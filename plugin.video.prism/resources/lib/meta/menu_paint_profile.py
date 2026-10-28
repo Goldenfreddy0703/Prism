@@ -173,11 +173,15 @@ def profile_list_kwargs(
         base["skip_watch_refresh"] = False
         base["force_watch_refresh"] = True
         base.setdefault("enrichment_reason", "drilldown")
-        if overrides.get("drilldown_fast_open"):
+        fast_open = overrides.get("drilldown_fast_open") or g.get_bool_setting(
+            "general.drilldown.fast_open", True
+        )
+        if fast_open:
             base["drilldown_fast_open"] = True
             base["catalog_pipeline"] = True
             base["skip_watch_refresh"] = True
             base["force_watch_refresh"] = False
+            base["menu_cache"] = True
     elif profile == MenuPaintProfile.RELATED:
         base.update(_browse_hide_filters())
         base["sync_path"] = True

@@ -337,9 +337,7 @@ class Menus:
                     next_action="showYears",
                     next_args=int(year),
                     has_next_page=len(items) >= self.page_limit,
-                    catalog_pipeline=True,
                     browse_source=f"year:{year}",
-                    thin_payload_rows=items,
                 ),
                 payload_rows=items,
             )

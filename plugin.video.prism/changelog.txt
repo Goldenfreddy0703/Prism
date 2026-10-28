@@ -1,3 +1,24 @@
+Changelog 5.0.59
+[IMPROVEMENT] Menu navigation aligned with Seren — thin prism.py browse path (init_globals, dispatch, deinit) without Starting Prism gate, plugin slot, or force_stop on normal folder exit
+[IMPROVEMENT] Hub folder rows skip Simkl watch-counter work on art-only create_icon_dict entries (Seren-equivalent hub path)
+[IMPROVEMENT] Library list verify deferred off the menu thread; parent-folder Container.Update only when idle and not while Container.IsUpdating
+[IMPROVEMENT] general.menucaching cached on the home window for faster close_directory cacheToDisc decisions
+[IMPROVEMENT] Removed foreground menu / drilldown navigation hooks that Seren never used
+[IMPROVEMENT] Title lists build ListItems on the menu thread (Seren-style) instead of TaskPool workers
+[IMPROVEMENT] Season/episode drilldown uses Kodi menu cache when Fast drilldown open is enabled
+[IMPROVEMENT] Simkl list disk cache warms Kodi window RAM (Otaku-style) on disk cache hits; optional window page cache for painted lists when menucaching is on
+[IMPROVEMENT] Display-ready menu rows skip heavy per-item post-process; smart scroll / view mode on a background thread after list paint
+[IMPROVEMENT] Universal Seren-style title menus — browse_materialize + seren_menu_open: materialize visible page (clearlogo-ready) into simkl_sync, then seren_direct_db paint on discover, genre, multi-genre, search, Search All, actor, related/recommendations, library status, year browse, and Continue Watching movies
+[IMPROVEMENT] Episode lists — materialize_episode_page before paint (Next Up, watched episodes, season/flat episodes, TV Continue Watching)
+[IMPROVEMENT] Page materialize cache keyed by browse source + list id + page; catalog resolve runs at materialize time, not on every menu reopen
+[IMPROVEMENT] seren_menu_sql skips display_meta overlay on fast menu SQL when sync rows are already seeded; prepare_seren_menu_refs / render_seren_menu_page
+[BUG] Full Seren-style InfoTagVideo on browse lists (plot, cast, genres, ratings, list art properties)
+[BUG] Search/actor/genre/mixed browse — skip Kodi window list cache where stale rows hid poster/clearlogo; seed page into simkl_sync before materialize
+[BUG] Actor credits / Search All — fix NameError (`payload_rows` typo in `open_mixed_browse`; use `items`); fix duplicate `paint_profile` kwarg on mixed Seren list build
+[BUG] Discover menu open — fix TypeError when seren_direct_db was passed twice to browse_list_kwargs
+[BUG] TV Shows Recently Watched included anime titles — SQL filters `shows.catalog` (same as watchlist status queries)
+[BUG] My Watch History no longer merges Simkl Recently Watched show rows when local Prism playback history exists (same data as library Recent; opening that menu does not write history)
+
 Changelog 5.0.58
 [IMPROVEMENT] Leaner background service — Seren-style loop (maintenance, Simkl sync, metadata cleanup, timezone) without mid-sleep sync or idle maintenance RunPlugin storms
 [IMPROVEMENT] Inline library list verify, browse catalog seed, and page materialize on open instead of background queue workers

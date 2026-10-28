@@ -280,13 +280,18 @@ def render_continue_watching_menu(catalog: str) -> None:
     profile = MenuPaintProfile.LIBRARY_EPISODES if catalog != CATALOG_MOVIE else MenuPaintProfile.LIBRARY
 
     if catalog == CATALOG_MOVIE:
+        from resources.lib.discover.sync_bridge import simkl_refs
+        from resources.lib.pipeline.catalog_page import CatalogPagePipeline
+
         paint_kwargs = profile_list_kwargs(profile, seeded=True)
-        render_catalog_rows(
+        CatalogPagePipeline.open_library_browse(
             catalog,
-            items,
+            simkl_refs(items),
             builder,
             list_kwargs=paint_kwargs,
-            **paint_kwargs,
+            library_paint=True,
+            payload_rows=items,
+            list_id="continue_watching",
         )
         return
 

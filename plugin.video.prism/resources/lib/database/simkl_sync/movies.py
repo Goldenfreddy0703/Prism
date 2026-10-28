@@ -16,6 +16,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         skip_update = params.pop("skip_update", False)
         paint_only = params.pop("paint_only", False)
         sync_path = params.pop("sync_path", False)
+        seren_menu_sql = bool(params.pop("seren_menu_sql", False) or params.pop("seren_direct_db", False))
         if skip_update and paint_only and not sync_path:
             from resources.lib.meta.paint_cache import try_fast_paint_list
 
@@ -58,12 +59,17 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             query += " AND watched = 0"
 
         rows = self.fetchall(query) or []
-        meta_cache.set_many_rows("movie", rows or [])
-
         if not sync_path:
-            from resources.lib.meta.display_store import get_display_meta_store
+            meta_cache.set_many_rows("movie", rows or [])
 
-            rows = get_display_meta_store().overlay_rows(rows, "movie")
+        from resources.lib.meta.display_store import get_display_meta_store
+
+        rows = get_display_meta_store().finalize_menu_list_rows(
+            rows,
+            "movie",
+            sync_path=sync_path,
+            seren_menu_sql=seren_menu_sql,
+        )
 
         if skip_update and not sync_path:
             from resources.lib.meta.paint_cache import paint_sync_list_rows

@@ -423,6 +423,56 @@ class DisplayMetaStore:
             merged.append(updated)
         return merged
 
+    def finalize_menu_list_rows(
+        self,
+        rows: list[dict[str, Any]],
+        media_type: str,
+        *,
+        sync_path: bool = False,
+        seren_menu_sql: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Menu open: overlay prism_meta display rows, then slim like POV/Otaku list payloads."""
+        if not rows:
+            return rows
+        if not seren_menu_sql:
+            rows = self.overlay_rows(rows, media_type)
+        elif sync_path and rows:
+            from resources.lib.meta.artwork import artwork_profile_for_row, provider_media_type
+            from resources.lib.modules.metadataHandler import MetadataHandler
+
+            handler = MetadataHandler()
+            missing = 0
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                profile = artwork_profile_for_row(row, default_media_type=media_type)
+                provider_type = provider_media_type(profile)
+                art = row.get("art") if isinstance(row.get("art"), dict) else {}
+                if not art.get("clearlogo") and handler._row_meta_gaps(
+                    row, provider_type, art_profile=profile, scope="search"
+                ):
+                    missing += 1
+            if missing:
+                g.log(
+                    f"seren_menu_sql: {missing}/{len(rows)} rows missing clearlogo after materialize "
+                    f"(type={media_type})",
+                    "debug",
+                )
+        if not sync_path:
+            return rows
+        from resources.lib.meta.profiles import MetaProfile
+        from resources.lib.meta.storage import slim_db_row
+
+        slimmed: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                slimmed.append(row)
+                continue
+            item = slim_db_row(row, profile=MetaProfile.LIST, slim_art=False)
+            item["_menu_display_ready"] = True
+            slimmed.append(item)
+        return slimmed
+
     def prefetch(self, limit: int | None = None) -> int:
         """Warm recent display rows into RAM (service idle)."""
         if limit is None:
