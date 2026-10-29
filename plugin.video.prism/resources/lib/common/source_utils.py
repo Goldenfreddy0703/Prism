@@ -540,6 +540,76 @@ def build_torrent_match_title(file_item: dict) -> str:
     return build_cloud_match_title(file_item)
 
 
+# Paths in anime BD/packs that are never the requested numbered episode (auto-resolve only).
+_ANIME_PACK_AUTO_JUNK = (
+    "web preview",
+    "creditless",
+    "bd menu",
+    "menu vol",
+    " ncop",
+    " nced",
+    "opening nc",
+    "ending nc",
+    "no clean opening",
+    "no clean ending",
+    "clean opening",
+    "clean ending",
+    " promotional",
+    " pv ",
+)
+
+
+def _episode_season_from_item_args(args: dict) -> int:
+    try:
+        return int((args.get("info") or {}).get("season", 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _anime_pack_junk_for_auto_pick(path: str, *, specials_playback: bool) -> bool:
+    """True when a file path should not be auto-selected for this episode request."""
+    text = clean_title((path or "").replace("\\", "/").replace("/", " "))
+    if not text:
+        return False
+    haystack = f" {text} "
+    if any(marker in haystack for marker in _ANIME_PACK_AUTO_JUNK):
+        return True
+    if " preview" in haystack and (" ep " in haystack or "episode" in haystack):
+        return True
+    # Numbered episode play: skip obvious menu/promo lines; S00 specials keep OVA/special paths.
+    if not specials_playback and " menu " in haystack and "bd menu" not in haystack:
+        if "vol" in haystack or "disc" in haystack:
+            return True
+    return False
+
+
+def _filter_anime_pack_files_for_playback(folder_details: list[dict], args: dict) -> list[dict]:
+    from resources.lib.anime.scrape import is_anime_item
+
+    info = args.get("info") or {}
+    if not is_anime_item(info, args):
+        return folder_details
+
+    season = _episode_season_from_item_args(args)
+    specials_playback = season == 0
+    filtered: list[dict] = []
+    for row in folder_details:
+        path = row.get("path") if isinstance(row, dict) else ""
+        if _anime_pack_junk_for_auto_pick(str(path or ""), specials_playback=specials_playback):
+            continue
+        filtered.append(row)
+    return filtered
+
+
+def _menu_season_int(simple_info: dict) -> int | None:
+    raw = simple_info.get("season_number")
+    if raw in (None, ""):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
 def _torrent_episode_file_matches(match_title: str, episode_regex, simple_info: dict) -> bool:
     """Episode-only matching for files inside torrent season packs."""
     if episode_regex(match_title):
@@ -551,35 +621,18 @@ def _torrent_episode_file_match_tier(match_title: str, episode_regex, simple_inf
     """0 = no match, 2 = strict anchored regex, 1 = loose / title fallback."""
     if not match_title:
         return 0
+    menu_season = _menu_season_int(simple_info)
+    if simple_info.get("isanime") and menu_season is not None:
+        if _anime_pack_junk_for_auto_pick(
+            match_title.replace(" ", "/"),
+            specials_playback=menu_season == 0,
+        ):
+            return 0
     if episode_regex(match_title):
         return 2
     if cloud_loose_episode_match(match_title, simple_info):
         return 1
     return 0
-
-
-# #region agent log
-def _agent_episode_pick_log(message, data=None, hypothesis_id="ep_match"):
-    try:
-        import json
-        import time
-
-        payload = {
-            "sessionId": "a54591",
-            "timestamp": int(time.time() * 1000),
-            "location": "source_utils.get_best_episode_match_cloud",
-            "message": message,
-            "data": data or {},
-            "hypothesisId": hypothesis_id,
-            "runId": "ep-autoplay",
-        }
-        with open(r"C:\Users\jenki\Desktop\Prism\debug-a54591.log", "a", encoding="utf-8") as _f:
-            _f.write(json.dumps(payload) + "\n")
-    except Exception:
-        pass
-
-
-# #endregion
 
 
 def _show_titles_from_simple_info(simple_info: dict) -> list[str]:
@@ -646,6 +699,80 @@ def _release_matches_season_episode(release_title: str, season: str, episode: st
     return False
 
 
+def _release_matches_anime_cour_episode(
+    release_title: str, episode: str, simple_info: dict
+) -> bool:
+    """
+    Fansub/cour file names: ``Show - 01`` / ``Show 01`` without SxxExx (Erai-raws, etc.).
+    Matching uses cleaned titles (hyphens become spaces).
+    """
+    if episode in (None, "") or not str(episode).isdigit():
+        return False
+    if not _release_contains_show_title(release_title, simple_info):
+        return False
+
+    ep_int = str(int(episode))
+    ep_fill = str(episode).zfill(2)
+    haystack = f" {release_title} "
+    for title in _show_titles_from_simple_info(simple_info):
+        for candidate in (
+            clean_title_with_simple_info(title, simple_info),
+            clean_title(title),
+        ):
+            if not candidate or len(candidate) < 2:
+                continue
+            esc = re.escape(candidate)
+            for ep_token in (ep_fill, ep_int):
+                if re.search(
+                    rf"(?:^|\s){esc}(?:\s|[\-\[\(])+{re.escape(ep_token)}(?!\d)",
+                    haystack,
+                ):
+                    return True
+    return False
+
+
+def _release_matches_specials_menu_episode(release_title: str, episode: str) -> bool:
+    """
+    Menu season 0 (Specials): SP##, Special ##, OVA ## when standard S00E## is absent.
+    Requires episode digits not to continue into a longer number (Special 1 vs Special 10).
+    """
+    if episode in (None, "") or not str(episode).isdigit():
+        return False
+
+    ep_int = str(int(episode))
+    ep_fill = str(episode).zfill(2)
+    ep_tokens = [ep_fill]
+    if ep_int != ep_fill:
+        ep_tokens.append(ep_int)
+
+    compact = release_title.replace(" ", "").lower()
+    haystack = f" {release_title.lower()} "
+
+    for ep_token in ep_tokens:
+        if re.search(
+            rf"(?:^|[\s.\[\(_\-])sp[.\-_ ]?{re.escape(ep_token)}(?!\d)",
+            haystack,
+            re.IGNORECASE,
+        ):
+            return True
+        if re.search(
+            rf"(?<![a-z0-9])sp[.\-_]?{re.escape(ep_token)}(?!\d)",
+            compact,
+            re.IGNORECASE,
+        ):
+            return True
+
+    for ep_token in ep_tokens:
+        for pattern in (
+            rf"\bspecial[.\-_ ]+{re.escape(ep_token)}(?!\d)",
+            rf"\bova[.\-_ ]+special[.\-_ ]+{re.escape(ep_token)}(?!\d)",
+            rf"\bova[.\-_ ]+{re.escape(ep_token)}(?!\d)",
+        ):
+            if re.search(pattern, haystack, re.IGNORECASE):
+                return True
+    return False
+
+
 def _release_matches_absolute_episode(release_title: str, absolute_number: str) -> bool:
     if absolute_number in (None, ""):
         return False
@@ -702,12 +829,30 @@ def cloud_loose_episode_match(release_title: str, simple_info: dict) -> bool:
         if _release_matches_season_episode(release_title, season, episode):
             return True
 
-    for abs_key in ("simkl_episode_number", "absolute_number"):
-        absolute_number = simple_info.get(abs_key)
-        if absolute_number in (None, ""):
-            continue
-        if _release_matches_absolute_episode(release_title, str(absolute_number)):
+    menu_season = _menu_season_int(simple_info)
+    if (
+        simple_info.get("isanime")
+        and menu_season is not None
+        and menu_season > 0
+    ):
+        menu_episode = str(simple_info.get("episode_number") or "")
+        if menu_episode and _release_matches_anime_cour_episode(
+            release_title, menu_episode, simple_info
+        ):
             return True
+    if menu_season == 0:
+        menu_episode = str(simple_info.get("episode_number") or "")
+        if menu_episode and _release_matches_specials_menu_episode(release_title, menu_episode):
+            return True
+
+    use_absolute = not (simple_info.get("isanime") and menu_season is not None and menu_season > 0)
+    if use_absolute:
+        for abs_key in ("simkl_episode_number", "absolute_number"):
+            absolute_number = simple_info.get(abs_key)
+            if absolute_number in (None, ""):
+                continue
+            if _release_matches_absolute_episode(release_title, str(absolute_number)):
+                return True
 
     return check_episode_title_match(
         [clean_title_with_simple_info(title, simple_info) for title in _show_titles_from_simple_info(simple_info)],
@@ -1168,19 +1313,7 @@ def get_best_episode_match_cloud(dict_key, dictionary_list, item_information, si
             matches.append((tier, item, path_hint))
 
     if not matches:
-        legacy = get_best_episode_match(dict_key, dictionary_list, item_information)
-        # #region agent log
-        _agent_episode_pick_log(
-            "legacy basename fallback",
-            {
-                "wanted_s": simple_info.get("season_number"),
-                "wanted_e": simple_info.get("episode_number"),
-                "files": len(dictionary_list),
-                "picked": (legacy or {}).get("path") or (legacy or {}).get(dict_key),
-            },
-        )
-        # #endregion
-        return legacy
+        return get_best_episode_match(dict_key, dictionary_list, item_information)
 
     matches.sort(
         key=lambda row: (
@@ -1188,21 +1321,51 @@ def get_best_episode_match_cloud(dict_key, dictionary_list, item_information, si
             -int(row[1].get("size", 0) or 0),
         )
     )
-    tier, picked, path_hint = matches[0]
-    # #region agent log
-    _agent_episode_pick_log(
-        "picked torrent file",
-        {
-            "wanted_s": simple_info.get("season_number"),
-            "wanted_e": simple_info.get("episode_number"),
-            "tier": tier,
-            "candidates": len(matches),
-            "path": path_hint,
-            "alt_paths": [m[2] for m in matches[1:4]],
-        },
-    )
-    # #endregion
+    _tier, picked, _path_hint = matches[0]
     return picked
+
+
+def rd_storage_variant_episode_match(
+    storage_variant: dict,
+    item_information: dict,
+    simple_info: dict | None = None,
+) -> bool:
+    """
+    True when a Real Debrid instantAvailability / check_hash ``rd`` variant
+    contains a playable file matching the requested episode (cloud-style rules).
+    """
+    if not isinstance(storage_variant, dict) or not item_information:
+        return False
+
+    rows: list[dict] = []
+    for row in storage_variant.values():
+        if not isinstance(row, dict):
+            continue
+        path = row.get("filename") or row.get("path") or ""
+        if not isinstance(path, str) or not path.strip():
+            continue
+        if not is_file_ext_valid(path):
+            continue
+        rows.append(
+            {
+                "path": path,
+                "size": row.get("filesize") or row.get("size") or 0,
+            }
+        )
+
+    if not rows:
+        return False
+
+    filtered = filter_files_for_resolving(rows, item_information)
+    if not filtered:
+        return False
+
+    return (
+        get_best_episode_match_cloud(
+            "path", filtered, item_information, simple_info=simple_info
+        )
+        is not None
+    )
 
 
 def clear_extras_by_string(args, extra_string, folder_details):
@@ -1244,6 +1407,7 @@ def filter_files_for_resolving(folder_details, args):
     folder_details = clear_extras_by_string(args, "featurettes", folder_details)
     folder_details = clear_extras_by_string(args, "deleted scenes", folder_details)
     folder_details = clear_extras_by_string(args, "sample", folder_details)
+    folder_details = _filter_anime_pack_files_for_playback(folder_details, args)
     return folder_details
 
 

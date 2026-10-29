@@ -226,6 +226,63 @@ def is_synthetic_episode_id(value: int | None) -> bool:
     return synthetic_episode_id(show_id, season_num, episode_num) == value
 
 
+def resolve_episode_db_simkl_id(
+    db,
+    episode_id: int | None,
+    show_id: int | None,
+    catalog: str = "tv",
+) -> int | None:
+    """
+    Map a Simkl API episode id (or synthetic row id) to episodes.simkl_id in simklSync.db.
+
+    Milled numbered episodes are stored under synthetic row keys while info.ids keeps the
+    real Simkl entity id — menus route with the entity id, so playback must resolve the row key.
+    """
+    if episode_id is None:
+        return None
+    episode_id = int(episode_id)
+    if is_synthetic_episode_id(episode_id):
+        return episode_id
+
+    from resources.lib.database.simkl_sync.serial_sync import catalog_filter_sql, serial_profile_scope
+
+    if show_id is not None and hasattr(db, "show_catalog"):
+        try:
+            catalog = db.show_catalog(int(show_id)) or catalog
+        except (TypeError, ValueError):
+            pass
+
+    def _resolve_in_profile(profile: str) -> int | None:
+        with serial_profile_scope(db, profile):
+            st = db._st()
+            if db.fetchone(
+                f"SELECT simkl_id FROM {st.episode} WHERE simkl_id = ? LIMIT 1",
+                (episode_id,),
+            ):
+                return episode_id
+            if show_id is None:
+                return None
+            cat_sql, cat_params = catalog_filter_sql(st)
+            query = (
+                f"SELECT simkl_id, info FROM {st.episode} "
+                f"WHERE simkl_show_id = ?{cat_sql}"
+            )
+            for row in db.fetchall(query, (int(show_id), *cat_params)):
+                info = row.get("info")
+                if not isinstance(info, dict):
+                    continue
+                if entity_simkl_id(info) == episode_id:
+                    return int(row["simkl_id"])
+        return None
+
+    primary = "anime" if catalog == "anime" else "tv"
+    hit = _resolve_in_profile(primary)
+    if hit is not None:
+        return hit
+    secondary = "tv" if primary == "anime" else "anime"
+    return _resolve_in_profile(secondary)
+
+
 def is_synthetic_season_id(value: int | None) -> bool:
     if value is None:
         return False
@@ -649,7 +706,21 @@ def show_id_for_episode_action(action_args: dict[str, Any] | None) -> int | None
         "SELECT simkl_show_id FROM episodes WHERE simkl_id = ? AND catalog IN ('tv', 'anime')",
         (episode_id,),
     )
-    return int(row["simkl_show_id"]) if row and row.get("simkl_show_id") is not None else None
+    if row and row.get("simkl_show_id") is not None:
+        return int(row["simkl_show_id"])
+
+    catalog = str(args.get("catalog") or "tv")
+    if catalog not in ("anime", "tv"):
+        catalog = "tv"
+    resolved_row_id = resolve_episode_db_simkl_id(db, episode_id, None, catalog)
+    if resolved_row_id is not None:
+        row = db.fetchone(
+            "SELECT simkl_show_id FROM episodes WHERE simkl_id = ? AND catalog IN ('tv', 'anime')",
+            (int(resolved_row_id),),
+        )
+        if row and row.get("simkl_show_id") is not None:
+            return int(row["simkl_show_id"])
+    return None
 
 
 def build_action_args(item: dict[str, Any]) -> dict[str, Any]:

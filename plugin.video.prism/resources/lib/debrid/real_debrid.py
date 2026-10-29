@@ -271,8 +271,15 @@ class RealDebrid:
             g.log(f"RD instantAvailability request error: {exc}", "warning")
             return None
 
-    def check_cache_batch(self, hash_list):
+    def check_cache_batch(self, hash_list, item_information=None):
         cached_hashes = set()
+        episode_playback = False
+        if item_information:
+            info = item_information.get("info") or {}
+            episode_playback = (
+                info.get("mediatype") == g.MEDIA_EPISODE or "tvshowtitle" in info
+            )
+
         chunk_size = 50
         for index in range(0, len(hash_list), chunk_size):
             chunk = hash_list[index:index + chunk_size]
@@ -291,7 +298,21 @@ class RealDebrid:
                 if not isinstance(response, dict):
                     continue
                 for info_hash, info in response.items():
-                    if isinstance(info, dict) and info.get("rd"):
+                    if not isinstance(info, dict):
+                        continue
+                    rd_variants = info.get("rd")
+                    if not rd_variants:
+                        continue
+                    if episode_playback:
+                        for variant in rd_variants:
+                            if not isinstance(variant, dict):
+                                continue
+                            if source_utils.rd_storage_variant_episode_match(
+                                variant, item_information
+                            ):
+                                cached_hashes.add(info_hash.lower())
+                                break
+                    else:
                         cached_hashes.add(info_hash.lower())
             except Exception as exc:
                 g.log(f"RD instantAvailability chunk error: {exc}", "warning")

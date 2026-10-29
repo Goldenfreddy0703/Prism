@@ -607,32 +607,6 @@ class ListBuilder:
         if paint_profile in ("browse", "related", "airing") and not preloaded_paint_rows:
             sync_path = True
         if sync_path and not preloaded_paint_rows:
-            # #region agent log
-            try:
-                import json
-                import time
-
-                _log_path = r"C:\Users\jenki\Desktop\Prism\debug-a54591.log"
-                with open(_log_path, "a", encoding="utf-8") as _h:
-                    _h.write(
-                        json.dumps(
-                            {
-                                "sessionId": "a54591",
-                                "hypothesisId": "A",
-                                "location": "list_builder._mixed_media_from_sync_dicts",
-                                "message": "load_seren_browse_rows kwargs",
-                                "data": {
-                                    "paint_profile": paint_profile,
-                                    "params_has_paint_profile": "paint_profile" in params,
-                                },
-                                "timestamp": int(time.time() * 1000),
-                            }
-                        )
-                        + "\n"
-                    )
-            except Exception:
-                pass
-            # #endregion
             movie_rows, show_rows = self._load_seren_browse_rows(
                 media_list,
                 hide_unaired=hide_unaired,

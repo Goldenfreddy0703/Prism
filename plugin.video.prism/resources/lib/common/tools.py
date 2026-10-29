@@ -419,17 +419,31 @@ def _load_episode_item_information(db, action_args, episode_id, show_id):
         return {}
 
     catalog = _catalog_from_action_args(action_args)
+    from resources.lib.simkl.ids import resolve_episode_db_simkl_id
+
+    requested_episode_id = int(episode_id)
+    db_episode_id = resolve_episode_db_simkl_id(
+        db, requested_episode_id, int(show_id), catalog
+    )
+    if db_episode_id is None:
+        db_episode_id = requested_episode_id
+
     list_kwargs = {
-        "simkl_id": episode_id,
+        "simkl_id": db_episode_id,
         "hide_unaired": False,
         "hide_watched": False,
-        "skip_update": False,
+        "skip_update": True,
         "skip_watch_refresh": True,
     }
     if catalog == "anime":
+        episode_row = db.get_episode(db_episode_id, int(show_id))
+        if isinstance(episode_row, list):
+            episode_row = {}
+        if _episode_item_has_info(episode_row):
+            return episode_row
         rows = db.get_anime_episode_list(int(show_id), **list_kwargs)
     else:
-        episode_row = db.get_episode(episode_id, show_id)
+        episode_row = db.get_episode(db_episode_id, show_id)
         if isinstance(episode_row, list):
             episode_row = {}
         if _episode_item_has_info(episode_row):
@@ -562,7 +576,24 @@ def get_item_information(action_args):
 
         episode_id = episode_id_from_args(action_args)
         show_id = _resolve_episode_show_id(db, action_args, episode_id)
+        if show_id is None and action_args.get("simkl_show_id") is not None:
+            show_id = int(action_args["simkl_show_id"])
         episode_row = _load_episode_item_information(db, action_args, episode_id, show_id)
+        if not _episode_item_has_info(episode_row) and show_id and episode_id:
+            from resources.lib.simkl.ids import resolve_episode_db_simkl_id
+
+            catalog_hint = _catalog_from_action_args(action_args)
+            db_key = resolve_episode_db_simkl_id(
+                db, int(episode_id), int(show_id), catalog_hint
+            )
+            if db_key and int(db_key) != int(episode_id):
+                episode_row = _load_episode_item_information(
+                    db, action_args, db_key, show_id
+                )
+            if not _episode_item_has_info(episode_row) and db_key:
+                direct = db.get_episode(int(db_key), int(show_id))
+                if isinstance(direct, dict) and _episode_item_has_info(direct):
+                    episode_row = direct
         if episode_row:
             item_information.update(episode_row)
         info = item_information.get("info")

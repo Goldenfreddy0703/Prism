@@ -1411,7 +1411,7 @@ class TorrentCacheCheck:
                     if success is not False:
                         confirmed |= self._mark_confirmed_torrents(needs_check, ext_cached, "real_debrid")
                     elif success is False:
-                        rd_cached_set = self.rd_api.check_cache_batch(hash_list)
+                        rd_cached_set = self.rd_api.check_cache_batch(hash_list, info)
                         if rd_cached_set:
                             confirmed |= self._mark_confirmed_torrents(
                                 needs_check, rd_cached_set, "real_debrid"
@@ -1434,7 +1434,7 @@ class TorrentCacheCheck:
             if not self.rd_api.is_streamable_storage_type(storage_variant):
                 continue
 
-            if source_utils.get_best_episode_match('filename', storage_variant.values(), info):
+            if source_utils.rd_storage_variant_episode_match(storage_variant, info):
                 source['debrid_provider'] = 'real_debrid'
                 self.store_torrent(source)
                 break

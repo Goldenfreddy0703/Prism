@@ -416,43 +416,6 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             params.extend((self.page_limit, self.page_limit * (page - 1)))
 
         rows = self.fetchall(query, tuple(params) if params else None)
-        # #region agent log
-        if catalog in ("tv", "anime") and rows:
-            try:
-                import json
-                import time
-
-                mism = sum(
-                    1
-                    for row in rows
-                    if row.get("simkl_id") is not None
-                    and (self.show_catalog(int(row["simkl_id"])) or "tv") != catalog
-                )
-                with open(
-                    r"C:\Users\jenki\Desktop\Prism\debug-a54591.log",
-                    "a",
-                    encoding="utf-8",
-                ) as _h:
-                    _h.write(
-                        json.dumps(
-                            {
-                                "sessionId": "a54591",
-                                "hypothesisId": "catalog",
-                                "location": "shows._get_recently_watched_shows_scoped",
-                                "message": "recently_watched catalog check",
-                                "data": {
-                                    "catalog": catalog,
-                                    "rows": len(rows),
-                                    "catalog_mismatch": mism,
-                                },
-                                "timestamp": int(time.time() * 1000),
-                            }
-                        )
-                        + "\n"
-                    )
-            except Exception:
-                pass
-        # #endregion
         return rows
 
     @staticmethod
@@ -1795,10 +1758,26 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         season_row_id=None,
     ) -> list[dict]:
         if simkl_id is not None:
-            return self.fetchall(
+            rows = self.fetchall(
                 f"SELECT simkl_id, info FROM {self._st().episode} WHERE simkl_id = ?",
                 (int(simkl_id),),
             )
+            if not rows:
+                from resources.lib.simkl.ids import resolve_episode_db_simkl_id
+
+                catalog = self._st().catalog or "tv"
+                resolved = resolve_episode_db_simkl_id(
+                    self,
+                    int(simkl_id),
+                    int(simkl_show_id),
+                    catalog,
+                )
+                if resolved is not None and int(resolved) != int(simkl_id):
+                    rows = self.fetchall(
+                        f"SELECT simkl_id, info FROM {self._st().episode} WHERE simkl_id = ?",
+                        (int(resolved),),
+                    )
+            return rows
         if season_num is not None:
             return self.fetchall(
                 f"SELECT simkl_id, info FROM {self._st().episode} WHERE simkl_show_id = ? AND season = ?",
@@ -2637,7 +2616,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         :return: Episode object with full meta
         :rtype: dict
         """
-        profile = self._st().catalog
+        profile = self.show_catalog(int(simkl_show_id)) if simkl_show_id else "tv"
         result = self.get_episode_list(
             simkl_show_id,
             simkl_id=simkl_id,

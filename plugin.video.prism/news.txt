@@ -1,7 +1,11 @@
-Prism 5.0.60 — playback and home menu fixes
+Prism 5.0.61 — anime playback and metadata (issue #26)
 
-My Watch History on the home menu is Prism-only (bookmarks + local playback), not Simkl Recently Watched.
+Anime Dub preset: Signs/Songs track filter works with Preferred subtitle set to None.
 
-Sorting defaults on first install show Audio and Subtitles correctly. Debrid season packs pick the requested episode more reliably (Premiumize, RD, and others).
+Debrid season packs: better auto file pick (previews/OP/ED junk filtered, specials SP/OVA matching, cour-style Show - 01 names, no wrong absolute episode for numbered seasons).
+
+SmartPlay/getSources: fixes Unable to load metadata for episode when menus use Simkl entity episode ids.
+
+Real Debrid cache check uses the same episode file matching as resolve for instantAvailability.
 
 Restart Kodi after install.

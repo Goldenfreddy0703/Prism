@@ -1,3 +1,11 @@
+Changelog 5.0.61
+[BUG] Anime Dub preset — track name filter (Signs/Songs, dialog, custom) runs when Preferred subtitle is None; no full dialogue subs unless keyword matches
+[BUG] Anime debrid season packs — filter previews/menus/creditless NC on auto file pick; S00E## specials use season 0 coords; skip absolute ep match when playing numbered seasons (avoids ep 17 for S01E01)
+[IMPROVEMENT] Specials (season 0) debrid auto-pick — loose match SP##, Special ##, and OVA ## to menu episode when S00E## tags are missing
+[BUG] Anime debrid packs — cour-style file names (Show - 01) match menu episode without SxxExx; fixes auto-pick for releases like New Game!!
+[IMPROVEMENT] Real Debrid cache check — instantAvailability uses cloud-style episode file matching for TV/anime episodes (aligned with TorBox resolve / cour matching)
+[BUG] getSources / SmartPlay — resolve Simkl API episode ids to synthetic simklSync row keys so milled season episodes load info (fixes Unable to load metadata when context menu uses entity simkl_id)
+
 Changelog 5.0.60
 [BUG] Fresh install sorting configuration — sort v2 migration no longer remaps modern Audio/Subtitles rows into duplicate Subtitles; one-time repair for affected profiles
 [BUG] My Watch History — Prism-only: continue watching + local playback stamps; no Simkl Library Recently Watched backfill

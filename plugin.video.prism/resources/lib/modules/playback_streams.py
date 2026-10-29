@@ -308,11 +308,13 @@ def apply_anime_streams(player: xbmc.Player, *, catalog: str = "anime") -> None:
     if normalize_catalog(catalog) != "anime":
         return
 
-    if _catalog_subtitle_setting(catalog) == "none":
-        return
-
     keyword_mode = get_subtitle_keyword_mode()
     active_keyword_mode = keyword_mode if keyword_mode_active(keyword_mode) else KEYWORD_OFF
+    subtitle_setting = _catalog_subtitle_setting(catalog)
+
+    # Dub preset uses Preferred subtitle None — still allow Signs/Songs (or dialog/custom) keyword layer.
+    if subtitle_setting == "none" and not keyword_mode_active(active_keyword_mode):
+        return
 
     subtitle_streams: list[dict] = []
 
