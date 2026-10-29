@@ -127,8 +127,6 @@ class TorrentResolverBase(ApiBase):
                 folder_details,
             )
         folder_details = self._sort_and_filter_files(folder_details, item_information)
-        if len(folder_details) == 1:
-            return self._finalize_resolving(item_information, torrent, folder_details[0], folder_details)
         best_match = source_utils.get_best_episode_match_cloud("path", folder_details, item_information)
         return self._finalize_resolving(item_information, torrent, best_match, folder_details)
 

@@ -21,7 +21,17 @@ class PremiumizeResolver(TorrentResolverBase):
     def _fetch_source_files(self, torrent, item_information):
         response = self.debrid_module.direct_download(torrent["magnet"]) or {}
         content = response.get("content") if isinstance(response, dict) else None
-        return content or []
+        files = content or []
+        normalized: list[dict] = []
+        for item in files:
+            if not isinstance(item, dict):
+                continue
+            row = dict(item)
+            path = row.get("path") or row.get("name") or ""
+            if isinstance(path, str) and path.strip():
+                row["path"] = path.replace("\\", "/").strip()
+            normalized.append(row)
+        return normalized
 
     def resolve_stream_url(self, file_info):
         """

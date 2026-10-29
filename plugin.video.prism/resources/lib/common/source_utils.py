@@ -547,6 +547,41 @@ def _torrent_episode_file_matches(match_title: str, episode_regex, simple_info: 
     return cloud_loose_episode_match(match_title, simple_info)
 
 
+def _torrent_episode_file_match_tier(match_title: str, episode_regex, simple_info: dict) -> int:
+    """0 = no match, 2 = strict anchored regex, 1 = loose / title fallback."""
+    if not match_title:
+        return 0
+    if episode_regex(match_title):
+        return 2
+    if cloud_loose_episode_match(match_title, simple_info):
+        return 1
+    return 0
+
+
+# #region agent log
+def _agent_episode_pick_log(message, data=None, hypothesis_id="ep_match"):
+    try:
+        import json
+        import time
+
+        payload = {
+            "sessionId": "a54591",
+            "timestamp": int(time.time() * 1000),
+            "location": "source_utils.get_best_episode_match_cloud",
+            "message": message,
+            "data": data or {},
+            "hypothesisId": hypothesis_id,
+            "runId": "ep-autoplay",
+        }
+        with open(r"C:\Users\jenki\Desktop\Prism\debug-a54591.log", "a", encoding="utf-8") as _f:
+            _f.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
+
+
+# #endregion
+
+
 def _show_titles_from_simple_info(simple_info: dict) -> list[str]:
     titles = [simple_info.get("show_title") or ""]
     titles.extend(simple_info.get("show_aliases") or [])
@@ -576,18 +611,28 @@ def _release_matches_season_episode(release_title: str, season: str, episode: st
     if not season or not episode:
         return False
 
-    compact = release_title.replace(" ", "")
-    season_fill = season.zfill(2)
-    episode_fill = episode.zfill(2)
-    for needle in (
-        f"s{season_fill}e{episode_fill}",
-        f"s{season}e{episode}",
-        f"s0{season}e0{episode}",
-        f"{season}x{episode}",
-        f"{season}x{episode_fill}",
-        f"{season_fill}x{episode_fill}",
-    ):
-        if needle in compact:
+    compact = release_title.replace(" ", "").lower()
+    season_int = str(int(season)) if str(season).isdigit() else season
+    episode_int = str(int(episode)) if str(episode).isdigit() else episode
+    season_fill = str(season).zfill(2)
+    episode_fill = str(episode).zfill(2)
+
+    # Require episode digits not to continue into a longer number (S01E05 vs S01E050).
+    se_patterns = (
+        rf"s0?{re.escape(season_int)}e0?{re.escape(episode_int)}(?!\d)",
+        rf"s0?{re.escape(season_fill)}e0?{re.escape(episode_fill)}(?!\d)",
+        rf"s0?{re.escape(season)}e0?{re.escape(episode)}(?!\d)",
+    )
+    for pattern in se_patterns:
+        if re.search(pattern, compact, re.IGNORECASE):
+            return True
+
+    x_patterns = (
+        rf"(?<!\d){re.escape(season_int)}x{re.escape(episode_int)}(?!\d)",
+        rf"(?<!\d){re.escape(season_fill)}x{re.escape(episode_fill)}(?!\d)",
+    )
+    for pattern in x_patterns:
+        if re.search(pattern, compact, re.IGNORECASE):
             return True
 
     for pattern in (
@@ -1109,7 +1154,7 @@ def get_best_episode_match_cloud(dict_key, dictionary_list, item_information, si
     except CannotGenerateRegexFilterException:
         return get_best_episode_match(dict_key, dictionary_list, item_information)
 
-    matches = []
+    matches: list[tuple[int, dict, str]] = []
     for item in dictionary_list:
         if dict_key == "path":
             match_title = build_torrent_match_title(item)
@@ -1117,16 +1162,47 @@ def get_best_episode_match_cloud(dict_key, dictionary_list, item_information, si
             value = item.get(dict_key, "")
             match_title = build_torrent_match_title({"path": value}) if value else ""
 
-        if match_title and _torrent_episode_file_matches(match_title, episode_regex, simple_info):
-            matches.append(item)
+        tier = _torrent_episode_file_match_tier(match_title, episode_regex, simple_info)
+        if tier:
+            path_hint = (item.get("path") or item.get(dict_key) or match_title or "")[:160]
+            matches.append((tier, item, path_hint))
 
     if not matches:
-        return get_best_episode_match(dict_key, dictionary_list, item_information)
+        legacy = get_best_episode_match(dict_key, dictionary_list, item_information)
+        # #region agent log
+        _agent_episode_pick_log(
+            "legacy basename fallback",
+            {
+                "wanted_s": simple_info.get("season_number"),
+                "wanted_e": simple_info.get("episode_number"),
+                "files": len(dictionary_list),
+                "picked": (legacy or {}).get("path") or (legacy or {}).get(dict_key),
+            },
+        )
+        # #endregion
+        return legacy
 
-    if len(matches) == 1:
-        return matches[0]
-
-    return sorted(matches, key=lambda x: int(x.get("size", 0) or 0), reverse=True)[0]
+    matches.sort(
+        key=lambda row: (
+            -row[0],
+            -int(row[1].get("size", 0) or 0),
+        )
+    )
+    tier, picked, path_hint = matches[0]
+    # #region agent log
+    _agent_episode_pick_log(
+        "picked torrent file",
+        {
+            "wanted_s": simple_info.get("season_number"),
+            "wanted_e": simple_info.get("episode_number"),
+            "tier": tier,
+            "candidates": len(matches),
+            "path": path_hint,
+            "alt_paths": [m[2] for m in matches[1:4]],
+        },
+    )
+    # #endregion
+    return picked
 
 
 def clear_extras_by_string(args, extra_string, folder_details):

@@ -1,7 +1,7 @@
-Prism 5.0.59 — Seren-smooth menus
+Prism 5.0.60 — playback and home menu fixes
 
-Browse navigation matches Seren: light plugin entry, bulk ListItems on the menu thread, and Kodi menucaching for instant Back/reopen.
+My Watch History on the home menu is Prism-only (bookmarks + local playback), not Simkl Recently Watched.
 
-Title browse lists (discover, search, genre, library, related, and more) materialize the visible page into simkl_sync with full list art, then open with one SQL read (seren_direct_db). Episode menus use the same materialize-first pattern.
+Sorting defaults on first install show Audio and Subtitles correctly. Debrid season packs pick the requested episode more reliably (Premiumize, RD, and others).
 
-Enable general.menucaching in settings for best results. Restart Kodi after install.
+Restart Kodi after install.

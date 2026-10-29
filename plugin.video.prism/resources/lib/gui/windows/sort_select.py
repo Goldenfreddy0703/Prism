@@ -73,6 +73,26 @@ class SortSelect(BaseWindow):
 
         self.sort_lists = [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000]
         self.sort_options = catalog_profiles.load_sort_options(self.catalog)
+        # #region agent log
+        from resources.lib.modules.catalog_profiles import (
+            _agent_debug_log,
+            sortmethod_key,
+            DEFAULT_SORTMETHOD,
+        )
+
+        _loaded = {
+            f"L{level}": self.sort_options.get(
+                sortmethod_key(self.catalog, level), DEFAULT_SORTMETHOD.get(level, 0)
+            )
+            for level in range(1, 7)
+        }
+        _agent_debug_log(
+            "sort_select.__init__",
+            "loaded sortmethod indices for UI",
+            {"catalog": self.catalog, "sortmethods": _loaded},
+            hypothesis_id="D",
+        )
+        # #endregion
         self.max_level = 8
 
     def onInit(self):

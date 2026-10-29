@@ -1,3 +1,8 @@
+Changelog 5.0.60
+[BUG] Fresh install sorting configuration — sort v2 migration no longer remaps modern Audio/Subtitles rows into duplicate Subtitles; one-time repair for affected profiles
+[BUG] My Watch History — Prism-only: continue watching + local playback stamps; no Simkl Library Recently Watched backfill
+[BUG] Debrid season packs — tighter SxxExx matching (no S01E05 inside S01E050), strict regex preferred over loose/size tie-break, always verify episode file (not single-file shortcut); Premiumize uses path/name for matching
+
 Changelog 5.0.59
 [IMPROVEMENT] Menu navigation aligned with Seren — thin prism.py browse path (init_globals, dispatch, deinit) without Starting Prism gate, plugin slot, or force_stop on normal folder exit
 [IMPROVEMENT] Hub folder rows skip Simkl watch-counter work on art-only create_icon_dict entries (Seren-equivalent hub path)
@@ -17,7 +22,6 @@ Changelog 5.0.59
 [BUG] Actor credits / Search All — fix NameError (`payload_rows` typo in `open_mixed_browse`; use `items`); fix duplicate `paint_profile` kwarg on mixed Seren list build
 [BUG] Discover menu open — fix TypeError when seren_direct_db was passed twice to browse_list_kwargs
 [BUG] TV Shows Recently Watched included anime titles — SQL filters `shows.catalog` (same as watchlist status queries)
-[BUG] My Watch History no longer merges Simkl Recently Watched show rows when local Prism playback history exists (same data as library Recent; opening that menu does not write history)
 
 Changelog 5.0.58
 [IMPROVEMENT] Leaner background service — Seren-style loop (maintenance, Simkl sync, metadata cleanup, timezone) without mid-sleep sync or idle maintenance RunPlugin storms

@@ -293,36 +293,3 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         entries.sort(key=lambda item: str(item.get("activity_at") or ""), reverse=True)
         return entries[offset : offset + page_limit]
 
-    @guard_against_none(list)
-    def get_global_sync_recent_activity(self, limit: int = 40) -> list[dict]:
-        """Shows with Simkl/local watch progress (for home history when no local_playback_at yet)."""
-        limit = max(int(limit or 40), 1)
-        entries: list[dict] = []
-        seen_shows: set[tuple[str, int]] = set()
-        for catalog in ("tv", "anime"):
-            rows = self.get_recently_watched_shows(page=1, force_all=True, catalog=catalog) or []
-            for row in rows:
-                if len(entries) >= limit:
-                    break
-                show_id = row.get("simkl_id")
-                if show_id is None:
-                    continue
-                key = (catalog, int(show_id))
-                if key in seen_shows:
-                    continue
-                seen_shows.add(key)
-                entries.append(
-                    {
-                        "kind": "episode",
-                        "simkl_id": None,
-                        "simkl_show_id": int(show_id),
-                        "season": None,
-                        "episode": None,
-                        "catalog": catalog,
-                        "activity_at": row.get("last_watched_at"),
-                        "in_progress": False,
-                    }
-                )
-        entries.sort(key=lambda item: str(item.get("activity_at") or ""), reverse=True)
-        return entries[:limit]
-

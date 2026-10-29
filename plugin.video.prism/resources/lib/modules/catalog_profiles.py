@@ -2,13 +2,49 @@
 Per-catalog filter and sort profiles (movie / tv / anime).
 """
 
+import json
+import time
+
 from resources.lib.common.source_utils import tag_at_sort_index
 from resources.lib.modules.globals import g
+
+# #region agent log
+_DEBUG_LOG_PATH = r"C:\Users\jenki\Desktop\Prism\debug-a54591.log"
+
+
+def _agent_debug_log(location, message, data=None, hypothesis_id=None, run_id="pre-fix"):
+    try:
+        payload = {
+            "sessionId": "a54591",
+            "timestamp": int(time.time() * 1000),
+            "location": location,
+            "message": message,
+            "data": data or {},
+            "hypothesisId": hypothesis_id,
+            "runId": run_id,
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as _f:
+            _f.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
+
+
+def _sortmethod_snapshot(catalog):
+    return {
+        f"L{level}": g.get_int_setting(
+            sortmethod_key(catalog, level), DEFAULT_SORTMETHOD.get(level, 0)
+        )
+        for level in range(1, 7)
+    }
+
+
+# #endregion
 
 CATALOGS = ("movie", "tv", "anime")
 LAST_CATALOG_KEY = "general.filter.lastcatalog"
 MIGRATION_FLAG_KEY = "general.catalogprofiles.migrated"
 SORT_V2_MIGRATION_FLAG_KEY = "general.sortconfig.v2.migrated"
+SORT_V2_CORRUPTION_REPAIR_KEY = "general.sortconfig.v2.modern_corruption.repaired"
 
 DEFAULT_FILTERS = "3D,AV1"
 
@@ -272,6 +308,34 @@ def set_last_catalog(catalog):
     g.set_setting(LAST_CATALOG_KEY, normalize_catalog(catalog))
 
 
+def _map_legacy_sortmethod_index(old_val: int) -> int:
+    """Map pre-v2 sortmethod indices (0–9) to current SORT_METHODS indices."""
+    if old_val >= 10:
+        return old_val
+    return OLD_TO_NEW_SORTMETHOD.get(old_val, old_val)
+
+
+def _repair_sort_v2_modern_corruption() -> None:
+    """Restore Audio row when sort v2 treated modern indices 10/11 as legacy."""
+    for catalog in CATALOGS:
+        l3 = g.get_int_setting(sortmethod_key(catalog, 3), DEFAULT_SORTMETHOD.get(3, 0))
+        l4 = g.get_int_setting(sortmethod_key(catalog, 4), DEFAULT_SORTMETHOD.get(4, 0))
+        if l3 != 11 or l4 != 11:
+            continue
+        g.set_setting(sortmethod_key(catalog, 3), DEFAULT_SORTMETHOD[3])
+        for level, value in DEFAULT_AUDIOSORT.items():
+            g.set_setting(sub_sort_key(catalog, "audiosort", level), value)
+        # #region agent log
+        _agent_debug_log(
+            "catalog_profiles._repair_sort_v2_modern_corruption",
+            "repaired duplicate subtitles rows",
+            {"catalog": catalog, "sortmethods": _sortmethod_snapshot(catalog)},
+            hypothesis_id="fix",
+            run_id="post-fix",
+        )
+        # #endregion
+
+
 def _migrate_sort_v2():
     for catalog in CATALOGS:
         old_sortmethods = {
@@ -302,7 +366,23 @@ def _migrate_sort_v2():
 
         for level in range(1, 9):
             old_val = old_sortmethods[level]
-            g.set_setting(sortmethod_key(catalog, level), OLD_TO_NEW_SORTMETHOD.get(old_val, old_val))
+            mapped = _map_legacy_sortmethod_index(old_val)
+            # #region agent log
+            if level in (3, 4, 5):
+                _agent_debug_log(
+                    "catalog_profiles._migrate_sort_v2",
+                    "sortmethod remap",
+                    {
+                        "catalog": catalog,
+                        "level": level,
+                        "old_val": old_val,
+                        "mapped": mapped,
+                    },
+                    hypothesis_id="C",
+                    run_id="post-fix",
+                )
+            # #endregion
+            g.set_setting(sortmethod_key(catalog, level), mapped)
 
         for category, defaults in _TAG_SORT_DEFAULTS.items():
             for sub_level, default in defaults.items():
@@ -323,17 +403,57 @@ def ensure_migrated():
                 g.set_setting(key, legacy_filters)
 
         use_modern_sort_defaults = _legacy_global_sort_profile_is_factory_default()
+        # #region agent log
+        _agent_debug_log(
+            "catalog_profiles.ensure_migrated",
+            "catalog profile migration start",
+            {
+                "use_modern_sort_defaults": use_modern_sort_defaults,
+                "legacy_global_L3": g.get_int_setting("general.sortmethod.3", -1),
+                "legacy_global_L4": g.get_int_setting("general.sortmethod.4", -1),
+            },
+            hypothesis_id="A",
+        )
+        # #endregion
         for catalog in CATALOGS:
             if use_modern_sort_defaults:
                 reset_sort_profile(catalog)
+                # #region agent log
+                _agent_debug_log(
+                    "catalog_profiles.ensure_migrated",
+                    "after reset_sort_profile",
+                    {"catalog": catalog, "sortmethods": _sortmethod_snapshot(catalog)},
+                    hypothesis_id="B",
+                )
+                # #endregion
             else:
                 _migrate_legacy_sort_to_catalog(catalog)
 
         g.set_setting(MIGRATION_FLAG_KEY, True)
 
     if not g.get_bool_setting(SORT_V2_MIGRATION_FLAG_KEY):
+        # #region agent log
+        _agent_debug_log(
+            "catalog_profiles.ensure_migrated",
+            "before _migrate_sort_v2",
+            {"movie": _sortmethod_snapshot("movie")},
+            hypothesis_id="B",
+        )
+        # #endregion
         _migrate_sort_v2()
+        # #region agent log
+        _agent_debug_log(
+            "catalog_profiles.ensure_migrated",
+            "after _migrate_sort_v2",
+            {"movie": _sortmethod_snapshot("movie")},
+            hypothesis_id="D",
+        )
+        # #endregion
         g.set_setting(SORT_V2_MIGRATION_FLAG_KEY, True)
+
+    if not g.get_bool_setting(SORT_V2_CORRUPTION_REPAIR_KEY):
+        _repair_sort_v2_modern_corruption()
+        g.set_setting(SORT_V2_CORRUPTION_REPAIR_KEY, True)
 
 
 def get_filters(catalog):
