@@ -59,6 +59,14 @@ def episode_warm_uses_raw_endpoint() -> bool:
     return g.get_bool_setting("simkl.syncEpisodeWarmFast", True)
 
 
+def library_parent_warm_enabled() -> bool:
+    return g.get_bool_setting("simkl.syncLibraryParentWarm", True)
+
+
+def library_page_warm_enabled() -> bool:
+    return g.get_bool_setting("simkl.syncLibraryPageWarm", True)
+
+
 def show_ids_from_payload(payload) -> set[int]:
     ids: set[int] = set()
     if not payload:
@@ -381,6 +389,217 @@ def warm_episode_catalogs(
     return warmed
 
 
+def _nextup_episode_rows_for_catalog(db: "SimklSyncDatabase", catalog: str) -> list[dict]:
+    from resources.lib.database.simkl_sync.serial_sync import serial_profile_scope
+    from resources.lib.modules.globals import g
+
+    profile = "anime" if catalog == "anime" else "tv"
+    sort_last = g.get_int_setting("nextup.sort") == 1
+    limit = g.get_int_setting("item.limit") if g.get_bool_setting("limit.nextup") else 50
+    with serial_profile_scope(db, profile):
+        rows = db.get_nextup_episodes(sort_last, catalog=catalog) or []
+    if limit > 0:
+        rows = rows[: int(limit)]
+    return rows
+
+
+    return rows
+
+
+def _continue_watching_episode_rows(db: "SimklSyncDatabase", catalog: str) -> list[dict]:
+    from resources.lib.simkl.playback import list_continue_watching
+
+    rows = list_continue_watching(catalog, page=1, resync_if_empty=False) or []
+    for row in rows:
+        if isinstance(row, dict):
+            row.setdefault("catalog", catalog)
+    return rows
+
+
+def _watched_episode_rows_for_catalog(db: "SimklSyncDatabase", catalog: str) -> list[dict]:
+    from resources.lib.database.simkl_sync.serial_sync import serial_profile_scope
+    from resources.lib.simkl.menu_helpers import paginate_simkl_lists
+
+    profile = "anime" if catalog == "anime" else "tv"
+    page_limit = g.get_int_setting("item.limit")
+    with serial_profile_scope(db, profile):
+        page = 1 if not paginate_simkl_lists() else 1
+        rows = db.get_watched_episodes(page, catalog=catalog) or []
+    if page_limit > 0 and g.get_bool_setting("limit.nextup"):
+        rows = rows[: int(page_limit)]
+    elif page_limit > 0:
+        rows = rows[: int(page_limit)]
+    return rows
+
+
+def episode_rows_for_menu_bucket(
+    db: "SimklSyncDatabase",
+    catalog: str,
+    bucket: str,
+) -> list[dict]:
+    if bucket == BUCKET_NEXT_UP:
+        return _nextup_episode_rows_for_catalog(db, catalog)
+    if bucket == BUCKET_CONTINUE:
+        return _continue_watching_episode_rows(db, catalog)
+    if bucket == BUCKET_WATCHED:
+        return _watched_episode_rows_for_catalog(db, catalog)
+    return []
+
+
+def refresh_listed_episodes_for_menu_bucket(
+    db: "SimklSyncDatabase",
+    catalog: str,
+    bucket: str,
+    episode_rows: list[dict] | None = None,
+) -> int:
+    from resources.lib.database.simkl_sync.milling import refresh_listed_episodes_from_simkl
+    from resources.lib.database.simkl_sync.serial_sync import serial_profile_scope
+
+    rows = episode_rows if episode_rows is not None else episode_rows_for_menu_bucket(db, catalog, bucket)
+    if not rows:
+        return 0
+    profile = "anime" if catalog == "anime" else "tv"
+    with serial_profile_scope(db, profile):
+        refreshed = refresh_listed_episodes_from_simkl(db, rows)
+    if refreshed:
+        g.log(
+            f"Simkl listed-episode refresh: {refreshed} row(s) ({catalog}, {bucket})",
+            "debug",
+        )
+    return refreshed
+
+
+def _scoped_parent_show_refs(db: "SimklSyncDatabase", catalog: str) -> list[dict]:
+    """Watching + continue-watching parents for post-sync library parent warm."""
+    seen: set[int] = set()
+    refs: list[dict] = []
+
+    def add(show_id: int | None) -> None:
+        if show_id is None:
+            return
+        sid = int(show_id)
+        if sid in seen:
+            return
+        if db.show_catalog(sid) != catalog:
+            return
+        seen.add(sid)
+        refs.append({"simkl_id": sid, "catalog": catalog})
+
+    watching = db.get_shows_by_simkl_status("watching", catalog=catalog) or []
+    for ref in watching[:WATCHING_WARM_CAP]:
+        add(ref.get("simkl_id"))
+
+    for row in db.fetchall(
+        """
+        SELECT DISTINCT e.simkl_show_id AS simkl_id
+        FROM bookmarks AS b
+                 INNER JOIN episodes AS e ON e.simkl_id = b.simkl_id AND e.catalog = b.catalog
+        WHERE b.type = 'episode' AND e.catalog = ?
+        """,
+        (catalog,),
+    ):
+        add(row.get("simkl_id"))
+
+    return refs
+
+
+def refresh_scoped_parent_shows_for_paint(db: "SimklSyncDatabase", catalog: str) -> dict[str, int]:
+    from resources.lib.meta.list_paint import prepare_episode_parent_shows_for_paint
+
+    if not library_parent_warm_enabled():
+        return {"refs": 0, "detail_before": 0, "detail_after": 0}
+
+    refs = _scoped_parent_show_refs(db, catalog)
+    next_up_rows = _nextup_episode_rows_for_catalog(db, catalog)
+    from resources.lib.meta.list_paint import parent_show_refs_from_episode_rows
+
+    for ref in parent_show_refs_from_episode_rows(next_up_rows, catalog):
+        sid = int(ref["simkl_id"])
+        if sid not in {int(r["simkl_id"]) for r in refs}:
+            refs.append(ref)
+
+    if not refs:
+        return {"refs": 0, "detail_before": 0, "detail_after": 0}
+
+    stats = prepare_episode_parent_shows_for_paint(
+        db,
+        catalog,
+        refs,
+        episode_rows=next_up_rows or None,
+    )
+    if stats.get("detail_before") or stats.get("detail_after"):
+        g.log(
+            f"Simkl library parent show warm ({catalog}): "
+            f"detail_needed {stats['detail_before']}->{stats['detail_after']} "
+            f"parents={stats['refs']}",
+            "debug",
+        )
+    return stats
+
+
+def warm_library_episode_catalog(
+    db: "SimklSyncDatabase",
+    catalog: str,
+    *,
+    reason: str = "post_sync",
+    buckets: tuple[str, ...] | None = None,
+) -> dict[str, int]:
+    """Post-sync / prefetch: listed-episode refresh + parent show warm for one serial catalog."""
+    if not episode_warm_enabled() or catalog not in ("tv", "anime"):
+        return {"listed": 0, "detail_before": 0, "detail_after": 0}
+
+    bucket_list = buckets or (BUCKET_NEXT_UP, BUCKET_CONTINUE, BUCKET_WATCHED)
+    listed_total = 0
+    for bucket in bucket_list:
+        listed_total += refresh_listed_episodes_for_menu_bucket(db, catalog, bucket)
+
+    parent_stats = refresh_scoped_parent_shows_for_paint(db, catalog)
+    g.log(
+        f"warm_library_episode_catalog catalog={catalog} reason={reason} "
+        f"listed={listed_total} parent={parent_stats.get('detail_after', 0)}",
+        "debug",
+    )
+    return {
+        "listed": listed_total,
+        "detail_before": int(parent_stats.get("detail_before") or 0),
+        "detail_after": int(parent_stats.get("detail_after") or 0),
+    }
+
+
+def refresh_nextup_parent_shows_for_paint(db: "SimklSyncDatabase", catalog: str) -> dict[str, int]:
+    """Pre-warm Next Up parent shows so library open skips blocking Browse paint (tv + anime)."""
+    return refresh_scoped_parent_shows_for_paint(db, catalog)
+
+
+def refresh_parent_shows_for_show_ids(
+    db: "SimklSyncDatabase",
+    show_ids: list[int] | set[int],
+) -> None:
+    """Background parent warm after lazy episode catalog warm (Next Up / Continue Watching)."""
+    from resources.lib.meta.list_paint import prepare_episode_parent_shows_for_paint
+
+    if not episode_warm_enabled() or not show_ids or not library_parent_warm_enabled():
+        return
+
+    by_catalog: dict[str, list[dict]] = {}
+    for raw_id in show_ids:
+        if raw_id is None:
+            continue
+        sid = int(raw_id)
+        catalog = db.show_catalog(sid)
+        if catalog not in ("tv", "anime"):
+            continue
+        by_catalog.setdefault(catalog, []).append({"simkl_id": sid, "catalog": catalog})
+
+    for catalog, refs in by_catalog.items():
+        prepare_episode_parent_shows_for_paint(db, catalog, refs)
+
+
+def refresh_nextup_listed_episodes(db: "SimklSyncDatabase", catalog: str) -> int:
+    """Target Simkl plot/still for visible Next Up rows (tv + anime), not full-show mill."""
+    return refresh_listed_episodes_for_menu_bucket(db, catalog, BUCKET_NEXT_UP)
+
+
 def run_post_sync_episode_warm(
     db: "SimklSyncDatabase",
     *,
@@ -398,12 +617,21 @@ def run_post_sync_episode_warm(
     )
     if targets:
         g.log(f"Simkl episode catalog warm: {len(targets)} show(s)", "info")
-    return warm_episode_catalogs(
+    warmed = warm_episode_catalogs(
         db,
         targets,
         on_progress=on_progress,
         notify_silent=notify_silent,
     )
+    if episode_warm_enabled():
+        for catalog in ("tv", "anime"):
+            warm_library_episode_catalog(db, catalog, reason="post_sync")
+    if library_page_warm_enabled():
+        from resources.lib.simkl.library_list_sync import warm_library_watchlist_pages_post_sync
+
+        for catalog in ("movie", "tv", "anime"):
+            warm_library_watchlist_pages_post_sync(catalog)
+    return warmed
 
 
 def schedule_lazy_episode_warm(db: "SimklSyncDatabase", show_ids: set[int] | list[int]) -> None:
@@ -427,6 +655,10 @@ def schedule_lazy_episode_warm(db: "SimklSyncDatabase", show_ids: set[int] | lis
             if targets:
                 g.log(f"Simkl lazy episode warm: {len(targets)} show(s)", "debug")
                 warm_episode_catalogs(db, targets, notify_silent=True)
+                refresh_parent_shows_for_show_ids(
+                    db,
+                    [int(row.get("simkl_id")) for row, _ in targets if row.get("simkl_id")],
+                )
         except Exception:
             g.log_stacktrace()
 

@@ -2458,8 +2458,10 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         g.log("Fetching mixed episode list from sync database", "debug")
         skip_update = params.pop("skip_update", False)
         skip_mill = params.pop("skip_mill", False)
+        defer_child_enrich = params.pop("defer_child_enrich", False)
         missing_rows = self._mixed_episodes_missing_rows(media_items)
-        need_sync = missing_rows or self._mixed_episodes_need_sync(media_items)
+        need_rich_meta = self._mixed_episodes_need_sync(media_items)
+        need_sync = missing_rows or need_rich_meta
         if need_sync and not skip_update:
             g.log(
                 "Mixed episode list: syncing listed episodes before paint",
@@ -2471,7 +2473,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 catalog=catalog_hint,
             )
             media_items = self._resolve_episode_list_ids(media_items)
-        elif need_sync:
+        elif need_sync and not defer_child_enrich:
             show_ids = sorted(
                 {int(item["simkl_show_id"]) for item in media_items if item.get("simkl_show_id") is not None}
             )
@@ -2549,22 +2551,30 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 slimmed.append(item)
             rows = slimmed
 
-            groups: dict[tuple[int, int | None], list[int]] = defaultdict(list)
-            for item in media_items:
-                if not isinstance(item, dict):
-                    continue
-                show_id = item.get("simkl_show_id")
-                season_id = item.get("simkl_season_id")
-                episode_id = item.get("simkl_id")
-                if show_id is None or episode_id is None:
-                    continue
-                groups[(int(show_id), int(season_id) if season_id is not None else None)].append(int(episode_id))
-            for (show_id, season_row_id), episode_ids in groups.items():
-                MetaEnrichmentQueue.schedule_show_children(
-                    show_id,
-                    kind="episode_list",
-                    season_row_id=season_row_id,
-                    episode_ids=episode_ids,
+            if not defer_child_enrich:
+                groups: dict[tuple[int, int | None], list[int]] = defaultdict(list)
+                for item in media_items:
+                    if not isinstance(item, dict):
+                        continue
+                    show_id = item.get("simkl_show_id")
+                    season_id = item.get("simkl_season_id")
+                    episode_id = item.get("simkl_id")
+                    if show_id is None or episode_id is None:
+                        continue
+                    groups[(int(show_id), int(season_id) if season_id is not None else None)].append(
+                        int(episode_id)
+                    )
+                for (show_id, season_row_id), episode_ids in groups.items():
+                    MetaEnrichmentQueue.schedule_show_children(
+                        show_id,
+                        kind="episode_list",
+                        season_row_id=season_row_id,
+                        episode_ids=episode_ids,
+                    )
+            elif defer_child_enrich and missing_rows:
+                g.log(
+                    "Mixed episode list: deferred child enrich (library paint)",
+                    "debug",
                 )
         return rows
 
@@ -2875,6 +2885,25 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         if not season_rows:
             return
 
+        show_ids = {int(row[0]) for row in season_rows}
+        placeholders = ",".join("?" * len(show_ids))
+        existing = self.fetchall(
+            f"SELECT simkl_id FROM {self._st().show} WHERE simkl_id IN ({placeholders})",
+            tuple(show_ids),
+        )
+        valid_shows = {
+            int(row["simkl_id"]) for row in (existing or []) if row.get("simkl_id") is not None
+        }
+        if len(valid_shows) < len(show_ids):
+            g.log(
+                f"SimklSync: skipped season upsert for {len(show_ids - valid_shows)} row(s) — "
+                f"parent show missing ({self._st().catalog})",
+                "debug",
+            )
+        season_rows = [row for row in season_rows if int(row[0]) in valid_shows]
+        if not season_rows:
+            return
+
         self.execute_sql(self._upsert_season_sql(), season_rows)
         self.update_season_statistics({"simkl_id": i["info"]["simkl_id"]} for i in formatted_items)
 
@@ -2964,6 +2993,22 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
     def _execute_episode_upsert_rows(self, episode_rows, *, episode_num_from_info):
         from resources.lib.database.simkl_sync.serial_sync import serial_profile_scope
 
+        seen_episode_ids: set[int] = set()
+        deduped_rows = []
+        for row in episode_rows:
+            info = row.get("info") or {}
+            episode_id = info.get("simkl_id")
+            if episode_id is None:
+                continue
+            episode_id = int(episode_id)
+            if episode_id in seen_episode_ids:
+                continue
+            seen_episode_ids.add(episode_id)
+            deduped_rows.append(row)
+        episode_rows = deduped_rows
+        if not episode_rows:
+            return
+
         buckets: dict[str, list] = {"tv": [], "anime": []}
         for row in episode_rows:
             info = row.get("info") or {}
@@ -2977,6 +3022,28 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             if not rows:
                 continue
             with serial_profile_scope(self, profile):
+                show_ids = {
+                    int(row.get("info", {}).get("simkl_show_id"))
+                    for row in rows
+                    if row.get("info", {}).get("simkl_show_id") is not None
+                }
+                if not show_ids:
+                    continue
+                placeholders = ",".join("?" * len(show_ids))
+                existing = self.fetchall(
+                    f"SELECT simkl_id FROM {self._st().show} WHERE simkl_id IN ({placeholders})",
+                    tuple(show_ids),
+                )
+                valid_shows = {
+                    int(row["simkl_id"]) for row in (existing or []) if row.get("simkl_id") is not None
+                }
+                rows = [
+                    row
+                    for row in rows
+                    if int((row.get("info") or {}).get("simkl_show_id") or 0) in valid_shows
+                ]
+                if not rows:
+                    continue
                 upsert_sql = self._upsert_episode_sql()
                 self.execute_sql(
                     upsert_sql,

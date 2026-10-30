@@ -5817,6 +5817,26 @@ msgid "Nothing to continue watching right now"
 msgstr "Nothing to continue watching right now"
 
 #: /resources/settings.xml
+msgctxt "#31129"
+msgid "Warm library parent shows after sync"
+msgstr "Warm library parent shows after sync"
+
+#: /resources/settings.xml
+msgctxt "#31130"
+msgid "After sync, prepare parent show metadata for Watching and Next Up (tv and anime) so episode menus open faster."
+msgstr "After sync, prepare parent show metadata for Watching and Next Up (tv and anime) so episode menus open faster."
+
+#: /resources/settings.xml
+msgctxt "#31131"
+msgid "Warm library watchlist page one after sync"
+msgstr "Warm library watchlist page one after sync"
+
+#: /resources/settings.xml
+msgctxt "#31132"
+msgid "After sync, run Simkl detail prep for the first page of each watchlist bucket (Watching, Plan to Watch, etc.) for tv, anime, and movies."
+msgstr "After sync, run Simkl detail prep for the first page of each watchlist bucket (Watching, Plan to Watch, etc.) for tv, anime, and movies."
+
+#: /resources/settings.xml
 msgctxt "#31050"
 msgid "Seren-style menu loading"
 msgstr "Seren-style menu loading"

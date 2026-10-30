@@ -10,6 +10,83 @@ from resources.lib.modules.globals import g
 _RAW_EPISODES_CACHE: dict[tuple[int, str, str], list[dict[str, Any]]] = {}
 
 
+def _ensure_listed_episode_fk_parents(
+    db,
+    built: list[dict[str, Any]],
+    *,
+    catalog: str,
+    show_meta: dict[int, tuple[str, str | None]],
+) -> None:
+    """Ensure shows + seasons exist before listed-episode upsert (episodes FK both tables)."""
+    from resources.lib.modules.metadataHandler import MetadataHandler
+    from resources.lib.simkl.ids import season_key
+
+    get = MetadataHandler.get_simkl_info
+    show_ids = sorted({int(b["simkl_show_id"]) for b in built if b.get("simkl_show_id") is not None})
+    missing_shows: list[dict[str, Any]] = []
+    for sid in show_ids:
+        if db.fetchone("SELECT simkl_id FROM shows WHERE simkl_id=?", (sid,)):
+            continue
+        cat = show_meta.get(sid, (catalog, None))[0]
+        missing_shows.append(
+            {
+                "simkl_id": sid,
+                "catalog": cat,
+                "simkl_object": {
+                    "info": {
+                        "simkl_id": sid,
+                        "catalog": cat,
+                        "mediatype": "tvshow",
+                    }
+                },
+            }
+        )
+    if missing_shows:
+        db.insert_simkl_shows(missing_shows)
+
+    season_coords: set[tuple[int, int, str]] = set()
+    for ep in built:
+        sid = ep.get("simkl_show_id")
+        season_num = get(ep, "season")
+        if sid is None or season_num is None:
+            continue
+        cat = show_meta.get(int(sid), (catalog, None))[0]
+        season_coords.add((int(sid), int(season_num), cat))
+
+    seasons_to_insert: list[dict[str, Any]] = []
+    for sid, season_num, cat in sorted(season_coords):
+        existing = db.fetchone(
+            "SELECT simkl_id FROM seasons WHERE simkl_show_id=? AND season=? AND catalog=?",
+            (sid, season_num, cat),
+        )
+        if existing:
+            continue
+        _, slug = show_meta.get(sid, (cat, None))
+        seasons_to_insert.append(
+            _build_season_dict(sid, season_num, [], False, 0, slug=slug, catalog=cat)
+        )
+
+    if seasons_to_insert:
+        db.insert_simkl_seasons(seasons_to_insert)
+
+    for ep in built:
+        sid = ep.get("simkl_show_id")
+        season_num = get(ep, "season")
+        if sid is None or season_num is None:
+            continue
+        sid = int(sid)
+        season_num = int(season_num)
+        cat = show_meta.get(sid, (catalog, None))[0]
+        existing = db.fetchone(
+            "SELECT simkl_id FROM seasons WHERE simkl_show_id=? AND season=? AND catalog=?",
+            (sid, season_num, cat),
+        )
+        if existing:
+            ep["simkl_season_id"] = int(existing["simkl_id"])
+        else:
+            ep["simkl_season_id"] = season_key(sid, season_num)
+
+
 def clear_raw_episodes_cache(show_id: int | None = None) -> None:
     """Drop in-process Simkl episode JSON (e.g. after sync invalidates a show)."""
     if show_id is None:
@@ -339,12 +416,46 @@ def _listed_episode_coord_variants(
     """Menu/DB season keys vs Simkl API episode JSON can disagree on season 0/1."""
     sid, s, ep = int(show_id), int(season), int(episode)
     out = {(sid, s, ep)}
-    if catalog == "tv":
+    if catalog in ("tv", "anime"):
         if s == 0:
             out.add((sid, 1, ep))
         elif s == 1:
             out.add((sid, 0, ep))
     return out
+
+
+def _register_anime_tvdb_list_targets(
+    item: dict,
+    show_id: int,
+    *,
+    target_coords: set[tuple[int, int, int]],
+    shows_needed: set[int],
+) -> None:
+    """Register match coords from stored tvdb_season/tvdb_episode (same rules as field_map menus)."""
+    from resources.lib.simkl.field_map import anime_menu_episode_number, anime_menu_season, tvdb_from_episode
+
+    info = item.get("info") if isinstance(item.get("info"), dict) else {}
+    nested = item.get("episode") if isinstance(item.get("episode"), dict) else {}
+    simkl_obj = item.get("simkl_object") if isinstance(item.get("simkl_object"), dict) else {}
+    obj_info = simkl_obj.get("info") if isinstance(simkl_obj.get("info"), dict) else {}
+    merged: dict = {**obj_info, **info, **nested}
+    if "tvdb" not in merged and merged.get("tvdb_season") is not None:
+        merged["tvdb"] = {
+            "season": merged.get("tvdb_season"),
+            "episode": merged.get("tvdb_episode"),
+        }
+    tvdb_season, tvdb_ep = tvdb_from_episode(merged)
+    if tvdb_season is None or tvdb_ep is None:
+        return
+    menu_season = anime_menu_season(merged)
+    menu_ep = anime_menu_episode_number(merged, menu_season, int(tvdb_ep))
+    if menu_ep is None:
+        return
+    sid = int(show_id)
+    target_coords.update(
+        _listed_episode_coord_variants(sid, menu_season, int(menu_ep), catalog="anime")
+    )
+    shows_needed.add(sid)
 
 
 def _register_listed_episode_targets(
@@ -358,12 +469,23 @@ def _register_listed_episode_targets(
 ) -> None:
     from resources.lib.simkl.ids import is_synthetic_episode_id, show_id_from_item, split_synthetic_episode_id
 
+    item_catalog = item.get("catalog") if isinstance(item.get("catalog"), str) else catalog_hint
     coords = db._episode_coords_from_list_item(item)
     if coords:
         show_id, season, ep_num = coords
-        catalog = db.show_catalog(show_id) or catalog_hint
+        catalog = db.show_catalog(show_id) or item_catalog or catalog_hint
         target_coords.update(_listed_episode_coord_variants(show_id, season, ep_num, catalog=catalog))
         shows_needed.add(int(show_id))
+    elif isinstance(item.get("episode"), dict):
+        nested = item["episode"]
+        nested_coords = db._episode_coords_from_list_item(
+            {"simkl_show_id": show_id_from_item(item), **nested, "episode": nested}
+        )
+        if nested_coords:
+            show_id, season, ep_num = nested_coords
+            catalog = db.show_catalog(show_id) or item_catalog or catalog_hint
+            target_coords.update(_listed_episode_coord_variants(show_id, season, ep_num, catalog=catalog))
+            shows_needed.add(int(show_id))
     simkl_id = item.get("simkl_id")
     show_id = item.get("simkl_show_id") or show_id_from_item(item)
     if simkl_id is not None:
@@ -376,6 +498,14 @@ def _register_listed_episode_targets(
             shows_needed.add(int(split[0]))
     if show_id is not None:
         shows_needed.add(int(show_id))
+        catalog = db.show_catalog(int(show_id)) or item_catalog or catalog_hint
+        if catalog == "anime":
+            _register_anime_tvdb_list_targets(
+                item,
+                int(show_id),
+                target_coords=target_coords,
+                shows_needed=shows_needed,
+            )
 
 
 def refresh_listed_episodes_from_simkl(db, media_items) -> int:
@@ -391,12 +521,14 @@ def refresh_listed_episodes_from_simkl(db, media_items) -> int:
     for item in media_items or []:
         if not isinstance(item, dict):
             continue
+        hint = item.get("catalog") if isinstance(item.get("catalog"), str) else "tv"
         _register_listed_episode_targets(
             item,
             target_coords=target_coords,
             target_ids=target_ids,
             shows_needed=shows_needed,
             db=db,
+            catalog_hint=hint,
         )
 
     if not target_coords and not target_ids:
@@ -464,6 +596,7 @@ def refresh_listed_episodes_from_simkl(db, media_items) -> int:
                 "debug",
             )
             continue
+        _ensure_listed_episode_fk_parents(db, built, catalog=catalog, show_meta=show_meta)
         db.insert_simkl_episodes(built)
         db._format_episodes(built, preloaded=True)
         refreshed += len(built)

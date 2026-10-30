@@ -1101,10 +1101,37 @@ def attach_preloaded_episode_paint(
     load_params = dict(filter_params or {})
     load_params.setdefault("catalog", catalog)
     load_params.setdefault("catalog_hint", catalog)
-    need_sync = db._mixed_episodes_missing_rows(episode_rows) or db._mixed_episodes_need_sync(episode_rows)
-    if need_sync:
-        load_params["skip_update"] = False
-        load_params["skip_mill"] = True
+    paint_skip_update = bool(merged.get("skip_update", True))
+    load_params["skip_update"] = paint_skip_update
+    load_params["skip_mill"] = bool(merged.get("skip_mill", True))
+    load_params["defer_child_enrich"] = paint_skip_update
+    missing_rows = db._mixed_episodes_missing_rows(episode_rows)
+    need_rich_meta = db._mixed_episodes_need_sync(episode_rows)
+    if (missing_rows or need_rich_meta) and paint_skip_update:
+        from resources.lib.common.thread_pool import defer_background
+        from resources.lib.simkl.episode_catalog_sync import schedule_lazy_episode_warm
+
+        show_ids = {
+            int(item["simkl_show_id"])
+            for item in episode_rows
+            if item.get("simkl_show_id") is not None
+        }
+        if show_ids:
+            schedule_lazy_episode_warm(db, show_ids)
+
+        rows_snapshot = list(episode_rows)
+
+        def _background_listed_episode_refresh() -> None:
+            try:
+                from resources.lib.database.simkl_sync.milling import refresh_listed_episodes_from_simkl
+
+                refresh_listed_episodes_from_simkl(db, rows_snapshot)
+            except Exception:
+                from resources.lib.modules.globals import g
+
+                g.log_stacktrace()
+
+        defer_background(_background_listed_episode_refresh)
     rows = db.get_mixed_episode_list(episode_rows, **load_params)
     enrichment_refs = None
     enrichment_media_type = None
@@ -1125,11 +1152,21 @@ def attach_preloaded_episode_paint(
 
 def upsert_episode_parent_shows(episode_rows: list[dict], catalog: str) -> None:
     """Ensure parent shows for episode menus exist in catalog_items."""
+    from resources.lib.database.session import get_sync_database
+    from resources.lib.database.simkl_sync.serial_access import fetch_show_rows_by_ids
     from resources.lib.discover.sync_bridge import insert_discover_page
 
     sync_items = rows_to_sync_items(episode_rows, catalog)
-    if sync_items:
-        insert_discover_page(catalog, sync_items)
+    if not sync_items:
+        return
+    refs = _parent_show_refs_from_episode_rows(episode_rows, catalog)
+    catalog_only = False
+    if refs:
+        db = get_sync_database()
+        show_ids = [int(ref["simkl_id"]) for ref in refs]
+        existing = fetch_show_rows_by_ids(db, catalog, show_ids, columns="simkl_id")
+        catalog_only = len(existing) >= len(show_ids)
+    insert_discover_page(catalog, sync_items, catalog_only=catalog_only)
 
 
 def _parent_show_refs_from_episode_rows(episode_rows: list[dict], catalog: str) -> list[dict]:
@@ -1149,18 +1186,163 @@ def _parent_show_refs_from_episode_rows(episode_rows: list[dict], catalog: str) 
     return refs
 
 
-def prefetch_episode_parent_simkl_detail(episode_rows: list[dict], catalog: str) -> None:
-    """Blocking Simkl GET /tv|anime/{id} for parent shows before episode rows load from DB."""
-    refs = _parent_show_refs_from_episode_rows(episode_rows, catalog)
+def parent_show_refs_from_episode_rows(episode_rows: list[dict], catalog: str) -> list[dict]:
+    """Public wrapper for parent show refs on episode library menus."""
+    return _parent_show_refs_from_episode_rows(episode_rows, catalog)
+
+
+def _page_sync_for_parent_show_refs(
+    db,
+    catalog: str,
+    refs: list[dict],
+) -> list[dict]:
+    """Resolve parent SyncRows from catalog_items, upgrading thin rows from scoped show DB."""
+    from resources.lib.discover.catalog_store import sync_items_for_refs
+    from resources.lib.database.simkl_sync.serial_access import fetch_show_rows_by_ids
+    from resources.lib.simkl.detail_gates import simkl_detail_needed_for_episode_parent
 
     if not refs:
-        return
-    from resources.lib.discover.catalog_store import sync_items_for_refs
-    from resources.lib.simkl.enrich import prepare_page_sync_for_paint
+        return []
 
+    parent_gate = simkl_detail_needed_for_episode_parent
     page_sync = sync_items_for_refs(catalog, refs)
-    if page_sync:
-        prepare_page_sync_for_paint(catalog, page_sync, refs=refs)
+    by_id: dict[int, dict] = {}
+    for item in page_sync:
+        if isinstance(item, dict) and item.get("simkl_id") is not None:
+            by_id[int(item["simkl_id"])] = item
+
+    need_db: list[int] = []
+    for ref in refs:
+        sid = int(ref["simkl_id"])
+        item = by_id.get(sid)
+        if item is None or parent_gate(item):
+            need_db.append(sid)
+
+    if need_db:
+        seen_db: set[int] = set()
+        for row in fetch_show_rows_by_ids(db, catalog, list(dict.fromkeys(need_db))):
+            if not isinstance(row, dict) or row.get("simkl_id") is None:
+                continue
+            sync_items = rows_to_sync_items([row], catalog)
+            if not sync_items:
+                continue
+            item = sync_items[0]
+            sid = int(item["simkl_id"])
+            if sid in seen_db:
+                continue
+            seen_db.add(sid)
+            existing = by_id.get(sid)
+            if existing is None or parent_gate(existing):
+                if not parent_gate(item) or existing is None:
+                    by_id[sid] = item
+
+    ordered: list[dict] = []
+    for ref in refs:
+        sid = int(ref["simkl_id"])
+        if sid in by_id:
+            ordered.append(by_id[sid])
+    return ordered
+
+
+def prepare_episode_parent_shows_for_paint(
+    db,
+    catalog: str,
+    refs: list[dict],
+    *,
+    episode_rows: list[dict] | None = None,
+) -> dict[str, int]:
+    """
+    Upsert parent shows, hydrate from catalog_items + show DB, blocking Simkl detail for thin rows.
+    Used by library Next Up menus and post-sync parent warm (tv + anime).
+    """
+    from resources.lib.simkl.detail_gates import (
+        simkl_detail_needed,
+        simkl_detail_needed_for_episode_parent,
+        simkl_detail_needed_reasons,
+        simkl_detail_needed_reasons_for_episode_parent,
+    )
+    from resources.lib.simkl.enrich import enrich_sync_items_persisted, prepare_page_sync_for_paint
+
+    if not refs:
+        return {"refs": 0, "detail_before": 0, "detail_after": 0}
+
+    if episode_rows:
+        upsert_episode_parent_shows(episode_rows, catalog)
+
+    page_sync = _page_sync_for_parent_show_refs(db, catalog, refs)
+    if not page_sync:
+        return {"refs": len(refs), "detail_before": len(refs), "detail_after": len(refs)}
+
+    parent_gate = simkl_detail_needed_for_episode_parent
+    detail_before = sum(1 for item in page_sync if parent_gate(item))
+    page_sync = prepare_page_sync_for_paint(
+        catalog,
+        page_sync,
+        refs=refs,
+        detail_needed_fn=parent_gate,
+        paint_log_label="Library parent warm",
+    )
+    detail_after = sum(1 for item in page_sync if parent_gate(item))
+
+    if detail_after > 0:
+        needing = [item for item in page_sync if parent_gate(item)]
+        enriched = enrich_sync_items_persisted(catalog, needing, force_detail=True)
+        by_id = {
+            int(row["simkl_id"]): row
+            for row in enriched
+            if isinstance(row, dict) and row.get("simkl_id") is not None
+        }
+        page_sync = [
+            by_id.get(int(item["simkl_id"]), item)
+            if isinstance(item, dict) and item.get("simkl_id") is not None
+            else item
+            for item in page_sync
+        ]
+        detail_after = sum(1 for item in page_sync if parent_gate(item))
+
+    thin_browse_only: list[dict] = []
+    for item in page_sync:
+        if not isinstance(item, dict) or item.get("simkl_id") is None:
+            continue
+        if parent_gate(item):
+            continue
+        if simkl_detail_needed(item):
+            thin_browse_only.append(item)
+
+    if detail_after > 0 or thin_browse_only:
+        from resources.lib.modules.globals import g
+
+        for item in page_sync:
+            if not parent_gate(item):
+                continue
+            sid = item.get("simkl_id")
+            g.log(
+                f"Library parent thin show={sid} reasons={simkl_detail_needed_reasons_for_episode_parent(item)}",
+                "debug",
+            )
+        for item in thin_browse_only:
+            g.log(
+                f"Library parent browse-only gap show={item.get('simkl_id')} "
+                f"reasons={simkl_detail_needed_reasons(item)}",
+                "debug",
+            )
+
+    return {
+        "refs": len(refs),
+        "detail_before": detail_before,
+        "detail_after": detail_after,
+    }
+
+
+def prefetch_episode_parent_simkl_detail(episode_rows: list[dict], catalog: str) -> None:
+    """Blocking Simkl GET /tv|anime/{id} for parent shows before episode rows load from DB."""
+    from resources.lib.database.session import get_sync_database
+
+    refs = _parent_show_refs_from_episode_rows(episode_rows, catalog)
+    if not refs:
+        return
+    db = get_sync_database()
+    prepare_episode_parent_shows_for_paint(db, catalog, refs, episode_rows=episode_rows)
 
 
 def _warm_parent_show_cast(show_ids: list[int], catalog: str) -> None:

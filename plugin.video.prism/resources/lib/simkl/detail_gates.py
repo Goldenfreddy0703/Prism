@@ -79,3 +79,51 @@ def simkl_detail_needed(item: dict) -> bool:
     if anime_title_slots_need_detail(info):
         return True
     return not has_simkl_owned_metadata(info)
+
+
+def simkl_detail_needed_for_episode_parent(item: dict) -> bool:
+    """Parent rows for episode menus: title + poster only.
+
+    Simkl often has no show plot (e.g. upcoming anime); do not block library episode
+    menus on plot — full browse / watchlist still uses simkl_detail_needed.
+    """
+    if not isinstance(item, dict):
+        return True
+    return not sync_row_list_paint_ready(item)
+
+
+def simkl_detail_needed_reasons_for_episode_parent(item: dict) -> list[str]:
+    """Why episode-parent warm still wants Simkl detail (plot excluded)."""
+    if not isinstance(item, dict):
+        return ["not_dict"]
+    reasons: list[str] = []
+    if not sync_row_list_paint_ready(item):
+        info, art = row_info_art(item)
+        if not (info.get("title") or item.get("title")):
+            reasons.append("missing_title")
+        poster = art.get("poster") or art.get("thumb") or info.get("poster")
+        if not poster:
+            reasons.append("missing_poster")
+    return reasons or ["ok"]
+
+
+def simkl_detail_needed_reasons(item: dict) -> list[str]:
+    """Diagnostic labels for why simkl_detail_needed is true."""
+    if not isinstance(item, dict):
+        return ["not_dict"]
+    reasons: list[str] = []
+    if not sync_row_list_paint_ready(item):
+        info, art = row_info_art(item)
+        if not (info.get("title") or item.get("title")):
+            reasons.append("missing_title")
+        poster = art.get("poster") or art.get("thumb") or info.get("poster")
+        if not poster:
+            reasons.append("missing_poster")
+    if simkl_detail_plot_missing(item):
+        reasons.append("missing_plot")
+    info, _ = row_info_art(item)
+    if anime_title_slots_need_detail(info):
+        reasons.append("anime_en_title_slot")
+    if not has_simkl_owned_metadata(info):
+        reasons.append("missing_simkl_owned_meta")
+    return reasons or ["ok"]

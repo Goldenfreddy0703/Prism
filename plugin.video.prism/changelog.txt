@@ -1,3 +1,21 @@
+Changelog 5.0.62
+[BUG] Library Next Up / episode lists — paint reads simklSync without mixed-episode mill/upsert on menu open; missing rows schedule lazy episode warm in the background (fixes #29 FOREIGN KEY / UNIQUE crashes on open)
+[IMPROVEMENT] Library episode menus — defer blocking child episode enrich on open (no full-show mill via schedule_show_children); listed-episode refresh + lazy warm run in background instead
+[IMPROVEMENT] Post-sync episode warm — listed-episode refresh for TV and anime Next Up rows after catalog warm; library paint treats existing DB rows as ready (no deferred enrich when only plot/thumb stubs remain)
+[BUG] Simkl season/episode upsert — skip season rows when parent show is missing; dedupe episode batches by simkl_id before INSERT (King of the Hill–style UNIQUE on specials)
+[IMPROVEMENT] Post-sync Next Up — warm parent tv/anime show rows in catalog_items + shows (Simkl detail + DB merge) so library Next Up opens without blocking browse paint / bulk show insert on first paint
+[IMPROVEMENT] Lazy episode warm — after background episode catalog pull, refresh parent show paint state for the same show ids
+[IMPROVEMENT] Library Next Up parent warm — episode-parent gate (title/poster; plot not required when Simkl has no overview); skip browse-only anime EN-title / genre checks on menu open; catalog-only upsert when show rows already exist (stops repeat Inserting anime shows from thin episode seeds)
+[IMPROVEMENT] Post-sync / menu parent warm — retry Simkl detail when parent rows still lack metadata; log simkl_id + reason codes for browse-only gaps
+[IMPROVEMENT] Library parity (tv/anime) — warm_library_episode_catalog orchestrates listed-episode refresh (Next Up, Continue Watching, Watched Episodes) + scoped parent show warm after sync
+[IMPROVEMENT] Watchlist menus — page-1 materialize + prepare_library_browse_page post-sync for all status buckets; materialize_library_status_metadata limited to page one (not full bucket)
+[IMPROVEMENT] Listed-episode refresh — anime coord variants aligned with tv; nested Next Up rows register match targets from tvdb_season/tvdb_episode on menu rows (Simkl API shape)
+[IMPROVEMENT] Episode menu open — materialize_episode_page no longer double-runs attach; session cache checked before parent upsert
+[IMPROVEMENT] Settings — simkl.syncLibraryParentWarm, simkl.syncLibraryPageWarm (default on)
+[FIX] Listed-episode refresh — seed missing season rows before upsert (FK during anime post-sync warm)
+[FIX] Library parent warm — enrich/persist only rows failing the episode-parent gate (not full browse gate bulk insert)
+[FIX] Episode-parent warm — do not require Simkl plot when title/poster exist (many anime have no overview on Simkl)
+
 Changelog 5.0.61
 [BUG] Anime Dub preset — track name filter (Signs/Songs, dialog, custom) runs when Preferred subtitle is None; no full dialogue subs unless keyword matches
 [BUG] Anime debrid season packs — filter previews/menus/creditless NC on auto file pick; S00E## specials use season 0 coords; skip absolute ep match when playing numbered seasons (avoids ep 17 for S01E01)

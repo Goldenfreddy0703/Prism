@@ -939,6 +939,25 @@ def _prefetch_episode_library_page(page_params: dict[str, Any], *, loader) -> No
         get_sync_database(),
         filter_params=filter_params,
     )
+    if page == 1:
+        from resources.lib.simkl.episode_catalog_sync import (
+            BUCKET_NEXT_UP,
+            BUCKET_WATCHED,
+            warm_library_episode_catalog,
+        )
+
+        bucket_map = {
+            "libraryNextUp": (BUCKET_NEXT_UP,),
+            "libraryWatchedEpisodes": (BUCKET_WATCHED,),
+        }
+        buckets = bucket_map.get(action)
+        if buckets is not None:
+            warm_library_episode_catalog(
+                get_sync_database(),
+                catalog,
+                reason="page_prefetch",
+                buckets=buckets,
+            )
 
 
 def _prefetch_next_up(page_params: dict[str, Any]) -> None:

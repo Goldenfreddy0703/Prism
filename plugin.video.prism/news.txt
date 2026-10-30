@@ -1,11 +1,5 @@
-Prism 5.0.61 — anime playback and metadata (issue #26)
+Prism 5.0.62 — Library Next Up & tv/anime parity
 
-Anime Dub preset: Signs/Songs track filter works with Preferred subtitle set to None.
+Fixes #29-style crashes on episode menus, post-sync warm for Next Up / Continue Watching / watchlist page 1 (tv + anime), and faster reopens without bulk show inserts on menu open. Settings: simkl.syncLibraryParentWarm, simkl.syncLibraryPageWarm.
 
-Debrid season packs: better auto file pick (previews/OP/ED junk filtered, specials SP/OVA matching, cour-style Show - 01 names, no wrong absolute episode for numbered seasons).
-
-SmartPlay/getSources: fixes Unable to load metadata for episode when menus use Simkl entity episode ids.
-
-Real Debrid cache check uses the same episode file matching as resolve for instantAvailability.
-
-Restart Kodi after install.
+Sync once after upgrade, then compare Anime vs TV Next Up and Watching in the log (see resources/lib/simkl/LIBRARY_PARITY_BASELINE.md).

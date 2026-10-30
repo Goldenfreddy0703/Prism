@@ -304,9 +304,14 @@ def render_continue_watching_menu(catalog: str) -> None:
     }
     if show_ids:
         schedule_lazy_episode_warm(db, show_ids)
-        from resources.lib.database.simkl_sync.milling import refresh_listed_episodes_from_simkl
+        from resources.lib.simkl.episode_catalog_sync import BUCKET_CONTINUE, warm_library_episode_catalog
 
-        refresh_listed_episodes_from_simkl(db, items)
+        warm_library_episode_catalog(
+            db,
+            catalog,
+            reason="continue_watching",
+            buckets=(BUCKET_CONTINUE,),
+        )
 
     render_catalog_episodes(
         catalog,

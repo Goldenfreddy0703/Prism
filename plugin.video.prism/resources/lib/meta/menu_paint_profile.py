@@ -165,6 +165,9 @@ def profile_list_kwargs(
         base["library_paint"] = True
         base["mixed_list"] = True
         base["overlay_parent_shows"] = overlay_parent_shows or True
+        base["skip_update"] = True
+        base["defer_child_enrich"] = True
+        base["sync_path"] = True
         base.setdefault("enrichment_reason", "library")
     elif profile == MenuPaintProfile.DRILLDOWN:
         base.update(_browse_hide_filters())

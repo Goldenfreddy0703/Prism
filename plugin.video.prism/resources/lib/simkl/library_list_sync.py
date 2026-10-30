@@ -310,16 +310,53 @@ def materialize_library_catalog_metadata(catalog: str) -> int:
 
 
 def materialize_library_status_metadata(catalog: str, status: str) -> int:
-    """Sync-time Simkl detail + provider paint + display_meta stamps (not per menu click)."""
+    """Sync-time display_meta stamps for page-1 refs only (not full bucket)."""
     from resources.lib.meta.menu_paint_profile import MenuPaintProfile
     from resources.lib.meta.page_materialize import materialize_refs_from_sync_db
     from resources.lib.simkl.library_cache import _load_refs_from_sync_db
+    from resources.lib.simkl.menu_helpers import library_list_page
 
     refs = _load_refs_from_sync_db(catalog, status)
     if not refs:
         return 0
-    materialize_refs_from_sync_db(catalog, refs, profile=MenuPaintProfile.LIBRARY.value)
-    return len(refs)
+    page_refs, _ = library_list_page(refs)
+    if not page_refs:
+        return 0
+    materialize_refs_from_sync_db(catalog, page_refs, profile=MenuPaintProfile.LIBRARY.value)
+    return len(page_refs)
+
+
+def warm_library_watchlist_pages_post_sync(catalog: str) -> int:
+    """Blocking Simkl detail prep for page-1 library status rows (tv/anime/movie)."""
+    from resources.lib.simkl.episode_catalog_sync import library_page_warm_enabled
+    from resources.lib.simkl.library_cache import _load_refs_from_sync_db
+    from resources.lib.simkl.library_list_cache import library_status_page_sync_items
+    from resources.lib.simkl.menu_helpers import library_list_page
+
+    if not library_page_warm_enabled():
+        return 0
+
+    warm_statuses = frozenset({"watching", "plantowatch", "completed", "dropped"})
+    total = 0
+    for status in _statuses_for_catalog(catalog):
+        if status not in warm_statuses:
+            continue
+        refs = _load_refs_from_sync_db(catalog, status)
+        if not refs:
+            continue
+        page_refs, _ = library_list_page(refs)
+        if not page_refs:
+            continue
+        page_items = library_status_page_sync_items(catalog, status, page_refs)
+        if page_items:
+            prepare_library_browse_page(catalog, page_items)
+            total += len(page_items)
+    if total:
+        g.log(
+            f"Library watchlist page warm post-sync: {catalog} rows={total}",
+            "debug",
+        )
+    return total
 
 
 def _normalize_remote_status_entries(catalog: str, status: str, payload) -> list[dict]:

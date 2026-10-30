@@ -185,17 +185,19 @@ def materialize_episode_page(
     profile: str = "library_episodes",
     library_paint: bool = False,
 ) -> list[dict]:
-    """Parent show upsert + episode menu-ready rows before fast episode list paint."""
+    """Seed parent shows for episode menus; paint happens in render_catalog_episodes."""
     from resources.lib.meta.list_paint import (
-        attach_preloaded_episode_paint,
-        upsert_episode_parent_shows,
+        peek_episode_page_cache,
         prefetch_episode_parent_simkl_detail,
+        upsert_episode_parent_shows,
     )
     from resources.lib.meta.paint_complete import rows_page_paint_ready
-    from resources.lib.database.session import get_sync_database
 
     if not episode_rows:
         return []
+
+    if peek_episode_page_cache(catalog, episode_rows, paint_profile=profile) is not None:
+        return episode_rows
 
     if rows_page_paint_ready(episode_rows, profile=profile):
         return episode_rows
@@ -203,17 +205,4 @@ def materialize_episode_page(
     upsert_episode_parent_shows(episode_rows, catalog)
     if library_paint:
         prefetch_episode_parent_simkl_detail(episode_rows, catalog)
-
-    db = get_sync_database()
-    list_kwargs: dict[str, Any] = {"paint_profile": profile, "catalog": catalog}
-    list_kwargs = attach_preloaded_episode_paint(
-        catalog,
-        episode_rows,
-        list_kwargs,
-        db,
-        filter_params={},
-    )
-    preloaded = list_kwargs.get("preloaded_episode_rows")
-    if isinstance(preloaded, list) and preloaded:
-        return preloaded
     return episode_rows

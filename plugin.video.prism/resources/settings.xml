@@ -3302,6 +3302,16 @@
 					<default>true</default>
 					<control type="toggle"/>
 				</setting>
+				<setting id="simkl.syncLibraryParentWarm" type="boolean" label="31129" help="31130">
+					<level>0</level>
+					<default>true</default>
+					<control type="toggle"/>
+				</setting>
+				<setting id="simkl.syncLibraryPageWarm" type="boolean" label="31131" help="31132">
+					<level>0</level>
+					<default>true</default>
+					<control type="toggle"/>
+				</setting>
 				<setting id="simkldb.flush" type="action" label="30216" help="">
 					<level>0</level>
 					<data>RunPlugin(plugin://plugin.video.prism/?action=flushSimklActivities)</data>

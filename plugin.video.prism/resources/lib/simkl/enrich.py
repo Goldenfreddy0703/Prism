@@ -560,12 +560,15 @@ def enrich_sync_items_persisted(
     *,
     parallel: bool | None = None,
     force_detail: bool = False,
+    detail_needed_fn=None,
 ) -> list[dict]:
     """Fetch Simkl detail rows, persist to sync DB + catalog_items + display_meta."""
     if not items:
         return items
 
     from resources.lib.meta.paint_cache import coalesce_page_rows_paint_info
+
+    detail_check = detail_needed_fn or simkl_detail_needed
 
     if force_detail:
         targets = []
@@ -577,7 +580,7 @@ def enrich_sync_items_persisted(
                 row["catalog"] = catalog
             targets.append(row)
     else:
-        targets = [item for item in items if isinstance(item, dict) and simkl_detail_needed(item)]
+        targets = [item for item in items if isinstance(item, dict) and detail_check(item)]
     if targets:
         targets = coalesce_page_rows_paint_info(catalog, targets)
     if parallel is None:
@@ -606,7 +609,7 @@ def enrich_sync_items_persisted(
         for row in targets
         if isinstance(row, dict)
         and row.get("simkl_id") is not None
-        and not simkl_detail_needed(enriched_by_id.get(int(row["simkl_id"]), row))
+        and not detail_check(enriched_by_id.get(int(row["simkl_id"]), row))
     )
     g.log(
         f"Simkl detail: API {fetched}/{len(targets)}, published {len(to_persist)}/{len(items)} "
@@ -621,9 +624,15 @@ def enrich_page_for_paint(
     page_sync: list[dict],
     *,
     force_detail: bool = False,
+    detail_needed_fn=None,
 ) -> list[dict]:
     """Blocking Simkl detail fetch for the visible list page."""
-    return enrich_sync_items_persisted(catalog, page_sync, force_detail=force_detail)
+    return enrich_sync_items_persisted(
+        catalog,
+        page_sync,
+        force_detail=force_detail,
+        detail_needed_fn=detail_needed_fn,
+    )
 
 
 def prepare_page_sync_for_paint(
@@ -632,10 +641,14 @@ def prepare_page_sync_for_paint(
     *,
     refs: list[dict] | None = None,
     defer_simkl_detail: bool = False,
+    detail_needed_fn=None,
+    paint_log_label: str = "Browse paint",
 ) -> list[dict]:
     """Hydrate locally, publish display-ready rows, blocking-detail only for thin rows."""
     if not page_sync:
         return page_sync
+
+    detail_check = detail_needed_fn or simkl_detail_needed
 
     page_sync = hydrate_sync_items_local(page_sync)
 
@@ -643,22 +656,33 @@ def prepare_page_sync_for_paint(
         from resources.lib.meta.paint_cache import publish_sync_rows_to_paint_store
         from resources.lib.meta.paint_stamp import page_refs_display_stamped
 
-        ready = [item for item in page_sync if not simkl_detail_needed(item)]
+        ready = [item for item in page_sync if not detail_check(item)]
         if ready and not page_refs_display_stamped(refs):
             publish_sync_rows_to_paint_store(catalog, ready)
 
     if defer_simkl_detail:
         return page_sync
 
-    if any(simkl_detail_needed(item) for item in page_sync):
-        needing = [item for item in page_sync if isinstance(item, dict) and simkl_detail_needed(item)]
+    if any(detail_check(item) for item in page_sync):
+        needing = [item for item in page_sync if isinstance(item, dict) and detail_check(item)]
         from resources.lib.modules.globals import g
 
         g.log(
-            f"Browse paint: Simkl detail for {len(needing)}/{len(page_sync)} {catalog} row(s)",
+            f"{paint_log_label}: Simkl detail for {len(needing)}/{len(page_sync)} {catalog} row(s)",
             "info",
         )
-        page_sync = enrich_page_for_paint(catalog, page_sync)
+        enriched = enrich_page_for_paint(catalog, needing, detail_needed_fn=detail_check)
+        by_id = {
+            int(row["simkl_id"]): row
+            for row in enriched
+            if isinstance(row, dict) and row.get("simkl_id") is not None
+        }
+        page_sync = [
+            by_id.get(int(item["simkl_id"]), item)
+            if isinstance(item, dict) and item.get("simkl_id") is not None
+            else item
+            for item in page_sync
+        ]
     return page_sync
 
 
