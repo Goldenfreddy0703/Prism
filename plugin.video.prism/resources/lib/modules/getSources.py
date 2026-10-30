@@ -1205,16 +1205,15 @@ class Sources:
             size = float(size)
         except (ValueError, TypeError):
             return 0
-        size = int(size)
 
         if "episode_size" in torrent:
-            return size
+            return round(size, 2)
 
         if torrent['package'] == "show":
             size /= int(info['show_episode_count'])
         elif torrent['package'] == 'season':
             size /= int(info['episode_count'])
-        return size
+        return round(size, 2)
 
     @staticmethod
     def _torrent_seeds(torrent):

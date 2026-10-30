@@ -6,6 +6,7 @@ API Documentation: https://api.torbox.app/docs
 import time
 from functools import cached_property
 
+import requests
 import xbmc
 import xbmcgui
 
@@ -467,8 +468,35 @@ class TorBox:
             if user_ip:
                 params["user_ip"] = user_ip
 
-            result = self._get("torrents/requestdl", params=params)
-            g.log(f"TorBox resolve_torrent_file result: {type(result)} - {result[:100] if isinstance(result, str) and len(result) > 100 else result}", "debug")
+            # Fail fast on TorBox 500s — session Retry(total=3) blocks try-next for minutes.
+            full_url = self.base_url + "torrents/requestdl"
+            if not self.token:
+                g.log("No TorBox Token Found", "warning")
+                return None
+            response = requests.get(
+                full_url,
+                params=params,
+                headers=self._get_headers(),
+                timeout=20,
+            )
+            if not response.ok:
+                g.log(
+                    f"TorBox API returned {response.status_code}: {response.text}",
+                    "error",
+                )
+                return None
+            try:
+                result = response.json()
+                if isinstance(result, dict) and "data" in result and "success" in result:
+                    return result["data"]
+            except (ValueError, AttributeError):
+                pass
+            result = response.text if response.text else None
+            g.log(
+                f"TorBox resolve_torrent_file result: {type(result)} - "
+                f"{result[:100] if isinstance(result, str) and len(result) > 100 else result}",
+                "debug",
+            )
             return result
         except Exception as e:
             g.log(f"TorBox resolve error: {e}", "error")

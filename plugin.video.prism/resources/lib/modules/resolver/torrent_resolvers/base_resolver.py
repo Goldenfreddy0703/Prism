@@ -105,6 +105,13 @@ class TorrentResolverBase(ApiBase):
         stream_link = self.resolve_stream_url(identified_file)
         self._do_post_processing(item_information, torrent, identified_file)
         if not stream_link:
+            if identified_file is not None:
+                path = identified_file.get("path") or identified_file.get("release_title") or ""
+                g.log(
+                    f"Debrid did not return a playable link for selected file: {path}",
+                    "error",
+                )
+                return None
             raise FileIdentification([i["path"] for i in folder_details])
         return stream_link
 

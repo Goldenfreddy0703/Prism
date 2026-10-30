@@ -151,18 +151,29 @@ def shortened_debrid(debrid):
 
 def source_size_display(size):
     """
-    Converts source size (MB) to (GB) display string
+    Converts source size (MB) to a display string (MB below 1 GiB, else GB).
     :param size: Size of source in MB
-    :type size: int
-    :return: Formatted string for size in GB
+    :type size: int|float|str
+    :return: Formatted string for size
     :rtype: str
     """
     if size == "Variable":
         return size
 
-    size = int(size)
-    size = float(size) / 1024
-    return f"{size:.2f} GB"
+    try:
+        size_mb = float(size)
+    except (TypeError, ValueError):
+        return "0.00 GB"
+
+    if size_mb <= 0:
+        return "0.00 GB"
+
+    if size_mb < 1024:
+        if size_mb >= 100:
+            return f"{size_mb:.0f} MB"
+        return f"{size_mb:.2f} MB"
+
+    return f"{size_mb / 1024:.2f} GB"
 
 
 def bytes_size_display(size):

@@ -556,6 +556,9 @@ _ANIME_PACK_AUTO_JUNK = (
     "clean ending",
     " promotional",
     " pv ",
+    " op mkv",
+    " ed mkv",
+    " ed episode",
 )
 
 
@@ -699,6 +702,42 @@ def _release_matches_season_episode(release_title: str, season: str, episode: st
     return False
 
 
+def _release_show_title_loose(release_title: str, simple_info: dict) -> bool:
+    """Show identity when exact substring fails (romaji typos, EN title absent from file)."""
+    if _release_contains_show_title(release_title, simple_info):
+        return True
+    if not simple_info.get("isanime"):
+        return False
+    haystack = f" {clean_title(release_title)} "
+    for title in _show_titles_from_simple_info(simple_info):
+        for candidate in (
+            clean_title_with_simple_info(title, simple_info),
+            clean_title(title),
+        ):
+            if not candidate:
+                continue
+            tokens = [t for t in candidate.split() if len(t) >= 3]
+            if len(tokens) < 2:
+                continue
+            hits = sum(1 for t in tokens if f" {t} " in haystack)
+            if hits >= max(2, (len(tokens) * 2 + 2) // 3):
+                return True
+            if f" {tokens[0]} " in haystack and f" {tokens[-1]} " in haystack:
+                return True
+    return False
+
+
+def _cour_episode_title_variants(candidate: str):
+    """Release folders often drop leading articles (The/A/An) vs Simkl titles."""
+    variants = [candidate]
+    for prefix in ("the ", "a ", "an "):
+        if candidate.startswith(prefix) and len(candidate) > len(prefix) + 1:
+            stripped = candidate[len(prefix) :].strip()
+            if stripped and stripped not in variants:
+                variants.append(stripped)
+    return variants
+
+
 def _release_matches_anime_cour_episode(
     release_title: str, episode: str, simple_info: dict
 ) -> bool:
@@ -708,11 +747,13 @@ def _release_matches_anime_cour_episode(
     """
     if episode in (None, "") or not str(episode).isdigit():
         return False
-    if not _release_contains_show_title(release_title, simple_info):
+    if not _release_show_title_loose(release_title, simple_info):
         return False
 
     ep_int = str(int(episode))
     ep_fill = str(episode).zfill(2)
+    ep_fill3 = str(episode).zfill(3)
+    ep_tokens = (ep_fill3, ep_fill, ep_int)
     haystack = f" {release_title} "
     for title in _show_titles_from_simple_info(simple_info):
         for candidate in (
@@ -721,13 +762,37 @@ def _release_matches_anime_cour_episode(
         ):
             if not candidate or len(candidate) < 2:
                 continue
-            esc = re.escape(candidate)
-            for ep_token in (ep_fill, ep_int):
-                if re.search(
-                    rf"(?:^|\s){esc}(?:\s|[\-\[\(])+{re.escape(ep_token)}(?!\d)",
-                    haystack,
-                ):
-                    return True
+            for title_variant in _cour_episode_title_variants(candidate):
+                esc = re.escape(title_variant)
+                for ep_token in ep_tokens:
+                    if re.search(
+                        rf"(?:^|\s){esc}(?:\s|[\-\[\(])+{re.escape(ep_token)}(?!\d)",
+                        haystack,
+                    ):
+                        return True
+    return False
+
+
+def _release_matches_anime_pack_episode_token(
+    release_title: str, episode: str, simple_info: dict
+) -> bool:
+    """
+    Fansub ``Show - 01.mkv`` when cour title anchor fails (romaji typos, hyphen→space clean).
+    """
+    if episode in (None, "") or not str(episode).isdigit():
+        return False
+    if not _release_show_title_loose(release_title, simple_info):
+        return False
+    haystack = f" {clean_title(release_title)} "
+    ep_int = str(int(episode))
+    ep_fill = str(episode).zfill(2)
+    ep_fill3 = str(episode).zfill(3)
+    for ep_token in (ep_fill3, ep_fill, ep_int):
+        if re.search(
+            rf"(?<![0-9]){re.escape(ep_token)}(?![0-9])(?:[\s\.\[\]_\)]|$)",
+            haystack,
+        ):
+            return True
     return False
 
 
@@ -816,7 +881,10 @@ def _anime_cloud_coordinate_sets(simple_info: dict) -> list[tuple[str, str, str]
 def cloud_loose_episode_match(release_title: str, simple_info: dict) -> bool:
     """Loose episode matching for cloud files when release-group prefixes break anchored regex."""
     release_title = clean_title(release_title)
-    if not _release_contains_show_title(release_title, simple_info):
+    if simple_info.get("isanime"):
+        if not _release_show_title_loose(release_title, simple_info):
+            return False
+    elif not _release_contains_show_title(release_title, simple_info):
         return False
 
     if simple_info.get("isanime"):
@@ -837,6 +905,10 @@ def cloud_loose_episode_match(release_title: str, simple_info: dict) -> bool:
     ):
         menu_episode = str(simple_info.get("episode_number") or "")
         if menu_episode and _release_matches_anime_cour_episode(
+            release_title, menu_episode, simple_info
+        ):
+            return True
+        if menu_episode and _release_matches_anime_pack_episode_token(
             release_title, menu_episode, simple_info
         ):
             return True

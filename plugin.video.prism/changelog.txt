@@ -1,3 +1,8 @@
+Changelog 5.0.63
+[BUG] Source sorting (#27) — movie/TV fresh install and Reset to Default use Source Type → Resolution → Size (Direct → Cloud → Adaptive → Other under Source Type); no anime Audio/Subtitles tiers on movie/TV; one-time repair for profiles still on the old shared sort stack
+[BUG] Source list sizes (#30) — a4k de_string_size parses GiB/MiB (AnimeTosho); sub-1 GB sources show in MB; torrent per-episode size kept as fractional MB for sort/display
+[BUG] Anime season packs (#26) — cour file names with 3-digit episode (Show 001) auto-match numbered-season menus; cour match when releases drop leading The/A/An; loose show tokens + ``- 01.mkv`` episode when romaji typos or EN titles are absent from paths; skip standalone OP/ED in packs; TorBox requestdl fails fast on API errors; debrid link failures logged separately from file-identify failures
+
 Changelog 5.0.62
 [BUG] Library Next Up / episode lists — paint reads simklSync without mixed-episode mill/upsert on menu open; missing rows schedule lazy episode warm in the background (fixes #29 FOREIGN KEY / UNIQUE crashes on open)
 [IMPROVEMENT] Library episode menus — defer blocking child episode enrich on open (no full-show mill via schedule_show_children); listed-episode refresh + lazy warm run in background instead

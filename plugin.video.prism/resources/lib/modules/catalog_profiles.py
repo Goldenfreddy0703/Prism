@@ -21,9 +21,13 @@ ANIME_FILTER_PRESETS = {
 }
 
 # sortmethod indices: 2=Source Type, 1=Resolution, 10=Audio, 11=Subtitles, 4=Size, 0=None
+# Anime fresh install / reset: Source Type → Resolution → Audio → Subtitles → Size
 DEFAULT_SORTMETHOD = {1: 2, 2: 1, 3: 10, 4: 11, 5: 4, 6: 0, 7: 0, 8: 0}
+# Movie & TV: legacy factory stack (issue #27 — no anime audio/subtitle tiers on open)
+DEFAULT_SORTMETHOD_MOVIE_TV = {1: 2, 2: 1, 3: 4, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0}
 # sourcetypesort option indices: 5=Direct, 1=Cloud, 2=Adaptive, 0=Other
 DEFAULT_SOURCETYPESORT = {1: 5, 2: 1, 3: 2, 4: 0, 5: 0}
+SORT_MOVIE_TV_DEFAULTS_REPAIR_KEY = "general.sortconfig.movie_tv_defaults.repaired"
 DEFAULT_HDRSORT = {1: 2, 2: 0}
 DEFAULT_HDRCODECSORT = {1: 2, 2: 0, 3: 0}
 DEFAULT_VIDEOCODECSORT = {1: 0, 2: 0, 3: 0, 4: 0}
@@ -64,7 +68,7 @@ def _migrate_legacy_sort_to_catalog(catalog: str) -> None:
             if value is not None:
                 g.set_setting(new_key, value)
             elif not reverse:
-                g.set_setting(new_key, DEFAULT_SORTMETHOD[level])
+                g.set_setting(new_key, _sortmethod_defaults(catalog)[level])
             else:
                 g.set_setting(new_key, False)
 
@@ -273,6 +277,32 @@ def set_last_catalog(catalog):
     g.set_setting(LAST_CATALOG_KEY, normalize_catalog(catalog))
 
 
+def _sortmethod_defaults(catalog: str):
+    if normalize_catalog(catalog) == "anime":
+        return DEFAULT_SORTMETHOD
+    return DEFAULT_SORTMETHOD_MOVIE_TV
+
+
+def _movie_tv_profile_has_anime_factory_stack(catalog: str) -> bool:
+    """Detect uncustomized movie/tv profile still on shared anime-style factory defaults (#27)."""
+    catalog = normalize_catalog(catalog)
+    if catalog == "anime":
+        return False
+    if g.get_int_setting(sortmethod_key(catalog, 3), 0) != 10:
+        return False
+    if g.get_int_setting(sortmethod_key(catalog, 4), 0) != 11:
+        return False
+    if g.get_int_setting(sortmethod_key(catalog, 5), 0) != 4:
+        return False
+    return True
+
+
+def _repair_movie_tv_sort_factory_defaults() -> None:
+    for catalog in ("movie", "tv"):
+        if _movie_tv_profile_has_anime_factory_stack(catalog):
+            reset_sort_profile(catalog)
+
+
 def _map_legacy_sortmethod_index(old_val: int) -> int:
     """Map pre-v2 sortmethod indices (0–9) to current SORT_METHODS indices."""
     if old_val >= 10:
@@ -360,6 +390,10 @@ def ensure_migrated():
         _repair_sort_v2_modern_corruption()
         g.set_setting(SORT_V2_CORRUPTION_REPAIR_KEY, True)
 
+    if not g.get_bool_setting(SORT_MOVIE_TV_DEFAULTS_REPAIR_KEY):
+        _repair_movie_tv_sort_factory_defaults()
+        g.set_setting(SORT_MOVIE_TV_DEFAULTS_REPAIR_KEY, True)
+
 
 def get_filters(catalog):
     ensure_migrated()
@@ -374,8 +408,9 @@ def save_filters(catalog, filter_set):
 def load_sort_options(catalog):
     ensure_migrated()
     catalog = normalize_catalog(catalog)
+    sort_defaults = _sortmethod_defaults(catalog)
     options = {
-        sortmethod_key(catalog, idx): g.get_int_setting(sortmethod_key(catalog, idx), DEFAULT_SORTMETHOD[idx])
+        sortmethod_key(catalog, idx): g.get_int_setting(sortmethod_key(catalog, idx), sort_defaults[idx])
         for idx in range(1, 9)
     }
     options.update(
@@ -472,7 +507,7 @@ def apply_anime_preset(preset: str) -> bool:
 
 def reset_sort_profile(catalog):
     catalog = normalize_catalog(catalog)
-    for level, value in DEFAULT_SORTMETHOD.items():
+    for level, value in _sortmethod_defaults(catalog).items():
         g.set_setting(sortmethod_key(catalog, level), value)
         g.set_setting(sortmethod_key(catalog, level, reverse=True), False)
     for category, defaults in _SUB_SORT_DEFAULTS:

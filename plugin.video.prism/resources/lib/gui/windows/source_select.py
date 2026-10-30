@@ -79,7 +79,8 @@ class SourceSelect(SourceWindow):
                 self.close()
 
     def _resolve_item(self, pack_select):
-        if g.get_bool_setting('general.autotrynext') and not pack_select:
+        autotrynext = g.get_bool_setting("general.autotrynext") and not pack_select
+        if autotrynext:
             sources = self.sources[self.position :]
         else:
             sources = [self.sources[self.position]]

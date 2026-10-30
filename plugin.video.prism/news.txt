@@ -1,5 +1,5 @@
-Prism 5.0.62 — Library Next Up & tv/anime parity
+Prism 5.0.63 — Sort, sizes & anime season packs (#27, #30, #26)
 
-Fixes #29-style crashes on episode menus, post-sync warm for Next Up / Continue Watching / watchlist page 1 (tv + anime), and faster reopens without bulk show inserts on menu open. Settings: simkl.syncLibraryParentWarm, simkl.syncLibraryPageWarm.
+Movie/TV default sort repair (Source Type → Resolution → Size). Anime source sizes show MB/GB correctly (GiB/MiB parse). Season-pack auto file pick: 001-style cour names, titles without leading “The”, romaji/typo-tolerant matching and ``- 01.mkv`` patterns, OP/ED skipped in packs, faster TorBox fail on API errors.
 
-Sync once after upgrade, then compare Anime vs TV Next Up and Watching in the log (see resources/lib/simkl/LIBRARY_PARITY_BASELINE.md).
+Rescrape or clear local torrent cache if sizes still show 0.00 from old rows. Ask DabbinDallas to retest #26 pack matrix on this build.
