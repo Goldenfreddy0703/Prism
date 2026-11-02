@@ -1320,9 +1320,8 @@ def airing_episodes(date: str = "today") -> list[dict]:
         show_id = int(simkl_id)
         season = int(ep["season"])
         episode_num = int(ep["episode"])
-        from resources.lib.simkl.ids import attach_tv_context, season_key
+        from resources.lib.simkl.ids import attach_tv_context
 
-        season_id = season_key(show_id, season)
         ep_id = ep.get("ids", {}).get("simkl_id") or (show_id * 1000000 + season * 1000 + episode_num)
         show_slug = ids.get("slug")
         info = {
@@ -1336,12 +1335,11 @@ def airing_episodes(date: str = "today") -> list[dict]:
             "tvshowtitle": row.get("title"),
             "score": row.get("rank") or 1.0,
         }
-        attach_tv_context(info, show_id, season_num=season, season_row_id=season_id, slug=show_slug)
+        attach_tv_context(info, show_id, season_num=season, slug=show_slug)
         episodes.append(
             {
                 "simkl_id": int(ep_id),
                 "simkl_show_id": show_id,
-                "simkl_season_id": season_id,
                 "season": season,
                 "episode": episode_num,
                 "first_aired": row.get("date"),

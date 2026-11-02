@@ -901,7 +901,13 @@ def _prefetch_episode_library_page(page_params: dict[str, Any], *, loader) -> No
     )
     from resources.lib.meta.menu_paint_profile import MenuPaintProfile, profile_list_kwargs
     from resources.lib.modules.list_builder import ListBuilder
-    from resources.lib.simkl.menu_helpers import list_filter_kwargs
+    from resources.lib.simkl.menu_helpers import (
+        list_filter_kwargs,
+        nextup_is_limited,
+        nextup_list_is_paged,
+        nextup_page_size,
+        paginate_refs_for_page,
+    )
 
     page = int(page_params.get("page") or 1)
     action = str(page_params.get("action") or "")
@@ -910,10 +916,15 @@ def _prefetch_episode_library_page(page_params: dict[str, Any], *, loader) -> No
             "next_up",
             catalog,
             g.get_int_setting("nextup.sort") == 1,
-            g.get_bool_setting("limit.nextup"),
-            g.get_int_setting("item.limit"),
+            nextup_is_limited(),
+            nextup_list_is_paged(),
+            nextup_page_size(),
         )
         episode_rows = get_list_store("library").load_cached_items(catalog, list_id, lambda: loader(catalog, page_params) or [])
+        if nextup_is_limited():
+            episode_rows = episode_rows[: nextup_page_size()]
+        elif nextup_list_is_paged():
+            episode_rows = paginate_refs_for_page(episode_rows, page, page_limit=nextup_page_size())
     elif action == "libraryWatchedEpisodes":
         list_id = make_list_id("watched_episodes", catalog)
         episode_rows = get_list_store("library").load_page_items(
@@ -939,54 +950,25 @@ def _prefetch_episode_library_page(page_params: dict[str, Any], *, loader) -> No
         get_sync_database(),
         filter_params=filter_params,
     )
-    if page == 1:
-        from resources.lib.simkl.episode_catalog_sync import (
-            BUCKET_NEXT_UP,
-            BUCKET_WATCHED,
-            warm_library_episode_catalog,
-        )
-
-        bucket_map = {
-            "libraryNextUp": (BUCKET_NEXT_UP,),
-            "libraryWatchedEpisodes": (BUCKET_WATCHED,),
-        }
-        buckets = bucket_map.get(action)
-        if buckets is not None:
-            warm_library_episode_catalog(
-                get_sync_database(),
-                catalog,
-                reason="page_prefetch",
-                buckets=buckets,
-            )
-
-
 def _prefetch_next_up(page_params: dict[str, Any]) -> None:
     from resources.lib.database.session import get_sync_database
     from resources.lib.modules.globals import g
 
     def _load(cat: str, _params: dict[str, Any]) -> list[dict]:
-        episodes = get_sync_database().get_nextup_episodes(
+        return get_sync_database().get_nextup_episodes(
             g.get_int_setting("nextup.sort") == 1,
             catalog=cat,
-        )
-        if g.get_bool_setting("limit.nextup"):
-            episodes = episodes[: g.get_int_setting("item.limit")]
-        return episodes
+        ) or []
 
     _prefetch_episode_library_page(page_params, loader=_load)
 
 
 def _prefetch_watched_episodes(page_params: dict[str, Any]) -> None:
     from resources.lib.database.session import get_sync_database
-    from resources.lib.simkl.menu_helpers import paginate_simkl_lists
 
-    def _load(cat: str, params: dict[str, Any]) -> list[dict]:
-        page = int(params.get("page") or 1)
-        return get_sync_database().get_watched_episodes(page, catalog=cat) or []
+    def _load(cat: str, _params: dict[str, Any]) -> list[dict]:
+        return get_sync_database().get_watched_episodes(1, catalog=cat) or []
 
-    if paginate_simkl_lists():
-        _prefetch_episode_library_page(page_params, loader=_load)
-        return
     _prefetch_episode_library_page({**page_params, "page": 1}, loader=_load)
 
 

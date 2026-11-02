@@ -102,6 +102,26 @@ def materialize_browse_page(
         _seed_rows_to_sync(catalog, cached, mixed=mixed)
         return _order_like_items(items, cached)
 
+    from resources.lib.meta.list_window_cache import (
+        browse_materialize_window_key,
+        get_browse_materialized_items,
+        set_browse_materialized_items,
+    )
+
+    window_key = browse_materialize_window_key(source, catalog, list_id, page or g.PAGE)
+    window_cached = get_browse_materialized_items(window_key)
+    if window_cached:
+        ordered = _order_like_items(items, window_cached)
+        if ordered:
+            _seed_rows_to_sync(catalog, ordered, mixed=mixed)
+            _write_materialized_cache(cache_key, ordered)
+            g.log(
+                f"Browse materialize: path=window source={source} catalog={catalog} mixed={mixed} "
+                f"rows={len(ordered)}",
+                "debug",
+            )
+            return ordered
+
     if g.PLUGIN_HANDLE > 0:
         from resources.lib.net.request_policy import policy_from_settings
 
@@ -114,6 +134,7 @@ def materialize_browse_page(
         _seed_rows_to_sync(catalog, rows, mixed=mixed)
         _stamp_rows(catalog, rows, profile=paint_profile, mixed=mixed)
         _write_materialized_cache(cache_key, rows)
+        set_browse_materialized_items(window_key, rows)
         g.log(
             f"Browse materialize: path=ready source={source} catalog={catalog} mixed={mixed} "
             f"rows={len(rows)} ms={int((time.time() - started) * 1000)}",
@@ -143,6 +164,7 @@ def materialize_browse_page(
     _seed_rows_to_sync(catalog, rows, mixed=mixed)
     _stamp_rows(catalog, rows, profile=paint_profile, mixed=mixed)
     _write_materialized_cache(cache_key, rows)
+    set_browse_materialized_items(window_key, rows)
     g.log(
         f"Browse materialize: path=resolve source={source} catalog={catalog} mixed={mixed} "
         f"rows={len(rows)} ms={int((time.time() - started) * 1000)}",

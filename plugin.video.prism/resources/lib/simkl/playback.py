@@ -295,7 +295,7 @@ def render_continue_watching_menu(catalog: str) -> None:
         )
         return
 
-    # Match Next Up: warm bookmark parent shows, then paint-first episode list (no paging).
+    # Paint the visible page. Episode warmup already stored these rows.
     db = get_sync_database()
     show_ids = {
         int(item["simkl_show_id"])
@@ -304,14 +304,6 @@ def render_continue_watching_menu(catalog: str) -> None:
     }
     if show_ids:
         schedule_lazy_episode_warm(db, show_ids)
-        from resources.lib.simkl.episode_catalog_sync import BUCKET_CONTINUE, warm_library_episode_catalog
-
-        warm_library_episode_catalog(
-            db,
-            catalog,
-            reason="continue_watching",
-            buckets=(BUCKET_CONTINUE,),
-        )
 
     render_catalog_episodes(
         catalog,

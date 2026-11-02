@@ -26,6 +26,23 @@ def paginate_simkl_lists() -> bool:
     return g.get_bool_setting("general.paginatesimkllists")
 
 
+def nextup_is_limited() -> bool:
+    """Limit Next Up Episodes caps the menu at Page Item Limit."""
+    return bool(g.get_bool_setting("limit.nextup"))
+
+
+def nextup_list_is_paged() -> bool:
+    """Page the full Next Up list when the cap is off and Paginate Simkl Lists is on."""
+    if nextup_is_limited():
+        return False
+    return paginate_simkl_lists()
+
+
+def nextup_page_size() -> int:
+    limit = int(g.get_int_setting("item.limit") or 0)
+    return limit if limit > 0 else 20
+
+
 def library_list_has_next(refs: list) -> bool:
     """True when another page exists for a pre-sorted library status list."""
     if not paginate_simkl_lists() or not refs:

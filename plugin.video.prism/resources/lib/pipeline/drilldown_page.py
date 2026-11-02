@@ -95,8 +95,6 @@ def _format_milled_row(
     }
     if stub.get("episode") is not None:
         row["episode"] = stub.get("episode")
-    if stub.get("simkl_season_id") is not None:
-        row["simkl_season_id"] = stub.get("simkl_season_id")
     aired = stub.get("aired_episodes")
     if aired is not None:
         row["episode_count"] = int(aired)

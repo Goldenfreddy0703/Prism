@@ -246,11 +246,10 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 self._format_episodes_local(show_id, season_row_id)
 
             self.execute_sql(
-                f"UPDATE {self._st().episode} SET watched=?, last_watched_at=?, simkl_season_id=? WHERE simkl_show_id=? AND season=?",
+                f"UPDATE {self._st().episode} SET watched=?, last_watched_at=? WHERE simkl_show_id=? AND season=?",
                 (
                     watched,
                     self._get_datetime_now() if watched > 0 else None,
-                    season_row_id,
                     show_id,
                     season,
                 ),
@@ -457,11 +456,14 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             return totals
 
         low_sql = ",".join(str(int(sid)) for sid in low_ids)
+        from resources.lib.simkl.ids import season_meta_id_sql
+
+        se_meta = season_meta_id_sql("se")
         meta_rows = self.fetchall(
             f"""
             SELECT se.simkl_show_id, se.episode_count, sm.value AS simkl_object
             FROM {self._st().season} AS se
-                     LEFT JOIN {self._st().season_meta} AS sm ON sm.id = se.simkl_id AND sm.type = 'simkl'
+                     LEFT JOIN {self._st().season_meta} AS sm ON sm.id = {se_meta} AND sm.type = 'simkl'
             WHERE se.simkl_show_id IN ({low_sql}) AND se.season > 0
             """
         ) or []
@@ -849,17 +851,23 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
     def _has_season_rows(self, simkl_show_id, *, season=None, simkl_id=None) -> bool:
         if season is not None:
             row = self.fetchone(
-                f"SELECT simkl_id FROM {self._st().season} WHERE simkl_show_id=? AND season=? LIMIT 1",
+                f"SELECT simkl_show_id FROM {self._st().season} WHERE simkl_show_id=? AND season=? LIMIT 1",
                 (int(simkl_show_id), int(season)),
             )
         elif simkl_id is not None:
-            row = self.fetchone(
-                f"SELECT simkl_id FROM {self._st().season} WHERE simkl_id=? LIMIT 1",
-                (int(simkl_id),),
-            )
+            from resources.lib.simkl.ids import resolve_season_filter
+
+            _, season_num = resolve_season_filter(simkl_show_id, season_row_id=simkl_id)
+            if season_num is None:
+                row = None
+            else:
+                row = self.fetchone(
+                    f"SELECT simkl_show_id FROM {self._st().season} WHERE simkl_show_id=? AND season=? LIMIT 1",
+                    (int(simkl_show_id), int(season_num)),
+                )
         else:
             row = self.fetchone(
-                f"SELECT simkl_id FROM {self._st().season} WHERE simkl_show_id=? LIMIT 1",
+                f"SELECT simkl_show_id FROM {self._st().season} WHERE simkl_show_id=? LIMIT 1",
                 (int(simkl_show_id),),
             )
         return bool(row)
@@ -883,10 +891,16 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 (int(simkl_show_id), int(season_num)),
             )
         elif season_row_id is not None:
-            row = self.fetchone(
-                f"SELECT simkl_id FROM {self._st().episode} WHERE simkl_season_id=? LIMIT 1",
-                (int(season_row_id),),
-            )
+            from resources.lib.simkl.ids import resolve_season_filter
+
+            _, season_num = resolve_season_filter(simkl_show_id, season_row_id=season_row_id)
+            if season_num is None:
+                row = None
+            else:
+                row = self.fetchone(
+                    f"SELECT simkl_id FROM {self._st().episode} WHERE simkl_show_id=? AND season=? LIMIT 1",
+                    (int(simkl_show_id), int(season_num)),
+                )
         else:
             row = self.fetchone(
                 f"SELECT simkl_id FROM {self._st().episode} WHERE simkl_show_id=? LIMIT 1",
@@ -1128,14 +1142,17 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         :param simkl_id: Legacy internal season row id (prefer season= number)
         :param season: Season number (1, 2, …)
         """
+        from resources.lib.simkl.ids import resolve_season_filter, season_key
+
         g.log("Fetching season list from sync database and updating", "debug")
         skip_update = params.pop("skip_update", False)
         skip_watch_refresh = params.pop("skip_watch_refresh", False)
+        _, season_num = resolve_season_filter(
+            simkl_show_id, season=season, season_row_id=simkl_id
+        )
         season_row_id = simkl_id
-        if season is not None and simkl_id is None:
-            from resources.lib.simkl.ids import season_key
-
-            season_row_id = season_key(simkl_show_id, int(season))
+        if season_num is not None and season_row_id is None:
+            season_row_id = season_key(simkl_show_id, season_num)
         simkl_pulled = False
         seasons_need_format = False
         if skip_update:
@@ -1169,12 +1186,10 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             self.refresh_show_episode_watch_state(simkl_show_id)
         self._refresh_show_and_season_statistics(int(simkl_show_id))
         g.log("Updated requested seasons", "debug")
-        statement = f"""SELECT s.simkl_id, s.season, s.info, s.cast, s.art, s.args, s.watched_episodes, s.unwatched_episodes,
+        statement = f"""SELECT s.simkl_show_id AS simkl_id, s.simkl_show_id, s.season, s.info, s.cast, s.art, s.args, s.watched_episodes, s.unwatched_episodes,
         s.episode_count, s.air_date, s.user_rating FROM {self._st().season} AS s WHERE """
-        if season is not None:
-            statement += f"s.simkl_show_id = {simkl_show_id} AND s.season = {int(season)}"
-        elif simkl_id is not None:
-            statement += f"s.simkl_id = {simkl_id}"
+        if season_num is not None:
+            statement += f"s.simkl_show_id = {simkl_show_id} AND s.season = {int(season_num)}"
         else:
             statement += f"s.simkl_show_id = {simkl_show_id}"
         if params.pop("hide_unaired", self.hide_unaired):
@@ -1189,16 +1204,6 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         rows = self.fetchall(statement)
         rows = self._enrich_season_episode_counts(rows)
         rows = self._enrich_season_watch_counts(int(simkl_show_id), rows)
-        for row in rows or []:
-            info = row.get("info") or {}
-            info_season = info.get("season") if isinstance(info, dict) else None
-            g.log(
-                f"[season trace] get_season_list show={simkl_show_id} "
-                f"db.season={row.get('season')} info.season={info_season} "
-                f"title={info.get('title') if isinstance(info, dict) else None} row_id={row.get('simkl_id')} "
-                f"episodes={row.get('episode_count')}",
-                "debug",
-                )
         return rows
 
     @guard_against_none(list, 1, 2, 4)
@@ -1333,7 +1338,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         self._refresh_show_and_season_statistics(int(simkl_show_id))
         g.log("Updated required episodes", "debug")
         ep_table = self._st().episode
-        statement = f"""SELECT e.simkl_id, e.simkl_show_id, e.simkl_season_id, e.info, e.cast, e.art, e.args, e.watched as play_count,
+        statement = f"""SELECT e.simkl_id, e.simkl_show_id, e.info, e.cast, e.art, e.args, e.watched as play_count,
          b.resume_time as resume_time, b.percent_played as percent_played, e.user_rating FROM {ep_table} as e
          LEFT JOIN bookmarks as b on e.simkl_id = b.simkl_id WHERE """
 
@@ -1341,8 +1346,6 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             statement += f"e.simkl_id = {simkl_id} "
         elif season_num is not None:
             statement += f"e.simkl_show_id = {simkl_show_id} AND e.season = {int(season_num)} "
-        elif simkl_season_id is not None:
-            statement += f"e.simkl_season_id = {simkl_season_id} "
         else:
             statement += f"e.simkl_show_id = {simkl_show_id} "
         if params.pop("hide_unaired", hide_unaired):
@@ -1553,7 +1556,6 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             SELECT m.value      AS simkl_object,
                    e.simkl_id,
                    e.simkl_show_id,
-                   e.simkl_season_id,
                    e.season,
                    e.number          AS episode,
                    sh.tmdb_id AS tmdb_show_id,
@@ -1567,7 +1569,8 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             FROM {self._st().episode} AS e
                      INNER JOIN {self._st().show} AS sh ON e.simkl_show_id = sh.simkl_id
                      INNER JOIN {self._st().episode_meta} AS m ON m.id = e.simkl_id AND m.type = 'simkl'
-                     LEFT JOIN {self._st().season} AS se ON se.simkl_id = e.simkl_season_id
+                     LEFT JOIN {self._st().season} AS se
+                               ON se.simkl_show_id = e.simkl_show_id AND se.season = e.season
             WHERE e.simkl_id IN ({placeholders})
             """
         return self.fetchall(query, ids) or []
@@ -1581,7 +1584,11 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         thin_ids = [
             int(row["simkl_id"])
             for row in rows
-            if row.get("simkl_id") is not None and self._episode_row_needs_format(row)
+            if row.get("simkl_id") is not None
+            and (
+                self._episode_row_needs_format(row)
+                or self._episode_row_needs_rich_meta(row)
+            )
         ]
         if not thin_ids:
             return rows
@@ -1705,7 +1712,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 show_id, season, ep_num = coords
                 row = self.fetchone(
                     f"""
-                    SELECT simkl_id, simkl_season_id
+                    SELECT simkl_id
                     FROM {self._st().episode}
                     WHERE simkl_show_id = ?
                       AND season = ?
@@ -1715,8 +1722,6 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 )
                 if row:
                     item["simkl_id"] = int(row["simkl_id"])
-                    if row.get("simkl_season_id") is not None:
-                        item["simkl_season_id"] = int(row["simkl_season_id"])
                     item.setdefault("season_x", season)
                     item.setdefault("episode_x", ep_num)
                     item["simkl_show_id"] = show_id
@@ -1784,9 +1789,14 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 (int(simkl_show_id), int(season_num)),
             )
         if season_row_id is not None:
+            from resources.lib.simkl.ids import resolve_season_filter
+
+            _, resolved_season = resolve_season_filter(simkl_show_id, season_row_id=season_row_id)
+            if resolved_season is None:
+                return []
             return self.fetchall(
-                f"SELECT simkl_id, info FROM {self._st().episode} WHERE simkl_season_id = ?",
-                (int(season_row_id),),
+                f"SELECT simkl_id, info FROM {self._st().episode} WHERE simkl_show_id = ? AND season = ?",
+                (int(simkl_show_id), int(resolved_season)),
             )
         return self.fetchall(
             f"SELECT simkl_id, info FROM {self._st().episode} WHERE simkl_show_id = ?",
@@ -1812,16 +1822,21 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
     ) -> list[dict]:
         if season_num is not None:
             return self.fetchall(
-                f"SELECT simkl_id, season, info FROM {self._st().season} WHERE simkl_show_id = ? AND season = ?",
+                f"SELECT simkl_show_id, season, info FROM {self._st().season} WHERE simkl_show_id = ? AND season = ?",
                 (int(simkl_show_id), int(season_num)),
             )
         if season_row_id is not None:
+            from resources.lib.simkl.ids import resolve_season_filter
+
+            _, resolved_season = resolve_season_filter(simkl_show_id, season_row_id=season_row_id)
+            if resolved_season is None:
+                return []
             return self.fetchall(
-                f"SELECT simkl_id, season, info FROM {self._st().season} WHERE simkl_id = ?",
-                (int(season_row_id),),
+                f"SELECT simkl_show_id, season, info FROM {self._st().season} WHERE simkl_show_id = ? AND season = ?",
+                (int(simkl_show_id), int(resolved_season)),
             )
         return self.fetchall(
-            f"SELECT simkl_id, season, info FROM {self._st().season} WHERE simkl_show_id = ?",
+            f"SELECT simkl_show_id, season, info FROM {self._st().season} WHERE simkl_show_id = ?",
             (int(simkl_show_id),),
         )
 
@@ -2129,6 +2144,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
 
     def _mill_season_filter(
         self,
+        simkl_show_id,
         *,
         season_num=None,
         season_row_id=None,
@@ -2136,12 +2152,13 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         if season_num is not None:
             return {int(season_num)}
         if season_row_id is not None:
-            row = self.fetchone(
-                f"SELECT season FROM {self._st().season} WHERE simkl_id = ?",
-                (int(season_row_id),),
+            from resources.lib.simkl.ids import resolve_season_filter
+
+            _, resolved_season = resolve_season_filter(
+                simkl_show_id, season_row_id=season_row_id
             )
-            if row and row.get("season") is not None:
-                return {int(row["season"])}
+            if resolved_season is not None:
+                return {int(resolved_season)}
         return None
 
     def _ensure_simkl_episode_tree(
@@ -2164,6 +2181,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         if not show_meta:
             show_meta = {"simkl_id": int(simkl_show_id)}
         season_filter = self._mill_season_filter(
+            simkl_show_id,
             season_num=season_num,
             season_row_id=season_row_id,
         )
@@ -2508,7 +2526,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                        e.user_rating
                 FROM {self._st().episode} AS e
                          INNER JOIN {self._st().season} AS se
-                                    ON e.simkl_season_id = se.simkl_id
+                                    ON se.simkl_show_id = e.simkl_show_id AND se.season = e.season
                          LEFT JOIN bookmarks AS b
                                    ON e.simkl_id = b.simkl_id
                 WHERE e.simkl_id IN ({in_predicate})
@@ -2541,13 +2559,16 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             from resources.lib.meta.profiles import MetaProfile
             from resources.lib.meta.storage import slim_db_row
 
+            from resources.lib.database.sync_meta_cache import row_has_plot_meta
+
             slimmed: list[dict] = []
             for row in rows:
                 if not isinstance(row, dict):
                     slimmed.append(row)
                     continue
                 item = slim_db_row(row, profile=MetaProfile.LIST, slim_art=False)
-                item["_menu_display_ready"] = True
+                if row_has_plot_meta(item):
+                    item["_menu_display_ready"] = True
                 slimmed.append(item)
             rows = slimmed
 
@@ -2557,18 +2578,22 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                     if not isinstance(item, dict):
                         continue
                     show_id = item.get("simkl_show_id")
-                    season_id = item.get("simkl_season_id")
+                    season_num = item.get("season")
+                    if season_num is None:
+                        info_blob = item.get("info")
+                        if isinstance(info_blob, dict):
+                            season_num = info_blob.get("season")
                     episode_id = item.get("simkl_id")
                     if show_id is None or episode_id is None:
                         continue
-                    groups[(int(show_id), int(season_id) if season_id is not None else None)].append(
+                    groups[(int(show_id), int(season_num) if season_num is not None else None)].append(
                         int(episode_id)
                     )
-                for (show_id, season_row_id), episode_ids in groups.items():
+                for (show_id, season_num), episode_ids in groups.items():
                     MetaEnrichmentQueue.schedule_show_children(
                         show_id,
                         kind="episode_list",
-                        season_row_id=season_row_id,
+                        season_row_id=season_num,
                         episode_ids=episode_ids,
                     )
             elif defer_child_enrich and missing_rows:
@@ -2649,7 +2674,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                            e.user_rating
                     FROM {self._st().episode} AS e
                              INNER JOIN {self._st().season} AS se
-                                        ON se.simkl_id = e.simkl_season_id
+                                        ON se.simkl_show_id = e.simkl_show_id AND se.season = e.season
                              INNER JOIN {self._st().show} AS s ON s.simkl_id = e.simkl_show_id
                              INNER JOIN (SELECT e.simkl_show_id, count(DISTINCT e.simkl_id) AS absoluteNumber
                                          FROM {self._st().episode} AS e
@@ -2799,6 +2824,9 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
     @guard_against_none_or_empty()
     def _identify_seasons_to_update(self, list_to_update):
         get = MetadataHandler.get_simkl_info
+        from resources.lib.simkl.ids import season_meta_id_sql
+
+        se_meta = season_meta_id_sql("se")
         sql_statement = f"""
             WITH requested(simkl_id, last_updated) AS (VALUES
                     {','.join(f"({i.get('simkl_id')},'{get(i, 'dateadded')}')" for i in list_to_update)})
@@ -2820,9 +2848,9 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                    sh.cast          AS show_cast,
                    se.needs_update
             FROM requested AS r
-                     LEFT JOIN {self._st().season} AS se ON r.simkl_id = se.simkl_id
+                     LEFT JOIN {self._st().season} AS se ON {se_meta} = r.simkl_id
                      LEFT JOIN {self._st().show} AS sh ON sh.simkl_id = se.simkl_show_id
-                     LEFT JOIN {self._st().season_meta} AS simkl_meta ON simkl_meta.id = se.simkl_id AND simkl_meta.type = 'simkl'
+                     LEFT JOIN {self._st().season_meta} AS simkl_meta ON simkl_meta.id = {se_meta} AND simkl_meta.type = 'simkl'
                      LEFT JOIN {self._st().season_meta} AS tmdb ON tmdb.id = se.tmdb_id AND tmdb.type = 'tmdb'
                      LEFT JOIN {self._st().season_meta} AS tvdb ON tvdb.id = se.tvdb_id AND tvdb.type = 'tvdb'
                      LEFT JOIN {self._st().season_meta} AS fanart ON fanart.id = se.tvdb_id AND fanart.type = 'fanart'
@@ -2840,7 +2868,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
 
     @guard_against_none_or_empty()
     def _format_seasons(self, list_to_update):
-        from resources.lib.simkl.ids import season_key, show_id_from_info
+        from resources.lib.simkl.ids import season_meta_id, show_id_from_info
 
         formatted_items = self._format_objects(self._identify_seasons_to_update(list_to_update))
 
@@ -2853,18 +2881,14 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             season_num = i["info"].get("season")
             if show_id is None or season_num is None:
                 continue
-            g.log(
-                f"[season trace] _format_seasons show={show_id} season={season_num} title={i['info'].get('title')}",
-                "debug",
-            )
-            row_id = season_key(int(show_id), int(season_num))
-            i["info"]["simkl_id"] = row_id
-            i["info"]["simkl_season_id"] = row_id
-            i["info"]["simkl_show_id"] = int(show_id)
+            show_id = int(show_id)
+            season_num = int(season_num)
+            i["info"]["simkl_id"] = show_id
+            i["info"]["simkl_show_id"] = show_id
+            i["info"].pop("simkl_season_id", None)
             season_rows.append(
                 (
-                    int(show_id),
-                    row_id,
+                    show_id,
                     i["info"],
                     i.get("art"),
                     i.get("cast"),
@@ -2874,7 +2898,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                     i["info"].get("tvdb_id"),
                     self.metadataHandler.meta_hash,
                     i["info"].get("episode_count") or i["info"].get("aired_episodes"),
-                    int(season_num),
+                    season_num,
                     self._create_args(i),
                     i["info"].get("last_watched_at"),
                     i["info"].get("user_rating"),
@@ -2905,7 +2929,16 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             return
 
         self.execute_sql(self._upsert_season_sql(), season_rows)
-        self.update_season_statistics({"simkl_id": i["info"]["simkl_id"]} for i in formatted_items)
+        self.update_season_statistics(
+            {
+                "simkl_id": season_meta_id(
+                    int(show_id_from_info(i["info"]) or i["info"]["simkl_show_id"]),
+                    int(i["info"]["season"]),
+                )
+            }
+            for i in formatted_items
+            if show_id_from_info(i["info"]) is not None and i["info"].get("season") is not None
+        )
 
     @guard_against_none_or_empty()
     def _identify_episodes_to_update(self, list_to_update):
@@ -2914,7 +2947,6 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             WITH requested(simkl_id, last_updated) AS (VALUES
                     {','.join(f"({i.get('simkl_id')},'{get(i, 'dateadded')}')" for i in list_to_update)})
             SELECT r.simkl_id       AS simkl_id,
-                   ep.simkl_season_id,
                    ep.simkl_show_id,
                    ep.season,
                    ep.number          AS episode,
@@ -2933,7 +2965,6 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                    sh.info          AS show_info,
                    sh.art           AS show_art,
                    sh.cast          AS show_cast,
-                   ep.simkl_season_id,
                    se.tmdb_id       AS tmdb_season_id,
                    sh.tvdb_id       AS tvdb_season_id,
                    se.info          AS season_info,
@@ -2945,7 +2976,8 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                                ON r.simkl_id = ep.simkl_id AND ep.catalog = '{self._st().catalog}'
                      LEFT JOIN {self._st().show} AS sh
                                ON sh.simkl_id = ep.simkl_show_id AND sh.catalog = '{self._st().catalog}'
-                     LEFT JOIN {self._st().season} AS se ON se.simkl_id = ep.simkl_season_id
+                     LEFT JOIN {self._st().season} AS se
+                               ON se.simkl_show_id = ep.simkl_show_id AND se.season = ep.season
                      LEFT JOIN {self._st().episode_meta} AS simkl_meta ON simkl_meta.id = ep.simkl_id AND simkl_meta.type = 'simkl'
                      LEFT JOIN {self._st().episode_meta} AS tmdb ON tmdb.id = ep.tmdb_id AND tmdb.type = 'tmdb'
                      LEFT JOIN {self._st().episode_meta} AS tvdb ON tvdb.id = ep.tvdb_id AND tvdb.type = 'tvdb'
@@ -3051,7 +3083,6 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                         (
                             i["info"]["simkl_id"],
                             i["info"]["simkl_show_id"],
-                            i["info"]["simkl_season_id"],
                             i["info"].get("playcount") or 0,
                             i["info"].get("aired"),
                             i["info"].get("dateadded"),
@@ -3075,22 +3106,30 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
 
     @guard_against_none(None, 1)
     def _try_update_seasons(self, simkl_show_id, simkl_season_id=None):
+        from resources.lib.simkl.ids import resolve_season_filter, season_meta_id_sql
+
         show_meta = self._get_single_show_meta(simkl_show_id)
         self._update_mill_format_shows(show_meta, True)
 
-        if simkl_season_id is not None:
-            where_clause = f"WHERE s.simkl_id = {simkl_season_id}"
+        _, season_num = resolve_season_filter(
+            simkl_show_id, season_row_id=simkl_season_id
+        )
+        se_meta = season_meta_id_sql("s")
+        if season_num is not None:
+            where_clause = (
+                f"WHERE s.simkl_show_id = {int(simkl_show_id)} AND s.season = {int(season_num)}"
+            )
         else:
             where_clause = f"WHERE sh.simkl_id = {simkl_show_id}"
         query = f"""
-            SELECT s.simkl_id,
-                   value      AS simkl_object,
+            SELECT {se_meta} AS simkl_id,
+                   m.value      AS simkl_object,
                    s.simkl_show_id,
                    sh.tmdb_id AS tmdb_show_id,
                    sh.tvdb_id AS tvdb_show_id
             FROM {self._st().season} AS s
                      INNER JOIN {self._st().show} AS sh ON s.simkl_show_id = sh.simkl_id
-                     LEFT JOIN {self._st().season_meta} AS m ON m.id = s.simkl_id AND m.type = 'simkl'
+                     LEFT JOIN {self._st().season_meta} AS m ON m.id = {se_meta} AND m.type = 'simkl'
             {where_clause}
             """
 
@@ -3173,7 +3212,6 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             SELECT m.value      AS simkl_object,
                    e.simkl_id,
                    e.simkl_show_id,
-                   e.simkl_season_id,
                    e.season,
                    e.number          AS episode,
                    sh.tmdb_id AS tmdb_show_id,
@@ -3187,23 +3225,30 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             FROM {self._st().episode} AS e
                      INNER JOIN {self._st().show} AS sh ON e.simkl_show_id = sh.simkl_id
                      INNER JOIN {self._st().episode_meta} AS m ON m.id = e.simkl_id AND m.type = 'simkl'
-                     LEFT JOIN {self._st().season} AS se ON se.simkl_id = e.simkl_season_id
+                     LEFT JOIN {self._st().season} AS se
+                               ON se.simkl_show_id = e.simkl_show_id AND se.season = e.season
             WHERE sh.simkl_id IN ({placeholders})
             """
         return self.fetchall(query, ids) or []
 
     def _episode_rows_for_local_format(self, simkl_show_id, simkl_season_id=None, simkl_id=None) -> list[dict]:
+        from resources.lib.simkl.ids import resolve_season_filter
+
+        _, season_num = resolve_season_filter(
+            simkl_show_id, season_row_id=simkl_season_id
+        )
         if simkl_id is not None:
             where_clause = f"WHERE e.simkl_id = {simkl_id}"
-        elif simkl_season_id is not None:
-            where_clause = f"WHERE e.simkl_season_id = {simkl_season_id}"
+        elif season_num is not None:
+            where_clause = (
+                f"WHERE e.simkl_show_id = {int(simkl_show_id)} AND e.season = {int(season_num)}"
+            )
         else:
             where_clause = f"WHERE sh.simkl_id = {simkl_show_id}"
         query = f"""
             SELECT m.value      AS simkl_object,
                    e.simkl_id,
                    e.simkl_show_id,
-                   e.simkl_season_id,
                    e.season,
                    e.number          AS episode,
                    sh.tmdb_id AS tmdb_show_id,
@@ -3217,7 +3262,8 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             FROM {self._st().episode} AS e
                      INNER JOIN {self._st().show} AS sh ON e.simkl_show_id = sh.simkl_id
                      INNER JOIN {self._st().episode_meta} AS m ON m.id = e.simkl_id AND m.type = 'simkl'
-                     LEFT JOIN {self._st().season} AS se ON se.simkl_id = e.simkl_season_id
+                     LEFT JOIN {self._st().season} AS se
+                               ON se.simkl_show_id = e.simkl_show_id AND se.season = e.season
             {where_clause}
             """
         return self.fetchall(query) or []
@@ -3234,12 +3280,20 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
     @guard_against_none(None, 1, 2)
     def _format_seasons_local(self, simkl_show_id, simkl_season_id=None):
         """Format season rows from cached Simkl meta + parent show context — no provider HTTP."""
-        if simkl_season_id is not None:
-            where_clause = f"WHERE s.simkl_id = {simkl_season_id}"
+        from resources.lib.simkl.ids import resolve_season_filter, season_meta_id_sql
+
+        _, season_num = resolve_season_filter(
+            simkl_show_id, season_row_id=simkl_season_id
+        )
+        se_meta = season_meta_id_sql("s")
+        if season_num is not None:
+            where_clause = (
+                f"WHERE s.simkl_show_id = {int(simkl_show_id)} AND s.season = {int(season_num)}"
+            )
         else:
             where_clause = f"WHERE sh.simkl_id = {simkl_show_id}"
         query = f"""
-            SELECT s.simkl_id,
+            SELECT {se_meta} AS simkl_id,
                    m.value      AS simkl_object,
                    s.simkl_show_id,
                    sh.tmdb_id AS tmdb_show_id,
@@ -3249,7 +3303,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                    sh.cast    AS show_cast
             FROM {self._st().season} AS s
                      INNER JOIN {self._st().show} AS sh ON s.simkl_show_id = sh.simkl_id
-                     LEFT JOIN {self._st().season_meta} AS m ON m.id = s.simkl_id AND m.type = 'simkl'
+                     LEFT JOIN {self._st().season_meta} AS m ON m.id = {se_meta} AND m.type = 'simkl'
             {where_clause}
             """
         seasons_to_format = self.fetchall(query) or []
@@ -3261,10 +3315,17 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         show_meta = self._get_single_show_meta(simkl_show_id)
         self._update_mill_format_shows(show_meta, True)
         self._backfill_simkl_episode_stills(simkl_show_id)
+        from resources.lib.simkl.ids import resolve_season_filter
+
+        _, season_num = resolve_season_filter(
+            simkl_show_id, season_row_id=simkl_season_id
+        )
         if simkl_id is not None:
             where_clause = f"WHERE e.simkl_id = {simkl_id}"
-        elif simkl_season_id is not None:
-            where_clause = f"WHERE e.simkl_season_id = {simkl_season_id}"
+        elif season_num is not None:
+            where_clause = (
+                f"WHERE e.simkl_show_id = {int(simkl_show_id)} AND e.season = {int(season_num)}"
+            )
         else:
             where_clause = f"WHERE sh.simkl_id = {simkl_show_id}"
         query = f"""
@@ -3345,19 +3406,24 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             return
         episode_predicate = ",".join(episode_ids)
 
+        from resources.lib.simkl.ids import season_meta_id_sql
+
+        se_meta = season_meta_id_sql("se")
         seasons_to_update = self.fetchall(
             f"""
                 SELECT sm.value AS simkl_object,
-                       se.simkl_id,
+                       {se_meta} AS simkl_id,
                        se.simkl_show_id,
                        sh.tmdb_id AS tmdb_show_id,
                        sh.tvdb_id AS tvdb_show_id
                 FROM {self._st().season} AS se
                          INNER JOIN {self._st().show} AS sh ON se.simkl_show_id = sh.simkl_id
-                         LEFT JOIN {self._st().season_meta} AS sm ON sm.id = se.simkl_id AND sm.type = 'simkl'
-                WHERE se.simkl_id IN (SELECT e.simkl_season_id
-                                      FROM {self._st().episode} AS e
-                                      WHERE e.simkl_id IN ({episode_predicate}))
+                         LEFT JOIN {self._st().season_meta} AS sm ON sm.id = {se_meta} AND sm.type = 'simkl'
+                WHERE (se.simkl_show_id, se.season) IN (
+                    SELECT e.simkl_show_id, e.season
+                    FROM {self._st().episode} AS e
+                    WHERE e.simkl_id IN ({episode_predicate})
+                )
             """
         )
 
@@ -3534,6 +3600,8 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 by_show[int(show_id)] = row
 
         rows = list(by_show.values())
+        if catalog == "anime":
+            rows = [self._rebase_anime_stub_nextup_row(row) for row in rows]
         if sort_by_last_watched:
             rows.sort(key=lambda row: row.get("last_watched_at") or "", reverse=True)
         else:
@@ -3602,26 +3670,110 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             rows.sort(key=lambda row: row.get("air_date") or "", reverse=True)
         return rows
 
+    def _rebase_anime_stub_nextup_row(self, row: dict) -> dict:
+        """Point a season-1 next-watch stub at the real episode row the season menu uses."""
+        from resources.lib.simkl.ids import synthetic_episode_id
+
+        show_id = row.get("simkl_show_id")
+        season = row.get("season_x")
+        number = row.get("episode_x")
+        ep_id = row.get("simkl_id")
+        if show_id is None or season is None or number is None or ep_id is None:
+            return row
+        show_id = int(show_id)
+        if synthetic_episode_id(show_id, int(season), int(number)) != int(ep_id):
+            return row
+
+        now = self._get_aired_cutoff()
+        candidates = self.fetchall(
+            f"""
+            SELECT e.simkl_id,
+                   e.number  AS episode_x,
+                   e.season  AS season_x,
+                   e.simkl_show_id,
+                   em.value  AS episode,
+                   sm.value  AS show,
+                   s.tmdb_id AS tmdb_show_id,
+                   s.tvdb_id AS tvdb_show_id,
+                   e.last_watched_at,
+                   e.air_date
+            FROM {self._st().episode} AS e
+                     INNER JOIN {self._st().show} AS s ON s.simkl_id = e.simkl_show_id
+                     LEFT JOIN {self._st().episode_meta} AS em ON e.simkl_id = em.id AND em.type = 'simkl'
+                     LEFT JOIN {self._st().show_meta} AS sm ON e.simkl_show_id = sm.id AND sm.type = 'simkl'
+            WHERE e.simkl_show_id = ?
+              AND e.season > 0
+              AND e.watched = 0
+              AND (e.air_date IS NULL OR Datetime(e.air_date) < Datetime('{now}'))
+            ORDER BY e.season ASC, e.number ASC
+            """,
+            (show_id,),
+        ) or []
+
+        def _title(item: dict) -> str:
+            blob = item.get("episode")
+            info = blob.get("info") if isinstance(blob, dict) else {}
+            if not isinstance(info, dict):
+                return ""
+            return str(info.get("title") or "").strip().casefold()
+
+        stub_title = _title(row)
+        real_rows = []
+        titled = []
+        for cand in candidates:
+            cand_id = cand.get("simkl_id")
+            cand_season = cand.get("season_x")
+            cand_number = cand.get("episode_x")
+            if cand_id is None or cand_season is None or cand_number is None:
+                continue
+            if synthetic_episode_id(show_id, int(cand_season), int(cand_number)) == int(cand_id):
+                continue
+            real_rows.append(cand)
+            if stub_title and _title(cand) == stub_title:
+                titled.append(cand)
+
+        chosen = titled[0] if titled else (real_rows[0] if real_rows else None)
+        if chosen is None or int(chosen.get("simkl_id") or 0) == int(ep_id):
+            return row
+
+        self.execute_sql(f"DELETE FROM {self._st().episode} WHERE simkl_id = ?", (int(ep_id),))
+        self.execute_sql(
+            f"DELETE FROM {self._st().episode_meta} WHERE id = ? AND type = 'simkl'",
+            (int(ep_id),),
+        )
+        return chosen
+
     def get_next_episode_for_show(self, simkl_show_id: int) -> tuple[int, int] | None:
         """Next unwatched aired episode for one show (earliest gap in season/episode order)."""
+        from resources.lib.simkl.ids import synthetic_episode_id
+
         simkl_show_id = int(simkl_show_id)
         now = self._get_aired_cutoff()
-        first_unwatched = self.fetchone(
+        rows = self.fetchall(
             f"""
-            SELECT season, number
+            SELECT simkl_id, season, number
             FROM {self._st().episode}
             WHERE simkl_show_id = ?
               AND season > 0
               AND watched = 0
               AND (air_date IS NULL OR Datetime(air_date) < Datetime('{now}'))
             ORDER BY season ASC, number ASC
-            LIMIT 1
             """,
             (simkl_show_id,),
-        )
-        if not first_unwatched or first_unwatched.get("season") is None or first_unwatched.get("number") is None:
+        ) or []
+        real = []
+        stubs = []
+        for row in rows:
+            if row.get("season") is None or row.get("number") is None or row.get("simkl_id") is None:
+                continue
+            if synthetic_episode_id(simkl_show_id, int(row["season"]), int(row["number"])) == int(row["simkl_id"]):
+                stubs.append(row)
+            else:
+                real.append(row)
+        chosen = (real or stubs or [None])[0]
+        if not chosen:
             return None
-        return int(first_unwatched["season"]), int(first_unwatched["number"])
+        return int(chosen["season"]), int(chosen["number"])
 
     def get_watched_episodes(self, page=1, catalog=None):
         """
@@ -3691,7 +3843,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         return result
 
     def refresh_watched_episodes_if_empty(self, catalog: str, *, limit: int = 12) -> int:
-        """Reconcile Simkl per-episode watch flags when the watched-episodes menu is empty."""
+        """Fill one page of watched episodes when that menu is empty."""
         if not catalog:
             return 0
         from resources.lib.database.simkl_sync.serial_sync import serial_profile_scope
@@ -3700,35 +3852,10 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             return self._refresh_watched_episodes_if_empty_scoped(catalog, limit=limit)
 
     def _refresh_watched_episodes_if_empty_scoped(self, catalog: str, *, limit: int = 12) -> int:
-        from resources.lib.simkl.all_items_sync import refresh_show_episode_watch_state
+        del limit
+        from resources.lib.simkl.episode_catalog_sync import fill_watched_episode_page
 
-        cat_sql, cat_params = self._catalog_sql()
-        rows = self.fetchall(
-            f"""
-            SELECT simkl_id
-            FROM {self._st().show}
-            WHERE (COALESCE(watched_episodes, 0) > 0
-               OR simkl_status IN ('watching', 'completed'))
-            {cat_sql}
-            ORDER BY last_watched_at DESC
-            LIMIT ?
-            """,
-            cat_params + (limit * 4,),
-        )
-        refreshed = 0
-        for row in rows or []:
-            show_id = row.get("simkl_id")
-            if show_id is None:
-                continue
-            if (self.show_catalog(int(show_id)) or "tv") != catalog:
-                continue
-            if refresh_show_episode_watch_state(self, int(show_id)):
-                refreshed += 1
-            if refreshed >= limit:
-                break
-        if refreshed and hasattr(self, "_watched_episodes_page_cache"):
-            self._watched_episodes_page_cache.clear()
-        return refreshed
+        return fill_watched_episode_page(self, catalog, reason="menu")
 
     @guard_against_none()
     def get_season_action_args(self, simkl_show_id, season):
@@ -3816,9 +3943,13 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         season_num = info.get("season") or action_args.get("season")
         if season_num is not None:
             season_num = int(season_num)
-        season_row_id = info.get("simkl_season_id") or action_args.get("simkl_season_id")
-        if season_row_id is not None:
-            season_row_id = int(season_row_id)
+        elif show_id is not None:
+            legacy_season = info.get("simkl_season_id") or action_args.get("simkl_season_id")
+            if legacy_season is not None:
+                from resources.lib.simkl.ids import resolve_season_filter
+
+                _, season_num = resolve_season_filter(int(show_id), season_row_id=int(legacy_season))
+        season_row_id = season_num
 
         try:
             from resources.lib.meta.paint_cache import clear_session_page_paint_for_item
@@ -3838,13 +3969,21 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             self._update_movies([movie_meta])
             ok = True
         elif mediatype in ("tvshow", "show"):
+            from resources.lib.simkl.ids import season_meta_id
+
             display_store.delete_row("show", simkl_id)
             self._invalidate_sync_row_meta("shows", f"{self._st().show_meta}", simkl_id)
             for row in self.fetchall(
-                f"SELECT simkl_id FROM {self._st().season} WHERE simkl_show_id = ?",
+                f"SELECT simkl_show_id, season FROM {self._st().season} WHERE simkl_show_id = ?",
                 (simkl_id,),
             ) or []:
-                self._invalidate_sync_row_meta("seasons", f"{self._st().season_meta}", int(row["simkl_id"]))
+                if row.get("simkl_show_id") is None or row.get("season") is None:
+                    continue
+                self._invalidate_sync_row_meta(
+                    "seasons",
+                    f"{self._st().season_meta}",
+                    season_meta_id(int(row["simkl_show_id"]), int(row["season"])),
+                )
             for row in self.fetchall(
                 f"SELECT simkl_id FROM {self._st().episode} WHERE simkl_show_id = ?",
                 (simkl_id,),
@@ -3862,33 +4001,30 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             self._try_update_episodes(simkl_id)
             ok = True
         elif mediatype == "season" and show_id:
+            from resources.lib.simkl.ids import resolve_season_filter, season_meta_id
+
             display_store.delete_row("show", show_id)
-            if season_row_id is None:
-                if season_num is not None:
-                    row = self.fetchone(
-                        f"SELECT simkl_id FROM {self._st().season} WHERE simkl_show_id = ? AND season = ?",
-                        (show_id, season_num),
-                    )
-                else:
-                    row = self.fetchone(
-                        f"SELECT simkl_id FROM {self._st().season} WHERE simkl_id = ?",
-                        (simkl_id,),
-                    )
-                if row:
-                    season_row_id = int(row["simkl_id"])
-                else:
-                    season_row_id = simkl_id
-            self._invalidate_sync_row_meta("seasons", f"{self._st().season_meta}", season_row_id)
-            for row in self.fetchall(
-                f"SELECT simkl_id FROM {self._st().episode} WHERE simkl_season_id = ?",
-                (season_row_id,),
-            ) or []:
+            _, resolved_season = resolve_season_filter(
+                show_id, season=season_num, season_row_id=season_row_id
+            )
+            if resolved_season is None and season_num is not None:
+                resolved_season = season_num
+            if resolved_season is not None:
                 self._invalidate_sync_row_meta(
-                    "episodes",
-                    f"{self._st().episode_meta}",
-                    int(row["simkl_id"]),
-                    include_provider_ids=False,
+                    "seasons",
+                    f"{self._st().season_meta}",
+                    season_meta_id(int(show_id), int(resolved_season)),
                 )
+                for row in self.fetchall(
+                    f"SELECT simkl_id FROM {self._st().episode} WHERE simkl_show_id = ? AND season = ?",
+                    (show_id, int(resolved_season)),
+                ) or []:
+                    self._invalidate_sync_row_meta(
+                        "episodes",
+                        f"{self._st().episode_meta}",
+                        int(row["simkl_id"]),
+                        include_provider_ids=False,
+                    )
             self._get_single_show_meta(show_id)
             self._ensure_simkl_episode_tree(
                 show_id,
@@ -3902,13 +4038,6 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             ok = True
         elif mediatype == "episode" and show_id:
             display_store.delete_row("show", show_id)
-            if season_row_id is None and season_num is not None:
-                row = self.fetchone(
-                    f"SELECT simkl_id FROM {self._st().season} WHERE simkl_show_id = ? AND season = ?",
-                    (show_id, season_num),
-                )
-                if row:
-                    season_row_id = int(row["simkl_id"])
             self._invalidate_sync_row_meta(
                 "episodes",
                 f"{self._st().episode_meta}",

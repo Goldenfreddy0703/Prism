@@ -262,11 +262,13 @@ def row_has_display_meta(row: dict[str, Any] | None) -> bool:
 
 
 def row_has_plot_meta(row: dict[str, Any] | None) -> bool:
-    """True when a paint row includes overview/plot text."""
+    """True when a paint row includes a real overview (not the anime empty-synopsis placeholder)."""
     if not isinstance(row, dict):
         return False
     info = row.get("info") if isinstance(row.get("info"), dict) else {}
-    return bool(info.get("plot") or info.get("overview"))
+    from resources.lib.simkl.field_map import real_synopsis_text
+
+    return bool(real_synopsis_text(info))
 
 
 def maybe_prefetch_sync_meta() -> None:

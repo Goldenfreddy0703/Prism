@@ -8,6 +8,21 @@ def valid_id_or_none(id_number):
     return id_number if id_number and id_number != "0" else None
 
 
+def ensure_simkl_authorized() -> bool:
+    """Show the Simkl sign-in prompt when these tools are opened without an account."""
+    import xbmcgui
+
+    from resources.lib.modules.globals import g
+
+    if g.get_setting("simkl.auth") and g.get_setting("simkl.auth_version") == "v2":
+        return True
+    if xbmcgui.Dialog().yesno(g.ADDON_NAME, g.get_language_string(30471)):
+        from resources.lib.indexers.simkl import SimklAPI
+
+        SimklAPI().auth()
+    return bool(g.get_setting("simkl.auth") and g.get_setting("simkl.auth_version") == "v2")
+
+
 def simkl_auth_guard(func):
     """Ensure method runs only when Simkl OAuth token is present."""
     import xbmcgui

@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from resources.lib.simkl.ids import season_key
-
 
 def menu_season_from_episode(episode: dict[str, Any] | None) -> int | None:
     if not isinstance(episode, dict):
@@ -26,10 +24,6 @@ def menu_episode_number_from_episode(episode: dict[str, Any] | None) -> int | No
         return int(anime_menu_episode_number(episode))
     except (TypeError, ValueError):
         return None
-
-
-def season_row_id(show_id: int, menu_season: int) -> int:
-    return season_key(int(show_id), int(menu_season))
 
 
 def episode_history_coords(info: dict[str, Any]) -> tuple[int, int]:

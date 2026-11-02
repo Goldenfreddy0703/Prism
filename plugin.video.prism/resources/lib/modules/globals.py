@@ -1874,6 +1874,15 @@ class GlobalVariables:
         with contextlib.suppress(Exception):
             item.setArt(art)
 
+        from resources.lib.simkl.field_map import (
+            ensure_anime_episode_plot_placeholder,
+            ensure_kodi_list_plot,
+        )
+
+        ensure_kodi_list_plot(info)
+        if info.get("mediatype") == "episode":
+            ensure_anime_episode_plot_placeholder(info)
+
         # Clear out keys not relevant to Kodi info labels
         self.clean_info_keys(info)
         # Convert dates to localtime for display
@@ -1956,21 +1965,21 @@ class GlobalVariables:
 
         path = xbmc.getInfoLabel("Container.FolderPath") or ""
 
+        if path.startswith("plugin://plugin.video.prism"):
+            parsed = urlparse(path)
+            query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+            query["prism_reload"] = "true"
+            query["_cb"] = str(int(time.time()))
+            new_path = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
+            escaped = new_path.replace("\\", "\\\\").replace('"', '\\"')
+            xbmc.executebuiltin(f'Container.Update("{escaped}",replace)')
+            return True
+
         # RunPlugin context actions (handle -1) must not rewrite folder history.
         if self.PLUGIN_HANDLE <= 0:
             return bool(self.container_refresh())
 
-        if not path.startswith("plugin://plugin.video.prism"):
-            return False
-
-        parsed = urlparse(path)
-        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        query["prism_reload"] = "true"
-        query["_cb"] = str(int(time.time()))
-        new_path = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
-        escaped = new_path.replace("\\", "\\\\").replace('"', '\\"')
-        xbmc.executebuiltin(f'Container.Update("{escaped}",replace)')
-        return True
+        return False
 
     def close_directory(self, content_type, sort=False, cache=None):
         if content_type == self.CONTENT_EPISODE and not sort:

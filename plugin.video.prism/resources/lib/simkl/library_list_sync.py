@@ -328,13 +328,9 @@ def materialize_library_status_metadata(catalog: str, status: str) -> int:
 
 def warm_library_watchlist_pages_post_sync(catalog: str) -> int:
     """Blocking Simkl detail prep for page-1 library status rows (tv/anime/movie)."""
-    from resources.lib.simkl.episode_catalog_sync import library_page_warm_enabled
     from resources.lib.simkl.library_cache import _load_refs_from_sync_db
     from resources.lib.simkl.library_list_cache import library_status_page_sync_items
     from resources.lib.simkl.menu_helpers import library_list_page
-
-    if not library_page_warm_enabled():
-        return 0
 
     warm_statuses = frozenset({"watching", "plantowatch", "completed", "dropped"})
     total = 0

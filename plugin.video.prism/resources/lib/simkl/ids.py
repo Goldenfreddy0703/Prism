@@ -14,9 +14,9 @@ Public action_args (routing / menus):
 Secondary ids (TMDB, TVDB, IMDB, MAL, …) live in ``info.ids`` and are mirrored to flat
 ``info.tmdb_id`` / SQL columns only for Kodi labels and meta-table JOINs.
 
-Internal simklSync.db only (not Simkl API ids):
-  ``seasons.simkl_id`` = synthetic ``season_key(show_simkl_id, season_num)`` for SQL FKs
-  ``simkl_show_id`` / ``simkl_season_id`` on child rows = parent show / season row refs
+Internal simklSync.db (not Simkl API ids):
+  ``seasons`` primary key ``(simkl_show_id, season)``; specials use ``season=0``.
+  ``season_meta_id(show, season)`` = opaque provider-meta / torrent-cache key only.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from urllib import parse
 SEASON_ID_FACTOR = 100_000
 # Season menus only use small integers; real Simkl show ids can exceed SEASON_ID_FACTOR and
 # would otherwise decode as fake synthetic rows (e.g. 2561864 -> show 25 season 61864).
-MAX_SYNTHETIC_SEASON = 999
+MAX_SYNTHETIC_SEASON = 150
 
 # Map info.ids keys → flat info keys (secondary ids only; simkl handled separately).
 _IDS_TO_FLAT: dict[str, str] = {
@@ -55,7 +55,14 @@ def entity_simkl_id(info: dict[str, Any] | None) -> int | None:
     if raw is None:
         return None
     value = int(raw)
-    if mediatype == "season" or is_synthetic_season_id(value):
+    if mediatype == "season":
+        show_id = info.get("simkl_show_id") or show_id_from_info(info)
+        if show_id is not None:
+            return int(show_id)
+        if is_synthetic_season_id(value):
+            return split_synthetic_season_id(value)[0]
+        return value
+    if is_synthetic_season_id(value):
         return None
     return value
 
@@ -127,14 +134,10 @@ def align_parent_show_identity(info: dict[str, Any]) -> None:
 
     info["simkl_show_id"] = show_id
     season_num = info.get("season")
-    season_row_id = info.get("simkl_season_id")
-    if season_num is not None:
-        season_row_id = season_row_id or season_key(show_id, int(season_num))
     attach_tv_context(
         info,
         show_id,
         season_num=int(season_num) if season_num is not None else None,
-        season_row_id=int(season_row_id) if season_row_id is not None else None,
         slug=slug_from_info(info),
     )
 
@@ -174,9 +177,12 @@ def sync_sql_columns_from_info(item: dict[str, Any]) -> None:
     info = blob.get("info") if isinstance(blob.get("info"), dict) else item.get("info")
     if isinstance(info, dict):
         canonicalize_info_identity(info)
-        entity_id = entity_simkl_id(info)
-        if entity_id is not None:
-            item["simkl_id"] = entity_id
+        if info.get("mediatype") == "season" and info.get("simkl_show_id") is not None:
+            item["simkl_id"] = int(info["simkl_show_id"])
+        else:
+            entity_id = entity_simkl_id(info)
+            if entity_id is not None:
+                item["simkl_id"] = entity_id
     if not isinstance(info, dict):
         return
     from resources.lib.discover.normalize import _int_or_none
@@ -196,9 +202,21 @@ def sync_sql_columns_from_info(item: dict[str, Any]) -> None:
 def canonicalize_sync_row(item: dict[str, Any] | None) -> None:
     """Unify ids on a SyncRow before DB insert (top-level SQL columns follow info.ids)."""
     sync_sql_columns_from_info(item)
+
+
 def season_key(show_id: int, season_num: int) -> int:
-    """Synthetic season row id used in simklSync.db (show_id * 100000 + season)."""
+    """Legacy opaque key (show * 100000 + season) for meta/torrent cache — not a Simkl id."""
     return int(show_id) * SEASON_ID_FACTOR + int(season_num)
+
+
+def season_meta_id(show_id: int, season_num: int) -> int:
+    """Provider meta table lookup id for a season row."""
+    return season_key(show_id, season_num)
+
+
+def season_meta_id_sql(table_alias: str = "se") -> str:
+    """SQL expression matching ``season_meta_id`` for JOINs (seasons table alias)."""
+    return f"({table_alias}.simkl_show_id * {SEASON_ID_FACTOR} + {table_alias}.season)"
 
 
 def synthetic_episode_id(show_id: int, season_num: int, episode_num: int) -> int:
@@ -393,11 +411,10 @@ def attach_tv_context(
     show_id: int,
     *,
     season_num: int | None = None,
-    season_row_id: int | None = None,
     show_info: dict[str, Any] | None = None,
     slug: str | None = None,
 ) -> None:
-    """Write canonical tvshow block plus legacy FK aliases on season/episode info."""
+    """Write canonical tvshow block on season/episode info."""
     info.setdefault("simkl_show_id", int(show_id))
     tvshow = info.setdefault("tvshow", {})
     if isinstance(tvshow, dict):
@@ -405,23 +422,9 @@ def attach_tv_context(
         resolved_slug = slug or slug_from_info(show_info) or slug_from_info(info)
         if resolved_slug:
             tvshow.setdefault("slug", resolved_slug)
-    if season_row_id is not None:
-        info.setdefault("simkl_season_id", int(season_row_id))
-    elif season_num is not None:
-        info.setdefault("simkl_season_id", season_key(int(show_id), int(season_num)))
-
-
-def parent_show_id_from_numeric(value: int | str | None) -> int | None:
-    """Map a menu/simkl id to the parent show simkl_id (decode synthetic season row ids)."""
-    if value is None:
-        return None
-    try:
-        val = int(value)
-    except (TypeError, ValueError):
-        return None
-    if is_synthetic_season_id(val):
-        return split_synthetic_season_id(val)[0]
-    return val
+    if season_num is not None:
+        info.setdefault("season", int(season_num))
+    info.pop("simkl_season_id", None)
 
 
 def show_id_from_info(info: dict[str, Any] | None) -> int | None:
@@ -432,18 +435,18 @@ def show_id_from_info(info: dict[str, Any] | None) -> int | None:
         return int(tvshow["simkl_id"])
     for key in ("simkl_show_id", "tvshow.simkl_id", "show_id"):
         if info.get(key) is not None:
-            parent = parent_show_id_from_numeric(info[key])
-            if parent is not None:
-                return parent
+            try:
+                return int(info[key])
+            except (TypeError, ValueError):
+                continue
     if info.get("mediatype") == "tvshow" and info.get("simkl_id") is not None:
         return int(info["simkl_id"])
     if info.get("simkl_id") is not None:
-        parent = parent_show_id_from_numeric(info["simkl_id"])
-        if parent is not None:
-            if is_synthetic_season_id(int(info["simkl_id"])):
-                return parent
-            if (info.get("mediatype") or "").lower() == "season":
-                return parent
+        raw_id = int(info["simkl_id"])
+        if is_synthetic_season_id(raw_id):
+            return split_synthetic_season_id(raw_id)[0]
+        if (info.get("mediatype") or "").lower() == "season":
+            return raw_id
     return None
 
 
@@ -451,9 +454,12 @@ def show_id_from_item(item: dict[str, Any] | None) -> int | None:
     """Resolve parent show id from a menu/sync item wrapper or flat info dict."""
     if not item:
         return None
-    show_id = parent_show_id_from_numeric(item.get("simkl_show_id"))
+    show_id = item.get("simkl_show_id")
     if show_id is not None:
-        return int(show_id)
+        try:
+            return int(show_id)
+        except (TypeError, ValueError):
+            pass
     show_id = show_id_from_info(item.get("info"))
     if show_id is not None:
         return show_id
@@ -466,18 +472,13 @@ def show_id_from_item(item: dict[str, Any] | None) -> int | None:
 
 
 def season_row_id_from_info(info: dict[str, Any] | None) -> int | None:
-    """Synthetic season row id for sync DB / torrent season packs."""
+    """Opaque torrent-cache key for season packs (show + season number)."""
     if not info:
         return None
-    if info.get("simkl_season_id") is not None:
-        return int(info["simkl_season_id"])
     show_id = show_id_from_info(info)
     season_num = info.get("season")
     if show_id is not None and season_num is not None:
-        return season_key(show_id, int(season_num))
-    item_id = info.get("simkl_id")
-    if item_id is not None and is_synthetic_season_id(item_id):
-        return int(item_id)
+        return season_meta_id(show_id, int(season_num))
     return None
 
 
@@ -625,7 +626,7 @@ def episode_num_from_info(info: dict[str, Any] | None) -> int | None:
 
 
 def canonicalize_sync_identity(info: dict[str, Any] | None) -> None:
-    """Align synthetic season row ids and episode numbers before simklSync.db writes."""
+    """Align season/episode parent refs before simklSync.db writes."""
     if not info:
         return
 
@@ -639,21 +640,23 @@ def canonicalize_sync_identity(info: dict[str, Any] | None) -> None:
         season_num = int(season_num)
 
     if mediatype == "season" and show_id is not None and season_num is not None:
-        row_id = season_key(int(show_id), season_num)
-        info["simkl_id"] = row_id
-        info["simkl_season_id"] = row_id
+        info["simkl_id"] = int(show_id)
         info["simkl_show_id"] = int(show_id)
+        info["season"] = season_num
         info["number"] = season_num
+        info.pop("simkl_season_id", None)
 
     if mediatype == "episode" and show_id is not None and season_num is not None:
         info["simkl_show_id"] = int(show_id)
-        info["simkl_season_id"] = season_key(int(show_id), season_num)
+        info.pop("simkl_season_id", None)
         ep_num = episode_num_from_info(info)
         if ep_num is not None:
             info["episode"] = ep_num
             info["number"] = ep_num
 
     align_parent_show_identity(info)
+
+
 def resolve_season_filter(
     show_id: int | None,
     *,
@@ -671,14 +674,6 @@ def resolve_season_filter(
     if int(season_row_id) < SEASON_ID_FACTOR:
         return show_id, int(season_row_id)
     return show_id, None
-
-
-def season_row_id_from_args(action_args: dict[str, Any] | None) -> int | None:
-    show_id = show_id_from_args(action_args)
-    season_num = season_num_from_args(action_args)
-    if show_id is None or season_num is None:
-        return None
-    return season_key(show_id, season_num)
 
 
 def episode_id_from_args(action_args: dict[str, Any] | None) -> int | None:
@@ -753,7 +748,9 @@ def build_action_args(item: dict[str, Any]) -> dict[str, Any]:
         g.log(item, "error")
 
     if mediatype == "season":
-        show_id = show_id_from_info(info) or get(item, "simkl_show_id", info.get("simkl_show_id"))
+        show_id = get(item, "simkl_show_id", info.get("simkl_show_id"))
+        if show_id is None:
+            show_id = show_id_from_info(info)
         season_num = get(item, "season", info.get("season"))
         if show_id is None and simkl_id is not None and is_synthetic_season_id(simkl_id):
             show_id, season_num = split_synthetic_season_id(int(simkl_id))

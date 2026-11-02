@@ -11,11 +11,6 @@ import time
 from typing import TYPE_CHECKING
 
 from resources.lib.modules.globals import g
-from resources.lib.simkl.episode_catalog_sync import (
-    bucket_progress_label,
-    episode_warm_enabled,
-    run_post_sync_episode_warm,
-)
 from resources.lib.simkl.library import _unwrap_sync_items, simkl_entry_to_sync_dict
 from resources.lib.simkl.statuses import MOVIE_STATUS_OPTIONS, SHOW_STATUS_OPTIONS
 
@@ -331,13 +326,6 @@ def _seed_display_meta_from_payload(db: "SimklSyncDatabase", payload) -> None:
             store.set_many_rows(media_type, rows)
 
 
-def _episode_warm_progress(db: "SimklSyncDatabase", current: int, total: int, _title: str, bucket: str) -> None:
-    menu = bucket_progress_label(bucket)
-    message = g.get_language_string(31011).format(menu, current, total)
-    percent = 70 + int(25 * current / max(total, 1))
-    db.set_sync_progress(percent, message)
-
-
 def _finalize_episode_sync_state(
     db: "SimklSyncDatabase",
     payload,
@@ -345,19 +333,8 @@ def _finalize_episode_sync_state(
     force: bool = False,
     blocking_warm: bool = False,
 ) -> None:
-    """Post-ingest episode catalog warm + watch-state restore (single hook)."""
-    if episode_warm_enabled():
-        db.set_sync_progress(65, g.get_language_string(31012))
-        run_post_sync_episode_warm(
-            db,
-            payload=payload,
-            force=force,
-            notify_silent=db.silent,
-            on_progress=lambda c, t, title, bucket: _episode_warm_progress(db, c, t, title, bucket),
-        )
-        _reapply_episode_watch_state_after_warm(db, payload)
-        return
-
+    """Restore episode watch flags after sync. Episode menu warm is a separate action."""
+    del force, blocking_warm
     _reapply_episode_watch_state_after_warm(db, payload)
 
 

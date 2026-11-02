@@ -305,16 +305,20 @@ class MetadataHandler:
         from resources.lib.simkl.ids import attach_tv_context, slug_from_info
 
         if season_info:
-            result["info"]["simkl_season_id"] = season_info["simkl_id"]
+            if season_info.get("season") is not None:
+                result["info"].setdefault("season", season_info.get("season"))
             if not result["info"].get("mpaa") and (mpaa := season_info.get("mpaa")):
                 result["info"]["mpaa"] = mpaa
         if show_info:
             show_id = show_info.get("simkl_id")
             if show_id is not None:
+                season_num = None
+                if season_info and season_info.get("season") is not None:
+                    season_num = int(season_info["season"])
                 attach_tv_context(
                     result["info"],
                     int(show_id),
-                    season_row_id=season_info.get("simkl_id") if season_info else None,
+                    season_num=season_num,
                     show_info=show_info,
                     slug=slug_from_info(show_info),
                 )
@@ -390,8 +394,6 @@ class MetadataHandler:
         info.setdefault("simkl_id", simkl_id)
         if db_object.get("simkl_show_id") is not None:
             info.setdefault("simkl_show_id", db_object["simkl_show_id"])
-        if db_object.get("simkl_season_id") is not None:
-            info.setdefault("simkl_season_id", db_object["simkl_season_id"])
         if db_object.get("season") is not None:
             info.setdefault("season", db_object["season"])
         if db_object.get("episode") is not None:
@@ -402,7 +404,7 @@ class MetadataHandler:
                 info["mediatype"] = "movie"
             elif db_object.get("episode") is not None:
                 info["mediatype"] = "episode"
-            elif db_object.get("season") is not None or db_object.get("simkl_season_id") is not None:
+            elif db_object.get("season") is not None:
                 info["mediatype"] = "season"
             else:
                 info["mediatype"] = "tvshow"

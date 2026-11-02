@@ -332,7 +332,7 @@ class ListBuilder:
     def _build_next_page_params(
         *,
         no_paging: bool,
-        has_next_page: bool,
+        has_next_page: bool | None,
         list_items: list,
         page_limit: int,
         next_action: str | None,
@@ -347,7 +347,9 @@ class ListBuilder:
             return None
         if not list_items:
             return None
-        if not (has_next_page or len(list_items) >= page_limit):
+        if has_next_page is None:
+            has_next_page = len(list_items) >= page_limit
+        if not has_next_page:
             return None
         page_params = dict(g.REQUEST_PARAMS)
         page_params["page"] = g.PAGE + 1
@@ -586,7 +588,7 @@ class ListBuilder:
         sort = params.pop("sort", False)
         prepend_date = params.pop("prepend_date", False)
         next_args = params.pop("next_args", None)
-        has_next_page = params.pop("has_next_page", False)
+        has_next_page = params.pop("has_next_page", None)
         list_id = params.pop("list_id", None)
         skip_mill = params.pop("skip_mill", True)
         skip_update = params.pop("skip_update", True)
@@ -1156,7 +1158,7 @@ class ListBuilder:
         mixed_list = params.pop("mixed_list", False)
         next_args = params.pop("next_args", None)
         next_action = params.pop("next_action", None)
-        has_next_page = params.pop("has_next_page", False)
+        has_next_page = params.pop("has_next_page", None)
         library_status = params.pop("library_status", None)
         display_rating_priority = params.pop("display_rating_priority", None)
         menu_cache = params.pop("menu_cache", None)
@@ -1462,6 +1464,9 @@ class ListBuilder:
 
         item.update({"name": name})
         info["title"] = name
+        from resources.lib.simkl.field_map import ensure_kodi_list_plot
+
+        ensure_kodi_list_plot(info)
         item["info"] = info
         return item
 
@@ -1568,11 +1573,6 @@ class ListBuilder:
             from resources.lib.simkl.watch_counters import apply_season_watch_fields
 
             apply_season_watch_fields(item, info)
-            g.log(
-                f"[season trace] season menu item show={info.get('simkl_show_id')} "
-                f"info.season={info.get('season')} label={name!r} episodes={item.get('episode_count')}",
-                "debug",
-            )
 
         if not name:
             g.log(f"Item has no title: {item}", "error")
@@ -1618,6 +1618,9 @@ class ListBuilder:
                 name = f"[{release_day}] {name}"
         item.update({"name": name})
         info["title"] = name
+        from resources.lib.simkl.field_map import ensure_kodi_list_plot
+
+        ensure_kodi_list_plot(info)
         item["info"] = info
 
         return item

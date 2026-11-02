@@ -4,7 +4,7 @@ from resources.lib.modules.globals import g
 
 class Menus:
     @staticmethod
-    def home():
+    def home(*, write_kodi_cache: bool = False):
         from resources.lib.simkl.playback_history import add_watch_history_home_item
 
         g.add_directory_item(
@@ -26,7 +26,11 @@ class Menus:
             menu_item=g.create_icon_dict("anime", g.ICONS_PATH),
         )
         add_watch_history_home_item()
-        if g.get_setting('simkl.auth'):
+        signed_in = bool(g.get_setting('simkl.auth'))
+        from resources.lib.simkl.menu_parent_refresh import note_home_menu_built
+
+        note_home_menu_built(signed_in=signed_in)
+        if signed_in:
             g.add_directory_item(
                 g.get_language_string(30001),
                 action='myMovies',
@@ -64,7 +68,10 @@ class Menus:
             description=g.get_language_string(30370),
             menu_item=g.create_icon_dict("tools", g.ICONS_PATH),
         )
-        g.close_directory(g.CONTENT_MENU)
+        if write_kodi_cache:
+            g.close_directory(g.CONTENT_MENU, cache=True)
+        else:
+            g.close_directory(g.CONTENT_MENU)
 
     @staticmethod
     def search_menu():
@@ -249,6 +256,13 @@ class Menus:
             action='forceSimklSync',
             is_folder=False,
             description=g.get_language_string(30389),
+            menu_item=g.create_icon_dict("simkl_sync", g.ICONS_PATH),
+        )
+        g.add_directory_item(
+            g.get_language_string(31133),
+            action='warmEpisodeMenus',
+            is_folder=False,
+            description=g.get_language_string(31134),
             menu_item=g.create_icon_dict("simkl_sync", g.ICONS_PATH),
         )
         g.add_directory_item(

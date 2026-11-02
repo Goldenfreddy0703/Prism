@@ -127,14 +127,24 @@ def open_seren_library_list(
     source = str(merged.get("browse_source") or "library")
     profile = str(merged.get("paint_profile") or "library")
 
-    payload = materialize_browse_page(
-        catalog,
-        items,
-        profile=profile,
-        source=source,
-        mixed=False,
-        list_id=list_id,
-    )
+    from resources.lib.meta.paint_complete import rows_page_menu_ready
+    from resources.lib.simkl.enrich import hydrate_sync_items_local
+
+    hydrated = hydrate_sync_items_local([dict(row) for row in items if isinstance(row, dict)])
+    if rows_page_menu_ready(hydrated, profile=profile):
+        from resources.lib.pipeline.browse_materialize import _order_like_items, _seed_rows_to_sync
+
+        payload = _order_like_items(items, hydrated)
+        _seed_rows_to_sync(catalog, payload, mixed=False)
+    else:
+        payload = materialize_browse_page(
+            catalog,
+            items,
+            profile=profile,
+            source=source,
+            mixed=False,
+            list_id=list_id,
+        )
     render_seren_menu_page(
         catalog,
         payload,

@@ -43,7 +43,6 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             """
             SELECT ep.simkl_show_id   AS simkl_show_id,
                    ep.simkl_id        AS simkl_id,
-                   ep.simkl_season_id AS simkl_season_id,
                    ep.season          AS season_x,
                    ep.number          AS episode_x,
                    bm.resume_time     AS progress,

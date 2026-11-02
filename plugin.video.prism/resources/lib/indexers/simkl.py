@@ -714,6 +714,7 @@ class SimklAPI:
             qr_url=qr_url,
         )
 
+        auth_succeeded = False
         try:
             for i in range(attempts):
                 if progress.iscanceled():
@@ -733,9 +734,8 @@ class SimklAPI:
                         g.set_setting(self.username_setting_key, "Simkl User")
                         self.username = "Simkl User"
                     g.set_runtime_setting("simkl.reauth.notified", False)
-                    xbmcgui.Dialog().notification(g.ADDON_NAME, g.get_language_string(30273))
-                    self._queue_sync_after_auth()
-                    return True
+                    auth_succeeded = True
+                    break
 
                 error = (token_payload or {}).get("error") if isinstance(token_payload, dict) else None
                 if error == "slow_down":
@@ -748,17 +748,29 @@ class SimklAPI:
         finally:
             progress.close()
 
+        if auth_succeeded:
+            xbmcgui.Dialog().ok(g.ADDON_NAME, g.get_language_string(30273))
+            self._sync_simkl_user_data_if_required()
+            return True
+
         xbmcgui.Dialog().ok(g.ADDON_NAME, g.get_language_string(30023))
         return False
 
-    @staticmethod
-    def _queue_sync_after_auth():
-        """Pull Simkl library + playback state immediately after a successful login."""
+    def _sync_simkl_user_data_if_required(self):
+        """Seren auth: clear the previous account, then sync before the home menu is shown."""
         import xbmc
 
-        xbmc.executebuiltin(
-            'RunPlugin("plugin://plugin.video.prism/?action=syncSimklActivities&force=true")'
-        )
+        from resources.lib.database.session import get_sync_database
+
+        database = get_sync_database()
+        database.refresh_activities()
+        current = (database.activities or {}).get("simkl_username")
+        if current != self.username:
+            if current:
+                database.clear_user_information(True)
+            database.flush_activities(False)
+            database.set_simkl_user(self.username)
+            xbmc.executebuiltin(f'RunPlugin("{g.BASE_URL}?action=syncSimklActivities&force=true")')
 
     def revoke(self):
         token = self.refresh_token or self.access_token

@@ -400,7 +400,6 @@ def _synthesize_external_episode_item(db, show_id, season_num, episode_num, acti
         "episode": int(episode_num),
         "number": int(episode_num),
         "simkl_show_id": int(show_id),
-        "simkl_season_id": season_key(int(show_id), int(season_num)),
         "external_play": True,
     }
     inherit_show_fields(ep_info, show_info)
@@ -409,7 +408,6 @@ def _synthesize_external_episode_item(db, show_id, season_num, episode_num, acti
         ep_info,
         int(show_id),
         season_num=int(season_num),
-        season_row_id=ep_info["simkl_season_id"],
     )
 
     return {

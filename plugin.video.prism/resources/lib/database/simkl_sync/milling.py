@@ -56,7 +56,7 @@ def _ensure_listed_episode_fk_parents(
     seasons_to_insert: list[dict[str, Any]] = []
     for sid, season_num, cat in sorted(season_coords):
         existing = db.fetchone(
-            "SELECT simkl_id FROM seasons WHERE simkl_show_id=? AND season=? AND catalog=?",
+            "SELECT 1 AS ok FROM seasons WHERE simkl_show_id=? AND season=? AND catalog=?",
             (sid, season_num, cat),
         )
         if existing:
@@ -68,23 +68,6 @@ def _ensure_listed_episode_fk_parents(
 
     if seasons_to_insert:
         db.insert_simkl_seasons(seasons_to_insert)
-
-    for ep in built:
-        sid = ep.get("simkl_show_id")
-        season_num = get(ep, "season")
-        if sid is None or season_num is None:
-            continue
-        sid = int(sid)
-        season_num = int(season_num)
-        cat = show_meta.get(sid, (catalog, None))[0]
-        existing = db.fetchone(
-            "SELECT simkl_id FROM seasons WHERE simkl_show_id=? AND season=? AND catalog=?",
-            (sid, season_num, cat),
-        )
-        if existing:
-            ep["simkl_season_id"] = int(existing["simkl_id"])
-        else:
-            ep["simkl_season_id"] = season_key(sid, season_num)
 
 
 def clear_raw_episodes_cache(show_id: int | None = None) -> None:
@@ -110,7 +93,6 @@ def fetch_raw_show_episodes(
     if not force_refresh:
         cached = _RAW_EPISODES_CACHE.get(cache_key)
         if cached is not None:
-            g.log(f"[season trace] raw episodes process-cache hit show={show_id}", "debug")
             return cached
 
     if api is None:
@@ -175,23 +157,6 @@ def _season_num(episode: dict[str, Any], catalog: str = "tv") -> int:
     return 1 if season == 0 else season
 
 
-def _debug_unique_seasons(raw_episodes: list[Any]) -> tuple[list[Any], list[Any]]:
-    """Collect distinct API season fields for trace logging (None-safe)."""
-    top: set[Any] = set()
-    tvdb: set[Any] = set()
-    for episode in raw_episodes:
-        if not isinstance(episode, dict):
-            continue
-        if episode.get("season") is not None:
-            top.add(episode.get("season"))
-        tvdb_block = episode.get("tvdb")
-        if isinstance(tvdb_block, dict) and tvdb_block.get("season") is not None:
-            tvdb.add(tvdb_block.get("season"))
-    return sorted(top, key=lambda value: (isinstance(value, str), value)), sorted(
-        tvdb, key=lambda value: (isinstance(value, str), value)
-    )
-
-
 def _episode_simkl_id(episode: dict[str, Any]) -> int | None:
     ids = episode.get("ids") or {}
     simkl_id = ids.get("simkl_id") or ids.get("simkl")
@@ -224,7 +189,12 @@ def _build_episode_dict(
         return {}
 
     aired = _normalize_air_date(episode.get("date"))
-    description = episode.get("description")
+    description = (
+        episode.get("description")
+        or episode.get("overview")
+        or episode.get("en_description")
+        or episode.get("desc")
+    )
     info = {
         "simkl_id": ep_id,
         "mediatype": "episode",
@@ -240,7 +210,7 @@ def _build_episode_dict(
     }
     if episode.get("runtime") is not None:
         info["runtime"] = episode.get("runtime")
-    attach_tv_context(info, show_id, season_num=season_num, season_row_id=season_id, slug=slug)
+    attach_tv_context(info, show_id, season_num=season_num, slug=slug)
     from resources.lib.simkl.field_map import enrich_episode_from_simkl_api, finalize_playback_info
 
     enrich_episode_from_simkl_api(info, episode)
@@ -260,7 +230,6 @@ def _build_episode_dict(
     return {
         "simkl_id": ep_id,
         "simkl_show_id": show_id,
-        "simkl_season_id": season_id,
         "catalog": catalog,
         "season": season_num,
         "episode": episode_num,
@@ -280,13 +249,13 @@ def _build_season_dict(
 ) -> dict[str, Any]:
     from resources.lib.simkl.ids import attach_tv_context
 
-    season_id = season_simkl_id(show_id, season_num)
     info = {
-        "simkl_id": season_id,
+        "simkl_id": show_id,
         "mediatype": "season",
         "catalog": catalog,
         "season": season_num,
         "number": season_num,
+        "simkl_show_id": show_id,
         "aired_episodes": aired_episodes,
     }
     if season_num == 0:
@@ -295,9 +264,8 @@ def _build_season_dict(
     else:
         info["title"] = g.get_language_string(30528).format(season_num)
         info["sorttitle"] = info["title"]
-    attach_tv_context(info, show_id, season_row_id=season_id, slug=slug)
+    attach_tv_context(info, show_id, season_num=season_num, slug=slug)
     season = {
-        "simkl_id": season_id,
         "simkl_show_id": show_id,
         "season": season_num,
         "aired_episodes": aired_episodes,
@@ -316,11 +284,6 @@ def pull_show_seasons(
     *,
     mill_season_filter: set[int] | frozenset[int] | None = None,
 ) -> list[dict[str, Any]]:
-    endpoint = "anime/episodes" if catalog == "anime" else "tv/episodes"
-    g.log(
-        f"[season trace] pull_show_seasons show={show_id} catalog={catalog} endpoint={endpoint} slug={slug or show_id}",
-        "debug",
-    )
     raw_episodes = fetch_raw_show_episodes(show_id, catalog, slug=slug)
 
     def _raw_episode_order_key(raw: dict[str, Any]) -> tuple:
@@ -338,18 +301,6 @@ def pull_show_seasons(
     if not raw_episodes:
         g.log(f"Simkl milling: no episodes returned for show {show_id} ({catalog})", "warning")
         return []
-
-    sample = next((e for e in raw_episodes if isinstance(e, dict)), None)
-    if sample:
-        tvdb = sample.get("tvdb") or {}
-        g.log(
-            "[season trace] API sample ep="
-            f"{sample.get('episode')} simkl.season={sample.get('season')} "
-            f"tvdb.season={tvdb.get('season')} tvdb.episode={tvdb.get('episode')} type={sample.get('type')}",
-            "debug",
-        )
-        top_seasons, tvdb_seasons = _debug_unique_seasons(raw_episodes)
-        g.log(f"[season trace] API unique simkl.season={top_seasons} tvdb.season={tvdb_seasons}", "debug")
 
     grouped_raw: dict[int, list[dict[str, Any]]] = defaultdict(list)
     grouped: dict[int, list[dict[str, Any]]] = defaultdict(list)
@@ -390,13 +341,8 @@ def pull_show_seasons(
             episodes = []
         seasons.append(
             _build_season_dict(show_id, season_num, episodes, mill_episodes, aired_count, slug=slug, catalog=catalog)
-        )
+            )
 
-    g.log(
-        "[season trace] milled buckets="
-        f"{ {k: len(grouped_raw[k]) for k in sorted(grouped_raw.keys())} }",
-        "debug",
-    )
     return seasons
 
 
@@ -424,14 +370,8 @@ def _listed_episode_coord_variants(
     return out
 
 
-def _register_anime_tvdb_list_targets(
-    item: dict,
-    show_id: int,
-    *,
-    target_coords: set[tuple[int, int, int]],
-    shows_needed: set[int],
-) -> None:
-    """Register match coords from stored tvdb_season/tvdb_episode (same rules as field_map menus)."""
+def _anime_tvdb_menu_coord(item: dict, show_id: int) -> tuple[int, int, int] | None:
+    """TVDB season/episode the anime menu displays, when it differs from the stored row."""
     from resources.lib.simkl.field_map import anime_menu_episode_number, anime_menu_season, tvdb_from_episode
 
     info = item.get("info") if isinstance(item.get("info"), dict) else {}
@@ -446,36 +386,25 @@ def _register_anime_tvdb_list_targets(
         }
     tvdb_season, tvdb_ep = tvdb_from_episode(merged)
     if tvdb_season is None or tvdb_ep is None:
-        return
+        return None
     menu_season = anime_menu_season(merged)
     menu_ep = anime_menu_episode_number(merged, menu_season, int(tvdb_ep))
     if menu_ep is None:
-        return
-    sid = int(show_id)
-    target_coords.update(
-        _listed_episode_coord_variants(sid, menu_season, int(menu_ep), catalog="anime")
-    )
-    shows_needed.add(sid)
+        return None
+    return int(show_id), int(menu_season), int(menu_ep)
 
 
-def _register_listed_episode_targets(
-    item: dict,
-    *,
-    target_coords: set[tuple[int, int, int]],
-    target_ids: set[int],
-    shows_needed: set[int],
-    db,
-    catalog_hint: str = "tv",
-) -> None:
+def _menu_episode_target(item: dict, *, db, catalog_hint: str = "tv") -> tuple[dict | None, bool]:
+    """One menu row. The bool is true when a real episode id looked like a different show."""
     from resources.lib.simkl.ids import is_synthetic_episode_id, show_id_from_item, split_synthetic_episode_id
 
     item_catalog = item.get("catalog") if isinstance(item.get("catalog"), str) else catalog_hint
+    show_id = None
+    season = None
+    ep_num = None
     coords = db._episode_coords_from_list_item(item)
     if coords:
         show_id, season, ep_num = coords
-        catalog = db.show_catalog(show_id) or item_catalog or catalog_hint
-        target_coords.update(_listed_episode_coord_variants(show_id, season, ep_num, catalog=catalog))
-        shows_needed.add(int(show_id))
     elif isinstance(item.get("episode"), dict):
         nested = item["episode"]
         nested_coords = db._episode_coords_from_list_item(
@@ -483,29 +412,81 @@ def _register_listed_episode_targets(
         )
         if nested_coords:
             show_id, season, ep_num = nested_coords
-            catalog = db.show_catalog(show_id) or item_catalog or catalog_hint
-            target_coords.update(_listed_episode_coord_variants(show_id, season, ep_num, catalog=catalog))
-            shows_needed.add(int(show_id))
+    if show_id is None:
+        show_id = item.get("simkl_show_id") or show_id_from_item(item)
+    if show_id is None:
+        return None, False
+    show_id = int(show_id)
+    if not db.fetchone("SELECT simkl_id FROM shows WHERE simkl_id=?", (show_id,)):
+        return None, False
+
+    catalog = item_catalog or catalog_hint
+    stored = db.show_catalog(show_id)
+    if stored in ("tv", "anime"):
+        catalog = stored
+    target = {
+        "show_id": show_id,
+        "catalog": catalog,
+        "preferred": set(),
+        "acceptable": set(),
+        "ids": set(),
+    }
+    if season is not None and ep_num is not None:
+        preferred = (show_id, int(season), int(ep_num))
+        target["preferred"].add(preferred)
+        target["acceptable"].update(
+            _listed_episode_coord_variants(show_id, int(season), int(ep_num), catalog=catalog)
+        )
+    if catalog == "anime":
+        tvdb_coord = _anime_tvdb_menu_coord(item, show_id)
+        if tvdb_coord is not None:
+            target["acceptable"].update(
+                _listed_episode_coord_variants(*tvdb_coord, catalog="anime")
+            )
+
+    phantom = False
     simkl_id = item.get("simkl_id")
-    show_id = item.get("simkl_show_id") or show_id_from_item(item)
     if simkl_id is not None:
         sid = int(simkl_id)
-        target_ids.add(sid)
+        target["ids"].add(sid)
         if is_synthetic_episode_id(sid):
-            split = split_synthetic_episode_id(sid)
-            catalog = db.show_catalog(split[0]) or catalog_hint
-            target_coords.update(_listed_episode_coord_variants(*split, catalog=catalog))
-            shows_needed.add(int(split[0]))
-    if show_id is not None:
-        shows_needed.add(int(show_id))
-        catalog = db.show_catalog(int(show_id)) or item_catalog or catalog_hint
-        if catalog == "anime":
-            _register_anime_tvdb_list_targets(
-                item,
-                int(show_id),
-                target_coords=target_coords,
-                shows_needed=shows_needed,
-            )
+            split_show, split_season, split_ep = split_synthetic_episode_id(sid)
+            if split_show == show_id:
+                target["acceptable"].update(
+                    _listed_episode_coord_variants(split_show, split_season, split_ep, catalog=catalog)
+                )
+            else:
+                phantom = True
+    if not target["preferred"] and not target["acceptable"] and not target["ids"]:
+        return None, phantom
+    return target, phantom
+
+
+def _raw_match_rank(show_id: int, catalog: str, raw: dict[str, Any], target: dict) -> int | None:
+    """Lower is a closer match. None means this raw is a different episode."""
+    ep_id = _episode_simkl_id(raw)
+    if ep_id is not None and ep_id in target["ids"]:
+        return 0
+    season_num = _season_num(raw, catalog)
+    ep_num = _episode_num(raw)
+    if catalog == "anime":
+        from resources.lib.simkl.field_map import anime_menu_episode_number
+
+        ep_num = anime_menu_episode_number(raw, season_num, ep_num)
+    if ep_num is None:
+        return None
+    coord = (int(show_id), int(season_num), int(ep_num))
+    if coord in target["preferred"]:
+        return 1
+    if coord in target["acceptable"]:
+        return 2
+    from resources.lib.simkl.ids import is_synthetic_episode_id, split_synthetic_episode_id
+
+    if ep_id is not None and is_synthetic_episode_id(ep_id):
+        split_show, split_season, split_ep = split_synthetic_episode_id(ep_id)
+        if split_show == show_id and (split_show, split_season, split_ep) in target["acceptable"]:
+            return 2
+    return None
 
 
 def refresh_listed_episodes_from_simkl(db, media_items) -> int:
@@ -515,29 +496,28 @@ def refresh_listed_episodes_from_simkl(db, media_items) -> int:
 
     get_request_policy().reset_menu_budget()
     media_items = db._resolve_episode_list_ids(media_items)
-    target_coords: set[tuple[int, int, int]] = set()
-    target_ids: set[int] = set()
-    shows_needed: set[int] = set()
+    targets_by_show: dict[int, list[dict]] = {}
+    phantom_ids = 0
+    target_count = 0
     for item in media_items or []:
         if not isinstance(item, dict):
             continue
         hint = item.get("catalog") if isinstance(item.get("catalog"), str) else "tv"
-        _register_listed_episode_targets(
-            item,
-            target_coords=target_coords,
-            target_ids=target_ids,
-            shows_needed=shows_needed,
-            db=db,
-            catalog_hint=hint,
-        )
+        target, phantom = _menu_episode_target(item, db=db, catalog_hint=hint)
+        if phantom:
+            phantom_ids += 1
+        if not target:
+            continue
+        target_count += 1
+        targets_by_show.setdefault(int(target["show_id"]), []).append(target)
 
-    if not target_coords and not target_ids:
+    if not targets_by_show:
         g.log("Simkl listed-episode refresh: no episode targets", "debug")
         return 0
 
     show_meta: dict[int, tuple[str, str | None]] = {}
-    for show_id in shows_needed:
-        catalog = db.show_catalog(show_id) or "tv"
+    for show_id, show_targets in targets_by_show.items():
+        catalog = show_targets[0]["catalog"]
         row = db.fetchone(
             "SELECT info FROM shows WHERE simkl_id=? AND catalog=?",
             (show_id, catalog),
@@ -547,49 +527,41 @@ def refresh_listed_episodes_from_simkl(db, media_items) -> int:
 
     refreshed = 0
 
-    def _raw_matches(show_id: int, catalog: str, raw: dict[str, Any]) -> bool:
-        ep_id = _episode_simkl_id(raw)
-        if ep_id is not None and ep_id in target_ids:
-            return True
-        season_num = _season_num(raw, catalog)
-        ep_num = _episode_num(raw)
-        if catalog == "anime":
-            from resources.lib.simkl.field_map import anime_menu_episode_number
-
-            ep_num = anime_menu_episode_number(raw, season_num, ep_num)
-        if ep_num is None:
-            return False
-        variants = _listed_episode_coord_variants(show_id, season_num, ep_num, catalog=catalog)
-        if variants & target_coords:
-            return True
-        from resources.lib.simkl.ids import is_synthetic_episode_id, split_synthetic_episode_id
-
-        if ep_id is not None and is_synthetic_episode_id(ep_id):
-            variants |= _listed_episode_coord_variants(*split_synthetic_episode_id(ep_id), catalog=catalog)
-            if variants & target_coords:
-                return True
-        return False
-
-    for show_id in sorted(shows_needed):
+    for show_id in sorted(targets_by_show):
         catalog, slug = show_meta[show_id]
+        show_targets = targets_by_show[show_id]
         raw_episodes = fetch_raw_show_episodes(show_id, catalog, slug=slug, api=db.simkl_api)
         built: list[dict[str, Any]] = []
-        for raw in raw_episodes or []:
-            if not isinstance(raw, dict):
+        seen_episode_ids: set[int] = set()
+        for target in show_targets:
+            best_raw = None
+            best_rank = 99
+            for raw in raw_episodes or []:
+                if not isinstance(raw, dict):
+                    continue
+                rank = _raw_match_rank(show_id, catalog, raw, target)
+                if rank is None or rank > best_rank:
+                    continue
+                best_raw = raw
+                best_rank = rank
+                if best_rank == 0:
+                    break
+            if best_raw is None:
                 continue
-            if not _raw_matches(show_id, catalog, raw):
-                continue
-            season_num = _season_num(raw, catalog)
+            season_num = _season_num(best_raw, catalog)
             episode = _build_episode_dict(
                 show_id,
                 season_simkl_id(show_id, season_num),
                 season_num,
-                raw,
+                best_raw,
                 slug=slug,
                 catalog=catalog,
             )
-            if episode:
-                built.append(episode)
+            episode_id = episode.get("simkl_id") if episode else None
+            if not episode or episode_id is None or int(episode_id) in seen_episode_ids:
+                continue
+            seen_episode_ids.add(int(episode_id))
+            built.append(episode)
         if not built:
             g.log(
                 f"Simkl listed-episode refresh: 0 matched for show {show_id} ({catalog})",

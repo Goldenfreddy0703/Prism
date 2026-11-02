@@ -40,6 +40,9 @@ class AuthProgressDialog(xbmcgui.WindowXMLDialog):
             self.close()
 
     def close(self):
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
         delete_qr_png(self._qr_path or None)
         super().close()
 

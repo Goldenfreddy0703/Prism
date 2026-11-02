@@ -346,32 +346,20 @@ def render_recently_watched_shows(catalog: str) -> None:
 
 
 def render_watched_episodes(catalog: str) -> None:
+    """One page of recently watched episodes, capped at Page Item Limit."""
     from resources.lib.database.session import get_sync_database
     from resources.lib.meta.list_paint import render_catalog_episodes
     from resources.lib.meta.list_pipeline import make_list_id
     from resources.lib.meta.menu_paint_profile import MenuPaintProfile, profile_list_kwargs
     from resources.lib.modules.list_builder import ListBuilder
-    from resources.lib.simkl.menu_helpers import paginate_simkl_lists
 
-    no_paging = not paginate_simkl_lists()
-    page = g.PAGE
     list_id = make_list_id("watched_episodes", catalog)
     store = _library_store()
-
-    if no_paging:
-        items = store.load_cached_items(
-            catalog,
-            list_id,
-            lambda: get_sync_database().get_watched_episodes(1, catalog=catalog) or [],
-        )
-    else:
-        items = store.load_page_items(
-            catalog,
-            list_id,
-            page,
-            lambda: get_sync_database().get_watched_episodes(page, catalog=catalog) or [],
-            schedule_upsert=False,
-        )
+    items = store.load_cached_items(
+        catalog,
+        list_id,
+        lambda: get_sync_database().get_watched_episodes(1, catalog=catalog) or [],
+    )
 
     if not items:
         db = get_sync_database()
@@ -381,7 +369,7 @@ def render_watched_episodes(catalog: str) -> None:
         refreshed = db.refresh_watched_episodes_if_empty(catalog)
         if refreshed:
             store.forget_items(catalog, list_id)
-            items = db.get_watched_episodes(page if not no_paging else 1, catalog=catalog) or []
+            items = db.get_watched_episodes(1, catalog=catalog) or []
 
     render_catalog_episodes(
         catalog,
@@ -389,7 +377,7 @@ def render_watched_episodes(catalog: str) -> None:
         ListBuilder(),
         **profile_list_kwargs(
             MenuPaintProfile.LIBRARY_EPISODES,
-            no_paging=no_paging,
+            no_paging=True,
             seeded=True,
             overlay_parent_shows=True,
         ),
@@ -404,15 +392,19 @@ def render_next_up(catalog: str) -> None:
     from resources.lib.modules.list_builder import ListBuilder
     from resources.lib.simkl.episode_catalog_sync import schedule_lazy_episode_warm
 
+    from resources.lib.simkl.menu_helpers import nextup_is_limited, nextup_list_is_paged, nextup_page_size
+
     sort_last = g.get_int_setting("nextup.sort") == 1
-    limit_nextup = g.get_bool_setting("limit.nextup")
-    page_limit = g.get_int_setting("item.limit")
-    list_id = make_list_id("next_up", catalog, sort_last, limit_nextup, page_limit)
+    limited = nextup_is_limited()
+    paging = nextup_list_is_paged()
+    page_limit = nextup_page_size()
+    page = max(1, int(g.PAGE or 1))
+    list_id = make_list_id("next_up", catalog, sort_last, limited, paging, page_limit)
     store = _library_store()
     show_db = get_sync_database()
 
     def _load_next_up() -> list[dict]:
-        rows = show_db.get_nextup_episodes(sort_last, catalog=catalog)
+        rows = show_db.get_nextup_episodes(sort_last, catalog=catalog) or []
         if not rows:
             watching_ids = {
                 int(ref["simkl_id"])
@@ -421,11 +413,13 @@ def render_next_up(catalog: str) -> None:
             }
             if watching_ids:
                 schedule_lazy_episode_warm(show_db, watching_ids)
-        if limit_nextup:
-            rows = rows[:page_limit]
-        return rows or []
+        return rows
 
     episodes = store.load_cached_items(catalog, list_id, _load_next_up)
+    total = len(episodes)
+    if limited:
+        episodes = episodes[:page_limit]
+    has_next = bool(paging and page * page_limit < total)
 
     render_catalog_episodes(
         catalog,
@@ -433,7 +427,8 @@ def render_next_up(catalog: str) -> None:
         ListBuilder(),
         **profile_list_kwargs(
             MenuPaintProfile.LIBRARY_EPISODES,
-            no_paging=True,
+            no_paging=not paging,
+            has_next_page=has_next,
             seeded=True,
             overlay_parent_shows=True,
         ),

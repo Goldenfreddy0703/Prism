@@ -14,6 +14,13 @@ from resources.lib.modules.timeLogger import stopwatch
 from resources.lib.simkl.library import _unwrap_sync_items, simkl_entry_to_sync_dict, sync_entry_media_blob
 
 
+def _mark_home_menu_refresh_after_sync() -> None:
+    """Queue a one-time main-menu reload for the next time that folder is opened."""
+    from resources.lib.simkl.menu_parent_refresh import mark_home_menu_refresh_after_sync
+
+    mark_home_menu_refresh_after_sync()
+
+
 def should_defer_simkl_activities_sync(*, force: bool = False) -> bool:
     """Return True when background activity sync should wait (same gating as calendar prefetch)."""
     if force:
@@ -82,12 +89,19 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
         return remote_activities
 
     @stopwatch
-    def sync_activities(self, silent=False, force=False):
+    def sync_activities(self, silent=False, force=False, *, user_notify_complete=False):
         if should_defer_simkl_activities_sync(force=force):
+            if user_notify_complete and not silent:
+                g.notification(
+                    self.notification_prefix,
+                    g.get_language_string(30332),
+                    time=5000,
+                )
             return
         with GlobalLock("simkl.sync"):
             self.force_sync = force
             self.silent = silent
+            self.user_notify_complete = bool(user_notify_complete and not silent)
             simkl_auth = g.get_setting("simkl.auth")
             update_time = str(self._get_datetime_now())
 
@@ -103,15 +117,22 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
                     "Activities Sync Failure: Unable to connect to Simkl or activities called too often",
                     "error",
                 )
+                if self.user_notify_complete:
+                    g.notification(
+                        self.notification_prefix,
+                        g.get_language_string(30332),
+                        time=5000,
+                    )
                 return True
 
             remote_all = remote_activities.get("all") or remote_activities.get("all_activities")
             library_changed = self.requires_update(remote_all, self.activities["all_activities"])
             playback_changed = self._playback_needs_sync(remote_activities)
+            run_sync = library_changed or playback_changed or force
 
-            if library_changed or playback_changed:
+            if run_sync:
                 try:
-                    if library_changed:
+                    if library_changed or force:
                         self._check_for_first_run(silent, simkl_auth)
                         self._do_sync_activities(remote_activities)
                     else:
@@ -121,6 +142,20 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
 
             self._update_all_shows_statisics()
             self._update_all_season_statistics()
+
+            if self.user_notify_complete:
+                if self.sync_errors:
+                    g.notification(
+                        self.notification_prefix,
+                        g.get_language_string(30332),
+                        time=5000,
+                    )
+                elif run_sync:
+                    g.notification(
+                        self.notification_prefix,
+                        g.get_language_string(31013),
+                        time=4000,
+                    )
 
         return self.sync_errors
 
@@ -138,7 +173,10 @@ class SimklSyncDatabase(shows.SimklSyncDatabase):
                 rebuild_library_cache_from_db(self)
             except Exception:
                 g.log_stacktrace()
-            xbmc.executebuiltin('RunPlugin("plugin://plugin.video.prism/?action=widgetRefresh&playing=False")')
+            xbmc.executebuiltin(
+                'RunPlugin("plugin://plugin.video.prism/?action=widgetRefresh&playing=False")'
+            )
+            _mark_home_menu_refresh_after_sync()
 
     def _do_sync_activities(self, remote_activities):
         self._remote_activities = remote_activities

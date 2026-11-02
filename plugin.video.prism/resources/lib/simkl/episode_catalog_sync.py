@@ -16,6 +16,7 @@ CHANGES_POLL_INTERVAL_SEC = 24 * 60 * 60
 RECENT_WATCHED_SHOW_LIMIT = 100
 WATCHING_WARM_CAP = 50
 LAZY_WARM_SHOW_CAP = 10
+WATCHED_PAGE_SHOW_CAP = 40
 
 BUCKET_NEXT_UP = "next_up"
 BUCKET_CONTINUE = "continue_watching"
@@ -51,20 +52,8 @@ def bucket_progress_label(bucket: str) -> str:
     return g.get_language_string(string_id)
 
 
-def episode_warm_enabled() -> bool:
-    return g.get_bool_setting("simkl.syncEpisodeWarm", True)
-
-
 def episode_warm_uses_raw_endpoint() -> bool:
     return g.get_bool_setting("simkl.syncEpisodeWarmFast", True)
-
-
-def library_parent_warm_enabled() -> bool:
-    return g.get_bool_setting("simkl.syncLibraryParentWarm", True)
-
-
-def library_page_warm_enabled() -> bool:
-    return g.get_bool_setting("simkl.syncLibraryPageWarm", True)
 
 
 def show_ids_from_payload(payload) -> set[int]:
@@ -292,7 +281,7 @@ def _attach_show_ids_to_milled_tree(show_row: dict, milled: list[dict]) -> None:
                     "simkl_show_id": show_id,
                     "tmdb_show_id": tmdb_id,
                     "tvdb_show_id": tvdb_id,
-                    "simkl_season_id": season.get("simkl_id"),
+                    "season": season.get("season"),
                     "tvshowtitle": title,
                 }
             )
@@ -301,7 +290,6 @@ def _attach_show_ids_to_milled_tree(show_row: dict, milled: list[dict]) -> None:
                     "simkl_show_id": show_id,
                     "tmdb_show_id": tmdb_id,
                     "tvdb_show_id": tvdb_id,
-                    "simkl_season_id": season.get("simkl_id"),
                 }
             )
             if catalog in ("movie", "tv", "anime"):
@@ -393,16 +381,15 @@ def _nextup_episode_rows_for_catalog(db: "SimklSyncDatabase", catalog: str) -> l
     from resources.lib.database.simkl_sync.serial_sync import serial_profile_scope
     from resources.lib.modules.globals import g
 
+    from resources.lib.simkl.menu_helpers import nextup_is_limited, nextup_list_is_paged, nextup_page_size
+
     profile = "anime" if catalog == "anime" else "tv"
     sort_last = g.get_int_setting("nextup.sort") == 1
-    limit = g.get_int_setting("item.limit") if g.get_bool_setting("limit.nextup") else 50
+    limit = nextup_page_size() if nextup_is_limited() or nextup_list_is_paged() else 50
     with serial_profile_scope(db, profile):
         rows = db.get_nextup_episodes(sort_last, catalog=catalog) or []
     if limit > 0:
         rows = rows[: int(limit)]
-    return rows
-
-
     return rows
 
 
@@ -430,6 +417,175 @@ def _watched_episode_rows_for_catalog(db: "SimklSyncDatabase", catalog: str) -> 
     elif page_limit > 0:
         rows = rows[: int(page_limit)]
     return rows
+
+
+def _watched_page_limit(db: "SimklSyncDatabase") -> int:
+    limit = g.get_int_setting("item.limit")
+    if limit <= 0:
+        limit = int(getattr(db, "page_limit", 0) or 0)
+    return limit if limit > 0 else 20
+
+
+def _agent_watched_log(hypothesis_id: str, message: str, data: dict) -> None:
+    pass
+
+
+def _trim_watch_entry(entry: dict, wanted: set[tuple[int, int]]) -> dict:
+    seasons = []
+    for season in entry.get("seasons") or []:
+        if not isinstance(season, dict) or season.get("number") is None:
+            continue
+        season_num = int(season["number"])
+        episodes = []
+        for episode in season.get("episodes") or []:
+            if not isinstance(episode, dict):
+                continue
+            ep_num = episode.get("number") if episode.get("number") is not None else episode.get("episode")
+            if ep_num is None:
+                continue
+            if (season_num, int(ep_num)) not in wanted:
+                continue
+            episodes.append(episode)
+        if episodes:
+            seasons.append({"number": season_num, "episodes": episodes})
+    trimmed = dict(entry)
+    trimmed["seasons"] = seasons
+    return trimmed
+
+
+def fill_watched_episode_page(db: "SimklSyncDatabase", catalog: str, *, reason: str = "menu") -> int:
+    """Store one page of watched episodes. Does not ingest the rest of each show."""
+    if catalog not in ("tv", "anime"):
+        return 0
+
+    from resources.lib.database.simkl_sync.serial_sync import serial_profile_scope
+    from resources.lib.simkl.all_items_sync import fetch_show_watch_entry_from_sync_watched
+    from resources.lib.simkl.library import simkl_entry_to_sync_dict
+
+    page_limit = _watched_page_limit(db)
+    profile = "anime" if catalog == "anime" else "tv"
+    with serial_profile_scope(db, profile):
+        existing = db.get_watched_episodes(1, catalog=catalog) or []
+    existing_count = len(existing)
+    if existing_count >= page_limit:
+        _agent_watched_log(
+            "H1",
+            "watched page already full",
+            {"catalog": catalog, "reason": reason, "existing": existing_count, "page_limit": page_limit, "fetched_shows": 0, "kept": 0},
+        )
+        g.log(
+            f"Watched page fill {catalog} ({reason}): existing={existing_count} limit={page_limit} skipped",
+            "info",
+        )
+        return 0
+
+    with serial_profile_scope(db, profile):
+        show_rows = db.fetchall(
+            """
+            SELECT simkl_id, last_watched_at
+            FROM shows
+            WHERE catalog = ?
+              AND (
+                    COALESCE(watched_episodes, 0) > 0
+                    OR COALESCE(simkl_status, '') IN ('watching', 'completed')
+                  )
+            ORDER BY CASE
+                         WHEN last_watched_at IS NULL OR last_watched_at = '' THEN 1
+                         ELSE 0
+                     END,
+                     last_watched_at DESC
+            LIMIT ?
+            """,
+            (catalog, WATCHED_PAGE_SHOW_CAP),
+        ) or []
+
+    kept: list[tuple[str, int, int, int]] = []
+    entries: dict[int, dict] = {}
+    fetched_shows = 0
+    for show in show_rows:
+        show_id = show.get("simkl_id")
+        if show_id is None:
+            continue
+        if len(kept) >= page_limit:
+            oldest = min((item[0] for item in kept if item[0]), default="")
+            show_ts = str(show.get("last_watched_at") or "")
+            if oldest and (not show_ts or show_ts <= oldest):
+                break
+        show_id = int(show_id)
+        entry = fetch_show_watch_entry_from_sync_watched(db.simkl_api, show_id, catalog)
+        fetched_shows += 1
+        if not entry:
+            continue
+        entries[show_id] = entry
+        show_ts = str(show.get("last_watched_at") or entry.get("last_watched_at") or "")
+        for season in entry.get("seasons") or []:
+            if not isinstance(season, dict) or season.get("number") is None:
+                continue
+            season_num = int(season["number"])
+            if season_num <= 0:
+                continue
+            for episode in season.get("episodes") or []:
+                if not isinstance(episode, dict) or not db._episode_marked_watched(episode, entry):
+                    continue
+                ep_num = episode.get("number") if episode.get("number") is not None else episode.get("episode")
+                if ep_num is None:
+                    continue
+                watched_at = str(episode.get("watched_at") or episode.get("last_watched_at") or show_ts or "")
+                kept.append((watched_at, show_id, season_num, int(ep_num)))
+        kept.sort(key=lambda item: item[0] or "", reverse=True)
+        del kept[page_limit:]
+
+    stored = 0
+    by_show: dict[int, set[tuple[int, int]]] = {}
+    for _watched_at, show_id, season_num, ep_num in kept:
+        by_show.setdefault(show_id, set()).add((season_num, ep_num))
+
+    for show_id, wanted in by_show.items():
+        entry = entries.get(show_id)
+        if not entry or not wanted:
+            continue
+        trimmed = _trim_watch_entry(entry, wanted)
+        normalized = simkl_entry_to_sync_dict(trimmed, catalog)
+        show_row = normalized if isinstance(normalized, dict) and normalized.get("simkl_id") else {
+            "simkl_id": show_id,
+            "catalog": catalog,
+        }
+        show_row.setdefault("catalog", catalog)
+        with serial_profile_scope(db, profile):
+            db.apply_sync_episode_stubs_from_entries([trimmed], [show_row], catalog, selective=True)
+            db.apply_watched_episodes_from_entries([trimmed], [show_row])
+        stored += len(wanted)
+
+    if hasattr(db, "_watched_episodes_page_cache"):
+        db._watched_episodes_page_cache.clear()
+    if stored:
+        try:
+            from resources.lib.meta.list_pipeline import _page_list_id, make_list_id
+            from resources.lib.simkl.library_menus import _library_store
+
+            list_id = make_list_id("watched_episodes", catalog)
+            store = _library_store()
+            store.forget_items(catalog, list_id)
+            store.forget_items(catalog, _page_list_id(list_id, 1))
+        except Exception:
+            g.log_stacktrace()
+
+    summary = {
+        "catalog": catalog,
+        "reason": reason,
+        "existing": existing_count,
+        "page_limit": page_limit,
+        "fetched_shows": fetched_shows,
+        "kept": len(kept),
+        "stored": stored,
+    }
+    _agent_watched_log("H2", "watched page fill", summary)
+    g.log(
+        f"Watched page fill {catalog} ({reason}): existing={existing_count} "
+        f"limit={page_limit} fetched_shows={fetched_shows} kept={len(kept)} stored={stored}",
+        "info",
+    )
+    return stored
 
 
 def episode_rows_for_menu_bucket(
@@ -469,53 +625,23 @@ def refresh_listed_episodes_for_menu_bucket(
     return refreshed
 
 
-def _scoped_parent_show_refs(db: "SimklSyncDatabase", catalog: str) -> list[dict]:
-    """Watching + continue-watching parents for post-sync library parent warm."""
-    seen: set[int] = set()
-    refs: list[dict] = []
-
-    def add(show_id: int | None) -> None:
-        if show_id is None:
-            return
-        sid = int(show_id)
-        if sid in seen:
-            return
-        if db.show_catalog(sid) != catalog:
-            return
-        seen.add(sid)
-        refs.append({"simkl_id": sid, "catalog": catalog})
-
-    watching = db.get_shows_by_simkl_status("watching", catalog=catalog) or []
-    for ref in watching[:WATCHING_WARM_CAP]:
-        add(ref.get("simkl_id"))
-
-    for row in db.fetchall(
-        """
-        SELECT DISTINCT e.simkl_show_id AS simkl_id
-        FROM bookmarks AS b
-                 INNER JOIN episodes AS e ON e.simkl_id = b.simkl_id AND e.catalog = b.catalog
-        WHERE b.type = 'episode' AND e.catalog = ?
-        """,
-        (catalog,),
-    ):
-        add(row.get("simkl_id"))
-
-    return refs
-
-
 def refresh_scoped_parent_shows_for_paint(db: "SimklSyncDatabase", catalog: str) -> dict[str, int]:
-    from resources.lib.meta.list_paint import prepare_episode_parent_shows_for_paint
+    """Parent details for the three episode menu pages, not the whole watching list."""
+    from resources.lib.meta.list_paint import parent_show_refs_from_episode_rows, prepare_episode_parent_shows_for_paint
 
-    if not library_parent_warm_enabled():
-        return {"refs": 0, "detail_before": 0, "detail_after": 0}
-
-    refs = _scoped_parent_show_refs(db, catalog)
     next_up_rows = _nextup_episode_rows_for_catalog(db, catalog)
-    from resources.lib.meta.list_paint import parent_show_refs_from_episode_rows
-
-    for ref in parent_show_refs_from_episode_rows(next_up_rows, catalog):
-        sid = int(ref["simkl_id"])
-        if sid not in {int(r["simkl_id"]) for r in refs}:
+    continue_rows = _continue_watching_episode_rows(db, catalog)
+    watched_rows = _watched_episode_rows_for_catalog(db, catalog)
+    refs: list[dict] = []
+    seen: set[int] = set()
+    menu_rows: list[dict] = []
+    for source_rows in (next_up_rows, continue_rows, watched_rows):
+        menu_rows.extend(source_rows)
+        for ref in parent_show_refs_from_episode_rows(source_rows, catalog):
+            sid = int(ref["simkl_id"])
+            if sid in seen:
+                continue
+            seen.add(sid)
             refs.append(ref)
 
     if not refs:
@@ -525,8 +651,9 @@ def refresh_scoped_parent_shows_for_paint(db: "SimklSyncDatabase", catalog: str)
         db,
         catalog,
         refs,
-        episode_rows=next_up_rows or None,
+        episode_rows=menu_rows or None,
     )
+    stats["refs"] = len(refs)
     if stats.get("detail_before") or stats.get("detail_after"):
         g.log(
             f"Simkl library parent show warm ({catalog}): "
@@ -545,7 +672,7 @@ def warm_library_episode_catalog(
     buckets: tuple[str, ...] | None = None,
 ) -> dict[str, int]:
     """Post-sync / prefetch: listed-episode refresh + parent show warm for one serial catalog."""
-    if not episode_warm_enabled() or catalog not in ("tv", "anime"):
+    if catalog not in ("tv", "anime"):
         return {"listed": 0, "detail_before": 0, "detail_after": 0}
 
     bucket_list = buckets or (BUCKET_NEXT_UP, BUCKET_CONTINUE, BUCKET_WATCHED)
@@ -578,7 +705,7 @@ def refresh_parent_shows_for_show_ids(
     """Background parent warm after lazy episode catalog warm (Next Up / Continue Watching)."""
     from resources.lib.meta.list_paint import prepare_episode_parent_shows_for_paint
 
-    if not episode_warm_enabled() or not show_ids or not library_parent_warm_enabled():
+    if not show_ids:
         return
 
     by_catalog: dict[str, list[dict]] = {}
@@ -623,20 +750,12 @@ def run_post_sync_episode_warm(
         on_progress=on_progress,
         notify_silent=notify_silent,
     )
-    if episode_warm_enabled():
-        for catalog in ("tv", "anime"):
-            warm_library_episode_catalog(db, catalog, reason="post_sync")
-    if library_page_warm_enabled():
-        from resources.lib.simkl.library_list_sync import warm_library_watchlist_pages_post_sync
-
-        for catalog in ("movie", "tv", "anime"):
-            warm_library_watchlist_pages_post_sync(catalog)
     return warmed
 
 
 def schedule_lazy_episode_warm(db: "SimklSyncDatabase", show_ids: set[int] | list[int]) -> None:
     """On-demand episode catalog warm for Next Up / Continue Watching menus."""
-    if not show_ids or not episode_warm_enabled():
+    if not show_ids:
         return
 
     import threading
@@ -665,3 +784,55 @@ def schedule_lazy_episode_warm(db: "SimklSyncDatabase", show_ids: set[int] | lis
     from resources.lib.common.thread_pool import defer_background
 
     defer_background(_warm)
+
+
+def run_episode_menu_warm(db: "SimklSyncDatabase") -> None:
+    """Prepare TV and anime Next Up, Continue Watching, and Watched Episodes."""
+    import xbmcgui
+
+    from resources.lib.indexers import ensure_simkl_authorized
+    from resources.lib.modules.global_lock import GlobalLock
+
+    if not ensure_simkl_authorized():
+        return
+
+    failed = False
+    progress = xbmcgui.DialogProgressBG()
+    progress.create(g.ADDON_NAME, g.get_language_string(31135))
+    catalogs = ("tv", "anime")
+    buckets = (BUCKET_NEXT_UP, BUCKET_CONTINUE, BUCKET_WATCHED)
+    total = len(catalogs) * (len(buckets) + 1)
+    step = 0
+
+    def _show_step(catalog: str, bucket: str | None) -> None:
+        nonlocal step
+        label = "Shows" if catalog == "tv" else "Anime"
+        menu = bucket_progress_label(bucket) if bucket else g.get_language_string(31135)
+        progress.update(int(step * 100 / max(total, 1)), f"{label}: {menu}")
+        step += 1
+
+    try:
+        with GlobalLock("simkl.sync"):
+            for catalog in catalogs:
+                listed = 0
+                for bucket in buckets:
+                    _show_step(catalog, bucket)
+                    if bucket == BUCKET_WATCHED:
+                        fill_watched_episode_page(db, catalog, reason="warm")
+                    listed += refresh_listed_episodes_for_menu_bucket(db, catalog, bucket)
+                _show_step(catalog, None)
+                parent_stats = refresh_scoped_parent_shows_for_paint(db, catalog)
+                g.log(
+                    f"Episode menu warm {catalog}: listed={listed} "
+                    f"parents={parent_stats.get('refs', 0)}",
+                    "info",
+                )
+            progress.update(100, g.get_language_string(31136))
+    except Exception:
+        g.log_stacktrace()
+        failed = True
+    finally:
+        progress.close()
+
+    if not failed:
+        g.notification(g.ADDON_NAME, g.get_language_string(31136))

@@ -11,7 +11,15 @@ from resources.lib.common.source_utils import (
     sort_tag_sub_options,
 )
 from resources.lib.common.tools import FixedSortPositionObject
-from resources.lib.modules.catalog_profiles import ensure_migrated, resolve_catalog_from_item_information
+from resources.lib.modules.catalog_profiles import (
+    DEFAULT_AUDIOSORT,
+    DEFAULT_DEBRIDSORT,
+    DEFAULT_SOURCETYPESORT,
+    DEFAULT_SUBTITLESORT,
+    _sortmethod_defaults,
+    ensure_migrated,
+    resolve_catalog_from_item_information,
+)
 from resources.lib.modules.globals import g
 
 
@@ -184,8 +192,12 @@ class SourceSorter:
             if self.last_release_name:
                 sort_methods.append((self._get_last_release_name_sort_key, False))
 
+        sort_defaults = _sortmethod_defaults(self.catalog)
         for i in range(1, 9):
-            sm = g.get_int_setting(f"general.sortmethod.{self.catalog}.{i}")
+            sm = g.get_int_setting(
+                f"general.sortmethod.{self.catalog}.{i}",
+                sort_defaults.get(i, 0),
+            )
             reverse = g.get_bool_setting(f"general.sortmethod.{self.catalog}.{i}.reverse")
 
             if sm == 0:
@@ -231,7 +243,11 @@ class SourceSorter:
         }
 
         for i in range(1, 6):
-            tp = type_priority_settings.get(g.get_int_setting(f"general.sourcetypesort.{self.catalog}.{i}"))
+            idx = g.get_int_setting(
+                f"general.sourcetypesort.{self.catalog}.{i}",
+                DEFAULT_SOURCETYPESORT.get(i, 0),
+            )
+            tp = type_priority_settings.get(idx)
             if tp is None:
                 break
             type_priorities[tp] = -i
@@ -273,7 +289,11 @@ class SourceSorter:
         }
 
         for i in range(1, 5):
-            debridp = debrid_priority_settings.get(g.get_int_setting(f"general.debridsort.{self.catalog}.{i}"))
+            idx = g.get_int_setting(
+                f"general.debridsort.{self.catalog}.{i}",
+                DEFAULT_DEBRIDSORT.get(i, 0),
+            )
+            debridp = debrid_priority_settings.get(idx)
             if debridp is None:
                 break
             debrid_priorities[debridp] = -i
@@ -296,6 +316,14 @@ class SourceSorter:
             audiop = audio_priority_settings.get(g.get_int_setting(f"general.audiosort.{self.catalog}.{i}"))
             if audiop is None:
                 break
+            audiop = audio_priority_settings.get(
+                g.get_int_setting(
+                    f"general.audiosort.{self.catalog}.{i}",
+                    DEFAULT_AUDIOSORT.get(i, 0),
+                )
+            )
+            if audiop is None:
+                break
             audio_priorities[audiop] = -i
         self.audio_priorities = audio_priorities
 
@@ -310,7 +338,11 @@ class SourceSorter:
         }
 
         for i in range(1, 2):
-            subp = subtitle_priority_settings.get(g.get_int_setting(f"general.subtitlesort.{self.catalog}.{i}"))
+            idx = g.get_int_setting(
+                f"general.subtitlesort.{self.catalog}.{i}",
+                DEFAULT_SUBTITLESORT.get(i, 0),
+            )
+            subp = subtitle_priority_settings.get(idx)
             if subp is None:
                 break
             subtitle_priorities[subp] = -i

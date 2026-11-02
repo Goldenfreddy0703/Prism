@@ -81,6 +81,17 @@ def simkl_detail_needed(item: dict) -> bool:
     return not has_simkl_owned_metadata(info)
 
 
+def _row_cast(item: dict) -> list:
+    if not isinstance(item, dict):
+        return []
+    cast = item.get("cast")
+    if isinstance(cast, list) and cast:
+        return cast
+    blob = item.get("simkl_object") if isinstance(item.get("simkl_object"), dict) else {}
+    nested = blob.get("cast")
+    return nested if isinstance(nested, list) else []
+
+
 def simkl_detail_needed_for_episode_parent(item: dict) -> bool:
     """Parent rows for episode menus: title + poster only.
 
@@ -90,6 +101,20 @@ def simkl_detail_needed_for_episode_parent(item: dict) -> bool:
     if not isinstance(item, dict):
         return True
     return not sync_row_list_paint_ready(item)
+
+
+def simkl_detail_needed_for_episode_parent_meta(item: dict) -> bool:
+    """Poster, cast, and Simkl-owned fields. Show plot alone does not force a refetch."""
+    if not isinstance(item, dict):
+        return True
+    if simkl_detail_needed_for_episode_parent(item):
+        return True
+    if not _row_cast(item):
+        return True
+    info, _art = row_info_art(item)
+    if anime_title_slots_need_detail(info):
+        return True
+    return not has_simkl_owned_metadata(info)
 
 
 def simkl_detail_needed_reasons_for_episode_parent(item: dict) -> list[str]:

@@ -11,14 +11,16 @@ from resources.lib.modules.catalog_profiles import (
 
 def scrape_preset_cache_key() -> str:
     """Stable fragment for paint RAM keys (filter + sort profile for anime)."""
-    from resources.lib.modules.catalog_profiles import get_filters
+    from resources.lib.modules.catalog_profiles import DEFAULT_FILTERS, filters_key
     from resources.lib.modules.globals import g
 
-    filters = ",".join(sorted(get_filters("anime") or []))
+    filter_string = g.get_setting(filters_key("anime"), DEFAULT_FILTERS) or ""
+    filters = ",".join(sorted(part for part in str(filter_string).split(",") if part))
     sort_bits = []
     for level in range(1, 4):
         sort_bits.append(str(g.get_int_setting(f"sortmethod.anime.{level}", 0)))
-    return f"{filters}|{'-'.join(sort_bits)}"
+    key = f"{filters}|{'-'.join(sort_bits)}"
+    return key
 
 
 __all__ = [

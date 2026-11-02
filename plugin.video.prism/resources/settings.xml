@@ -460,6 +460,12 @@
 					<enable>false</enable>
 					<control type="toggle"/>
 				</setting>
+				<setting id="prism.simklRebuild564.pending" type="boolean" help="">
+					<level>4</level>
+					<default>false</default>
+					<enable>false</enable>
+					<control type="toggle"/>
+				</setting>
 			</group>
 			<group id="5" label="30917">
 				<setting id="general.downloadManager" type="action" label="30563" help="">
@@ -3297,20 +3303,13 @@
 				</setting>
 			</group>
 			<group id="2" label="30215">
-				<setting id="simkl.syncEpisodeWarm" type="boolean" label="31018" help="31019">
+				<setting id="simkl.warmEpisodeMenus" type="action" label="31133" help="31134">
 					<level>0</level>
-					<default>true</default>
-					<control type="toggle"/>
-				</setting>
-				<setting id="simkl.syncLibraryParentWarm" type="boolean" label="31129" help="31130">
-					<level>0</level>
-					<default>true</default>
-					<control type="toggle"/>
-				</setting>
-				<setting id="simkl.syncLibraryPageWarm" type="boolean" label="31131" help="31132">
-					<level>0</level>
-					<default>true</default>
-					<control type="toggle"/>
+					<data>RunPlugin(plugin://plugin.video.prism/?action=warmEpisodeMenus)</data>
+					<constraints>
+						<allowempty>true</allowempty>
+					</constraints>
+					<control type="button" format="action"/>
 				</setting>
 				<setting id="simkldb.flush" type="action" label="30216" help="">
 					<level>0</level>

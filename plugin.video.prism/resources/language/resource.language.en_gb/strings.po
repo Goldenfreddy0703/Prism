@@ -5837,6 +5837,26 @@ msgid "After sync, run Simkl detail prep for the first page of each watchlist bu
 msgstr "After sync, run Simkl detail prep for the first page of each watchlist bucket (Watching, Plan to Watch, etc.) for tv, anime, and movies."
 
 #: /resources/settings.xml
+msgctxt "#31133"
+msgid "Warm episode menus"
+msgstr "Warm episode menus"
+
+#: /resources/settings.xml
+msgctxt "#31134"
+msgid "Fetch episode details for TV and anime Next Up, Continue Watching, and Watched Episodes so those menus open faster. Simkl sync no longer does this automatically."
+msgstr "Fetch episode details for TV and anime Next Up, Continue Watching, and Watched Episodes so those menus open faster. Simkl sync no longer does this automatically."
+
+#: /resources/lib/simkl/episode_catalog_sync.py
+msgctxt "#31135"
+msgid "Warming episode menus"
+msgstr "Warming episode menus"
+
+#: /resources/lib/simkl/episode_catalog_sync.py
+msgctxt "#31136"
+msgid "Episode menus are ready"
+msgstr "Episode menus are ready"
+
+#: /resources/settings.xml
 msgctxt "#31050"
 msgid "Seren-style menu loading"
 msgstr "Seren-style menu loading"

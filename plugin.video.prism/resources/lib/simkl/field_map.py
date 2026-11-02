@@ -10,6 +10,37 @@ from resources.lib.discover.normalize import _int_or_none, _normalize_air_date, 
 _DISCOVER_POPULARITY_INFO_KEYS = frozenset({"watched", "plan_to_watch"})
 
 
+def real_synopsis_text(info: dict[str, Any] | None) -> str:
+    """Episode/show synopsis, ignoring the anime 'no synopsis' placeholder."""
+    if not isinstance(info, dict):
+        return ""
+    placeholder = ""
+    try:
+        from resources.lib.modules.globals import g
+
+        placeholder = g.get_language_string(31079) or ""
+    except Exception:
+        placeholder = "No episode synopsis is available at this time."
+    for key in ("plot", "overview", "description"):
+        value = info.get(key)
+        if isinstance(value, str) and value.strip() and value.strip() != placeholder.strip():
+            return value.strip()
+    return ""
+
+
+def ensure_kodi_list_plot(info: dict[str, Any]) -> None:
+    """Copy overview/description into plot before clean_info_keys (overview is not a Kodi label)."""
+    if not isinstance(info, dict):
+        return
+    text = real_synopsis_text(info)
+    if not text:
+        info.pop("plot", None)
+        info.pop("overview", None)
+        return
+    info["plot"] = text
+    info["overview"] = text
+
+
 def sanitize_list_info(info: dict[str, Any] | None, *, catalog: str | None = None) -> dict[str, Any]:
     """Strip Simkl CDN popularity metrics and mis-typed status from Kodi list info."""
     if not isinstance(info, dict):
@@ -418,7 +449,8 @@ def _youtube_trailer(trailer) -> str | None:
 
 def _collect_aliases(source: dict[str, Any]) -> list[str]:
     aliases: list[str] = []
-    for key in ("alternate_titles", "alternate_titles_en", "titles", "aka"):
+    # Simkl GET /anime/{id} uses ``alt_titles`` ({name, lang, type}); CDN rows may use other keys.
+    for key in ("alt_titles", "alternate_titles", "alternate_titles_en", "titles", "aka"):
         raw = source.get(key)
         if isinstance(raw, list):
             for entry in raw:
@@ -722,15 +754,6 @@ def anime_menu_season(episode: dict[str, Any]) -> int:
     tvdb_season, tvdb_ep = tvdb_from_episode(episode)
     if tvdb_season is not None:
         menu_season = 1 if tvdb_season == 0 else tvdb_season
-        simkl_top = _int_or_none(episode.get("season"))
-        if simkl_top is not None and simkl_top not in (0, menu_season):
-            from resources.lib.modules.globals import g
-
-            g.log(
-                "[season trace] anime_menu_season ep="
-                f"{episode.get('episode')} simkl.season={simkl_top} tvdb.season={tvdb_season} -> menu={menu_season}",
-                "debug",
-            )
         return menu_season
 
     simkl_season = _int_or_none(episode.get("season"))
@@ -788,6 +811,39 @@ def resolve_anime_watch_stub_season(
     return int(fallback_season)
 
 
+def match_anime_next_watch_raw(
+    raw_episodes: list[dict[str, Any]] | None,
+    season_num: int,
+    episode_num: int,
+    title: str | None = None,
+) -> dict[str, Any] | None:
+    """Find the episode-list row Simkl's next_to_watch title/coords refer to.
+
+    Next-watch season numbers often stay on cour 1 while the season menu uses the
+    TVDB season. The episode title is the reliable link between those two.
+    """
+    title_key = (title or "").strip().casefold()
+    if title_key:
+        for raw in raw_episodes or []:
+            if not isinstance(raw, dict):
+                continue
+            raw_title = (raw.get("title") or "").strip().casefold()
+            if raw_title and raw_title == title_key:
+                return raw
+    for raw in raw_episodes or []:
+        if not isinstance(raw, dict) or raw.get("type") == "special":
+            continue
+        raw_season = _int_or_none(raw.get("season"))
+        raw_ep = _int_or_none(raw.get("episode"))
+        if raw_ep is None:
+            raw_ep = _int_or_none(raw.get("number"))
+        if raw_season is None or raw_ep is None:
+            continue
+        if raw_season == int(season_num) and raw_ep == int(episode_num):
+            return raw
+    return None
+
+
 def enrich_episode_from_simkl_api(info: dict[str, Any], episode: dict[str, Any]) -> None:
     """Map GET /tv/episodes/{id} row onto episode info."""
     enrich_info_from_simkl(info, episode, mediatype="episode")
@@ -801,16 +857,7 @@ def enrich_episode_from_simkl_api(info: dict[str, Any], episode: dict[str, Any])
 
     season = episode.get("season")
     if season is not None:
-        prior = info.get("season")
         info["season"] = int(season)
-        if prior is not None and int(season) != int(prior):
-            from resources.lib.modules.globals import g
-
-            g.log(
-                f"[season trace] enrich_episode_from_simkl_api ep={ep_num} "
-                f"overwrote info.season {prior} -> {int(season)} (simkl top-level season)",
-                "debug",
-            )
 
     if episode.get("title"):
         info["title"] = episode.get("title")
@@ -1024,11 +1071,7 @@ def ensure_season_title(info: dict[str, Any]) -> None:
 
 
 def _info_has_synopsis(info: dict[str, Any]) -> bool:
-    for key in ("plot", "overview", "description"):
-        value = info.get(key)
-        if isinstance(value, str) and value.strip():
-            return True
-    return False
+    return bool(real_synopsis_text(info))
 
 
 def is_anime_episode_info(info: dict[str, Any]) -> bool:
@@ -1080,4 +1123,3 @@ def finalize_playback_info(info: dict[str, Any]) -> None:
     ensure_episode_title(info)
     ensure_season_title(info)
     promote_ratings_for_display(info)
-    ensure_anime_episode_plot_placeholder(info)

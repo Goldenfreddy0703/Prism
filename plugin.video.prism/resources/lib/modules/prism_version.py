@@ -12,10 +12,16 @@ def do_version_change():
     g.clear_cache(silent=True)
 
     from resources.lib.modules.release_migration import flag_migration_wipe_on_version_cross
+    from resources.lib.modules.simkl_rebuild_migration import (
+        flag_simkl_rebuild_on_version_cross,
+        maybe_run_pending_simkl_rebuild,
+    )
 
     flag_migration_wipe_on_version_cross(old_version, g.CLEAN_VERSION)
+    flag_simkl_rebuild_on_version_cross(old_version, g.CLEAN_VERSION)
 
     g.set_setting("prism.version", g.CLEAN_VERSION)
+    maybe_run_pending_simkl_rebuild()
 
     # Reuselanguageinvoker update.  This should be last to execute as it can do a profile reload.
 

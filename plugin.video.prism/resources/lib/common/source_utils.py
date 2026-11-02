@@ -613,6 +613,87 @@ def _menu_season_int(simple_info: dict) -> int | None:
     except (TypeError, ValueError):
         return None
 
+
+def _menu_episode_int(simple_info: dict) -> int | None:
+    raw = simple_info.get("episode_number")
+    if raw in (None, ""):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_anime_pack_episode_index(release_title: str, simple_info: dict) -> int | None:
+    """
+    Fansub season packs: ``[Group] Show Title 017 (BD ...)`` or ``Show Title - 03.mkv``.
+    """
+    if not simple_info.get("isanime"):
+        return None
+    cleaned = clean_title(release_title)
+    if not cleaned:
+        return None
+    haystack = f" {cleaned} "
+    for title in _show_titles_from_simple_info(simple_info):
+        for candidate in (
+            clean_title_with_simple_info(title, simple_info),
+            clean_title(title),
+        ):
+            if not candidate or len(candidate) < 2:
+                continue
+            for title_variant in _cour_episode_title_variants(candidate):
+                match = re.search(
+                    rf"(?:^|\s){re.escape(title_variant)}(?:\s|[\-\[\(])+(\d{{1,4}})(?!\d)",
+                    haystack,
+                )
+                if match:
+                    return int(match.group(1))
+    if _release_show_title_loose(release_title, simple_info):
+        dash = re.search(
+            r" - (\d{1,4})(?!\d)(?:\.(?:mkv|mp4|avi|wmv|m4v|ts|m2ts|webm|iso)|\s|\[|$)",
+            haystack,
+        )
+        if dash:
+            return int(dash.group(1))
+    return None
+
+
+def _anime_pack_index_loose_match(release_title: str, simple_info: dict) -> bool | None:
+    """
+    When a pack-style index is present after the show title, require an exact menu episode match.
+    Returns None when this rule does not apply (fall through to other matchers).
+    """
+    menu_season = _menu_season_int(simple_info)
+    menu_ep = _menu_episode_int(simple_info)
+    if not simple_info.get("isanime") or menu_season is None or menu_season <= 0 or menu_ep is None:
+        return None
+    parsed = _parse_anime_pack_episode_index(release_title, simple_info)
+    if parsed is None:
+        return None
+    return parsed == menu_ep
+
+
+def _pick_anime_pack_file_by_menu_episode(
+    dict_key: str, dictionary_list: list, simple_info: dict
+) -> dict | None:
+    """Prefer files whose anchored pack index equals the menu episode (e.g. 001 for S1E1)."""
+    menu_ep = _menu_episode_int(simple_info)
+    if menu_ep is None:
+        return None
+    matches: list[dict] = []
+    for item in dictionary_list:
+        if dict_key == "path":
+            match_title = build_torrent_match_title(item)
+        else:
+            value = item.get(dict_key, "")
+            match_title = build_torrent_match_title({"path": value}) if value else ""
+        parsed = _parse_anime_pack_episode_index(match_title, simple_info)
+        if parsed == menu_ep:
+            matches.append(item)
+    if not matches:
+        return None
+    return max(matches, key=lambda row: int(row.get("size", 0) or 0))
+
 def _torrent_episode_file_matches(match_title: str, episode_regex, simple_info: dict) -> bool:
     """Episode-only matching for files inside torrent season packs."""
     if episode_regex(match_title):
@@ -891,6 +972,9 @@ def cloud_loose_episode_match(release_title: str, simple_info: dict) -> bool:
         for _label, season, episode in _anime_cloud_coordinate_sets(simple_info):
             if _release_matches_season_episode(release_title, season, episode):
                 return True
+        index_match = _anime_pack_index_loose_match(release_title, simple_info)
+        if index_match is not None:
+            return index_match
     else:
         season = str(simple_info.get("season_number") or "")
         episode = str(simple_info.get("episode_number") or "")
@@ -911,6 +995,9 @@ def cloud_loose_episode_match(release_title: str, simple_info: dict) -> bool:
         if menu_episode and _release_matches_anime_pack_episode_token(
             release_title, menu_episode, simple_info
         ):
+            parsed = _parse_anime_pack_episode_index(release_title, simple_info)
+            if parsed is not None:
+                return parsed == _menu_episode_int(simple_info)
             return True
     if menu_season == 0:
         menu_episode = str(simple_info.get("episode_number") or "")
@@ -1371,6 +1458,12 @@ def get_best_episode_match_cloud(dict_key, dictionary_list, item_information, si
     except CannotGenerateRegexFilterException:
         return get_best_episode_match(dict_key, dictionary_list, item_information)
 
+    menu_season = _menu_season_int(simple_info)
+    if simple_info.get("isanime") and menu_season is not None and menu_season > 0:
+        indexed = _pick_anime_pack_file_by_menu_episode(dict_key, dictionary_list, simple_info)
+        if indexed is not None:
+            return indexed
+
     matches: list[tuple[int, dict, str]] = []
     for item in dictionary_list:
         if dict_key == "path":
@@ -1387,12 +1480,16 @@ def get_best_episode_match_cloud(dict_key, dictionary_list, item_information, si
     if not matches:
         return get_best_episode_match(dict_key, dictionary_list, item_information)
 
-    matches.sort(
-        key=lambda row: (
-            -row[0],
-            -int(row[1].get("size", 0) or 0),
-        )
-    )
+    menu_ep = _menu_episode_int(simple_info)
+
+    def _cloud_pick_sort_key(row: tuple[int, dict, str]) -> tuple:
+        tier, item, path_hint = row
+        parsed = _parse_anime_pack_episode_index(path_hint, simple_info)
+        exact_index = parsed is not None and menu_ep is not None and parsed == menu_ep
+        distance = abs(parsed - menu_ep) if parsed is not None and menu_ep is not None else 9999
+        return (-tier, -int(exact_index), distance, -int(item.get("size", 0) or 0))
+
+    matches.sort(key=_cloud_pick_sort_key)
     _tier, picked, _path_hint = matches[0]
     return picked
 

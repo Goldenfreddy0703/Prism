@@ -748,8 +748,10 @@ def dispatch(params):
 
     elif action == "flushSimklActivities":
         from resources.lib.database.session import get_sync_database
+        from resources.lib.indexers import ensure_simkl_authorized
 
-        get_sync_database().flush_activities()
+        if ensure_simkl_authorized():
+            get_sync_database().flush_activities()
 
     elif action == "myFiles":
         from resources.lib.gui import myFiles
@@ -773,15 +775,23 @@ def dispatch(params):
 
     elif action == "forceSimklSync":
         from resources.lib.database.session import get_sync_database
+        from resources.lib.indexers import ensure_simkl_authorized
 
-        simkl_db = get_sync_database()
-        simkl_db.flush_activities()
-        simkl_db.sync_activities(silent=False, force=True)
+        if ensure_simkl_authorized():
+            get_sync_database().sync_activities(silent=False, force=True, user_notify_complete=True)
+
+    elif action == "warmEpisodeMenus":
+        from resources.lib.database.session import get_sync_database
+        from resources.lib.simkl.episode_catalog_sync import run_episode_menu_warm
+
+        run_episode_menu_warm(get_sync_database())
 
     elif action == "rebuildSimklDatabase":
         from resources.lib.database.session import get_sync_database
+        from resources.lib.indexers import ensure_simkl_authorized
 
-        get_sync_database().re_build_database()
+        if ensure_simkl_authorized():
+            get_sync_database().re_build_database()
 
     elif action == "cleanOrphanedMetadata":
         from resources.lib.database.session import get_sync_database

@@ -1199,12 +1199,12 @@ def _page_sync_for_parent_show_refs(
     """Resolve parent SyncRows from catalog_items, upgrading thin rows from scoped show DB."""
     from resources.lib.discover.catalog_store import sync_items_for_refs
     from resources.lib.database.simkl_sync.serial_access import fetch_show_rows_by_ids
-    from resources.lib.simkl.detail_gates import simkl_detail_needed_for_episode_parent
+    from resources.lib.simkl.detail_gates import simkl_detail_needed_for_episode_parent_meta
 
     if not refs:
         return []
 
-    parent_gate = simkl_detail_needed_for_episode_parent
+    parent_gate = simkl_detail_needed_for_episode_parent_meta
     page_sync = sync_items_for_refs(catalog, refs)
     by_id: dict[int, dict] = {}
     for item in page_sync:
@@ -1257,9 +1257,10 @@ def prepare_episode_parent_shows_for_paint(
     """
     from resources.lib.simkl.detail_gates import (
         simkl_detail_needed,
-        simkl_detail_needed_for_episode_parent,
+        simkl_detail_needed_for_episode_parent_meta,
         simkl_detail_needed_reasons,
         simkl_detail_needed_reasons_for_episode_parent,
+        sync_row_list_paint_ready,
     )
     from resources.lib.simkl.enrich import enrich_sync_items_persisted, prepare_page_sync_for_paint
 
@@ -1273,7 +1274,7 @@ def prepare_episode_parent_shows_for_paint(
     if not page_sync:
         return {"refs": len(refs), "detail_before": len(refs), "detail_after": len(refs)}
 
-    parent_gate = simkl_detail_needed_for_episode_parent
+    parent_gate = simkl_detail_needed_for_episode_parent_meta
     detail_before = sum(1 for item in page_sync if parent_gate(item))
     page_sync = prepare_page_sync_for_paint(
         catalog,
@@ -1285,8 +1286,14 @@ def prepare_episode_parent_shows_for_paint(
     detail_after = sum(1 for item in page_sync if parent_gate(item))
 
     if detail_after > 0:
-        needing = [item for item in page_sync if parent_gate(item)]
-        enriched = enrich_sync_items_persisted(catalog, needing, force_detail=True)
+        # A poster and title means warmup already stored this show. Forcing
+        # detail again refetches the whole watching list on every menu open.
+        needing = [
+            item
+            for item in page_sync
+            if isinstance(item, dict) and parent_gate(item) and not sync_row_list_paint_ready(item)
+        ]
+        enriched = enrich_sync_items_persisted(catalog, needing, force_detail=True) if needing else []
         by_id = {
             int(row["simkl_id"]): row
             for row in enriched
@@ -1533,6 +1540,57 @@ def merge_episode_playback_overlay(rows: list[dict], seed_rows: list[dict]) -> l
     return merged
 
 
+def prepare_episode_menu_rows(catalog: str, rows: list[dict], db) -> list[dict]:
+    """Merge episode_meta plot into list rows; avoid display-ready fast path without plot."""
+    if not rows:
+        return rows
+    from resources.lib.database.sync_meta_cache import row_has_plot_meta
+    from resources.lib.meta.paint_cache import coalesce_page_rows_paint_info
+
+    rows = coalesce_page_rows_paint_info(catalog, rows)
+    rows = db.hydrate_mixed_episode_rows_for_paint(rows)
+    prepared: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            prepared.append(row)
+            continue
+        item = dict(row)
+        info = item.get("info")
+        if isinstance(info, dict):
+            from resources.lib.simkl.field_map import ensure_kodi_list_plot
+
+            ensure_kodi_list_plot(info)
+            item["info"] = info
+        if row_has_plot_meta(item):
+            item["_menu_display_ready"] = True
+        else:
+            item.pop("_menu_display_ready", None)
+        prepared.append(item)
+    return prepared
+
+
+_EPISODE_PLOT_REFRESH_TRIED: set[tuple[int, ...]] = set()
+
+
+def _episode_page_has_parent_art(rows: list[dict]) -> bool:
+    """True when episode rows already carry a show poster (not the Prism placeholder)."""
+    checked = 0
+    with_art = 0
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        art = row.get("art") if isinstance(row.get("art"), dict) else {}
+        poster = art.get("poster") or art.get("tvshow.poster") or art.get("thumb")
+        if not poster:
+            continue
+        checked += 1
+        if "poster-prism" not in str(poster):
+            with_art += 1
+        if checked >= 5:
+            break
+    return with_art > 0
+
+
 def render_catalog_episodes(
     catalog: str,
     episode_rows: list[dict],
@@ -1572,30 +1630,104 @@ def render_catalog_episodes(
         library_paint=library_paint,
     )
 
-    cached_rows = peek_episode_page_cache(
+    menu_action = str(
+        list_kwargs.get("menu_action") or g.REQUEST_PARAMS.get("action") or "episodes"
+    )
+    page_num = 1 if list_kwargs.get("no_paging") else max(1, int(g.PAGE or 1))
+    from resources.lib.meta.list_window_cache import (
+        episode_page_window_disk_key,
+        get_episode_page_window_items,
+        set_episode_page_window_items,
+    )
+
+    episode_window_key = episode_page_window_disk_key(
         catalog,
         visible_rows,
         paint_profile=paint_profile,
+        menu_action=menu_action,
+        page=page_num,
     )
 
     db = get_sync_database()
     filter_params = list_builder._apply_list_filters(dict(list_kwargs))
-    if cached_rows is not None:
-        list_kwargs["preloaded_episode_rows"] = merge_episode_playback_overlay(cached_rows, visible_rows)
+    episode_cache_source = ""
+    window_rows = get_episode_page_window_items(episode_window_key)
+    if window_rows is not None and not _episode_page_has_parent_art(window_rows):
+        window_rows = None
+    if window_rows is not None:
+        episode_cache_source = "window"
+        list_kwargs["preloaded_episode_rows"] = window_rows
     else:
-        upsert_episode_parent_shows(visible_rows, catalog)
-        if library_paint:
-            prefetch_episode_parent_simkl_detail(visible_rows, catalog)
-        list_kwargs = attach_preloaded_episode_paint(
+        cached_rows = peek_episode_page_cache(
             catalog,
             visible_rows,
-            list_kwargs,
-            db,
-            filter_params=filter_params,
+            paint_profile=paint_profile,
         )
-        preloaded = list_kwargs.get("preloaded_episode_rows")
-        if preloaded is not None:
-            list_kwargs["preloaded_episode_rows"] = merge_episode_playback_overlay(preloaded, visible_rows)
+        if cached_rows is not None and not _episode_page_has_parent_art(cached_rows):
+            cached_rows = None
+        if cached_rows is not None:
+            episode_cache_source = "session"
+            list_kwargs["preloaded_episode_rows"] = cached_rows
+        else:
+            upsert_episode_parent_shows(visible_rows, catalog)
+            if library_paint:
+                prefetch_episode_parent_simkl_detail(visible_rows, catalog)
+            list_kwargs = attach_preloaded_episode_paint(
+                catalog,
+                visible_rows,
+                list_kwargs,
+                db,
+                filter_params=filter_params,
+            )
+            if list_kwargs.get("preloaded_episode_rows") is not None:
+                episode_cache_source = "resolve"
+
+    preloaded = list_kwargs.get("preloaded_episode_rows")
+    if preloaded is not None:
+        merged = merge_episode_playback_overlay(preloaded, visible_rows)
+        from resources.lib.database.sync_meta_cache import row_has_plot_meta
+
+        missing_plot = [
+            row for row in merged if isinstance(row, dict) and not row_has_plot_meta(row)
+        ]
+        unfetched_plots = []
+        for row in missing_plot:
+            info = row.get("info") if isinstance(row.get("info"), dict) else {}
+            if info.get("title") or row.get("title"):
+                continue
+            unfetched_plots.append(row)
+        if unfetched_plots:
+            try_key = tuple(episode_row_simkl_ids(unfetched_plots))
+            refreshed = 0
+            if try_key and try_key not in _EPISODE_PLOT_REFRESH_TRIED:
+                _EPISODE_PLOT_REFRESH_TRIED.add(try_key)
+                from resources.lib.database.simkl_sync.milling import refresh_listed_episodes_from_simkl
+
+                refreshed = refresh_listed_episodes_from_simkl(db, unfetched_plots)
+                reloaded = db.get_mixed_episode_list(
+                    visible_rows,
+                    **{**filter_params, "skip_update": True, "skip_mill": True},
+                )
+                if reloaded:
+                    merged = merge_episode_playback_overlay(reloaded, visible_rows)
+                    if list_kwargs.get("overlay_parent_shows"):
+                        merged = overlay_mixed_episode_parent_context(merged)
+                        merged = _finalize_episode_paint_rows(merged, catalog)
+                    episode_cache_source = f"{episode_cache_source or 'resolve'}+plot"
+            g.log(
+                f"Episode plot refresh: missing={len(missing_plot)} refreshed={refreshed} "
+                f"action={menu_action}",
+                "debug",
+            )
+        prepared = prepare_episode_menu_rows(catalog, merged, db)
+        list_kwargs["preloaded_episode_rows"] = prepared
+        g.log(
+            f"Episode page paint: path={episode_cache_source or 'unknown'} action={menu_action} "
+            f"catalog={catalog} rows={len(prepared)} page={page_num}",
+            "debug",
+        )
+        if episode_cache_source != "window" and g.kodi_menu_caching_enabled():
+            set_episode_page_window_items(episode_window_key, prepared)
 
     from resources.lib.meta.list_pipeline import resolve_list_flags
 
@@ -2071,7 +2203,7 @@ def load_show_menu_context(simkl_show_id: int) -> dict[str, Any] | None:
 
     cache_key = (sid, g.get_int_setting("general.anime.titlelanguage"))
     cached_ctx = _SHOW_MENU_CTX_CACHE.get(cache_key)
-    if cached_ctx is not None:
+    if cached_ctx is not None and not _show_menu_context_sparse(cached_ctx):
         return cached_ctx
 
     from resources.lib.database.sync_meta_cache import row_has_display_meta
@@ -2308,13 +2440,14 @@ def _overlay_episode_row_fast(
         if not info.get("year") and show_info.get("year"):
             info["year"] = show_info.get("year")
         _fill_missing_display_fields(info, show_info, episode_safe=True)
-    if season_info and not info.get("simkl_season_id"):
-        info["simkl_season_id"] = season_info.get("simkl_id")
+    if season_info and season_info.get("season") is not None and info.get("season") is None:
+        info["season"] = season_info.get("season")
 
     merged = {"info": info, "art": art, "cast": list(item.get("cast") or [])}
     from resources.lib.modules.metadataHandler import MetadataHandler
 
     MetadataHandler._show_season_art_fallback(merged, season_art, show_art)
+    MetadataHandler._add_season_show_info(merged, season_info, show_info)
     MetadataHandler._add_season_show_art(merged, season_art, show_art)
     MetadataHandler._add_season_show_cast(merged, season_cast, show_cast)
     _apply_parent_show_episode_thumb(merged)
