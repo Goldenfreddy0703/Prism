@@ -1,11 +1,5 @@
-Prism 5.0.64 — Simkl library, season identity, anime packs
+Prism 5.0.65 — Simkl library deadlock (#31)
 
-Simkl library menus cache Watching / Plan pages for instant back-in (#31). Force Simkl Sync shows a completion toast and runs a full activity pass when forced.
+Fixes ``DeadlockError`` on ``resources.lib.net.sync_bridge`` when opening Simkl library lists (especially My Anime → Watching / On Hold / Dropped) under concurrent plugin threads. The ``net`` package now lazy-loads ``sync_bridge`` and related exports instead of importing them at startup.
 
-Episode lists (Next Up, Continue Watching, Watched) reuse painted pages via Kodi window cache on re-open. Post-sync warm scope is tighter (page-sized parent refresh).
-
-Season folders use show Simkl id + season number (Seren-style), with a composite ``simklSync.db`` schema. Updating from below 5.0.64 rebuilds the Simkl library database automatically on first start, then re-syncs from Simkl.
-
-Source sorting restores per-catalog Source Type → Resolution → Size defaults. Anime season packs (#26): correct auto-pick for numbered packs (Black Clover, Anime Time Komi) using pack index + Simkl alt title synonyms.
-
-Enable General menu caching for library window cache. Debug: Episode page paint: path=window; Simkl 5.0.64: rebuilding simklSync.db after upgrade.
+Includes all 5.0.64 changes if you skipped that release: library menu window cache, season identity / simklSync schema, anime pack auto-pick (#26), and related sync improvements.

@@ -1,3 +1,6 @@
+Changelog 5.0.65
+[BUG] Simkl library lists (#31) — lazy ``resources.lib.net`` package exports (``sync_bridge`` / ``request_policy``) to avoid ``DeadlockError`` when opening library menus under concurrent plugin threads (anime Watching / On Hold / Dropped)
+
 Changelog 5.0.64
 [BUG] Simkl library menus (#31) — materialized Watching/Plan/etc. pages persist in Kodi window cache across folder re-opens (Seren/POV-style instant back-in); skip repeat materialize when sync DB rows are already menu-ready
 [BUG] Force Simkl Sync — toast "Simkl sync complete" when finished from settings; runs full activity sync when forced (lean delta when library unchanged on Simkl)
