@@ -283,6 +283,7 @@ class SimklSyncDatabase(Database):
             g.set_runtime_setting("simkl_sync.migrations.done", True)
 
         self._migrate_movie_history_cleared_column()
+        self._migrate_movie_watch_state_repair()
         self._migrate_local_playback_at_columns()
 
         # Heavy migrations touch display_meta + bulk SQL — run from service only.
@@ -361,6 +362,118 @@ class SimklSyncDatabase(Database):
             pending.append(batch)
         else:
             self._pending_list_enrichment = [pending, batch]
+
+    @staticmethod
+    def _prepare_sync_update_row(row: dict, *, entity: str) -> dict:
+        """Attach denormalized entity fields for MetadataHandler.update / noop checks."""
+        row["_entity"] = entity
+        info = row.get("info") if isinstance(row.get("info"), dict) else {}
+        art = row.get("art") if isinstance(row.get("art"), dict) else {}
+        cast = row.get("cast")
+        row["info"] = info
+        info.setdefault("mediatype", "movie" if entity == "movie" else "tvshow")
+        if row.get("simkl_id") is not None and not info.get("simkl_id"):
+            info["simkl_id"] = row.get("simkl_id")
+        if row.get("catalog") in ("movie", "tv", "anime") and not info.get("catalog"):
+            info["catalog"] = row["catalog"]
+        if art:
+            row["art"] = art
+        if isinstance(cast, list):
+            row["cast"] = cast
+        from resources.lib.meta.provider_settings import external_ids_from_row
+
+        for key, value in external_ids_from_row(row).items():
+            if value and not row.get(key):
+                row[key] = value
+        if not row.get("simkl_object"):
+            row["simkl_object"] = {
+                "info": dict(info),
+                "art": dict(art),
+                "cast": cast if isinstance(cast, list) else [],
+            }
+        return row
+
+    def _prefetch_imdb_cast(self, rows: list) -> None:
+        """One IMDb cast request for the page. Workers must not call GraphQL per title."""
+        from resources.lib.indexers.imdb import thread_imdb_api
+        from resources.lib.meta.provider_settings import external_ids_from_row, provider_enabled
+        from resources.lib.simkl.field_map import _normalize_imdb_id
+
+        if not rows:
+            return
+        if not provider_enabled("imdb"):
+            for row in rows:
+                if isinstance(row, dict):
+                    row["_imdb_cast_batched"] = True
+            return
+        id_to_rows: dict[str, list[dict]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row["_imdb_cast_batched"] = True
+            cast = row.get("cast")
+            if isinstance(cast, list) and cast:
+                continue
+            if isinstance(row.get("imdb_object"), dict):
+                continue
+            imdb_id = _normalize_imdb_id(external_ids_from_row(row).get("imdb_id") or row.get("imdb_id"))
+            if not imdb_id:
+                continue
+            id_to_rows.setdefault(imdb_id, []).append(row)
+        if not id_to_rows:
+            return
+        cast_map = thread_imdb_api().get_cast_batch(list(id_to_rows)) or {}
+        for imdb_id, group in id_to_rows.items():
+            cast = cast_map.get(imdb_id) or []
+            for row in group:
+                row["imdb_object"] = {"cast": cast}
+                if cast:
+                    self.metadataHandler._merge_imdb_cast(row, cast)
+
+    def _prefetch_anilist_cast(self, rows: list) -> None:
+        """One AniList cast request for the page. Workers must not call GraphQL per title."""
+        from resources.lib.indexers.anilist import get_cast_batch_for_pending
+        from resources.lib.meta.artwork import PROFILE_ANIME_MOVIE, PROFILE_ANIME_SERIES, artwork_profile_for_row
+        from resources.lib.meta.provider_settings import external_ids_from_row, provider_enabled
+
+        if not rows:
+            return
+        if not provider_enabled("anilist"):
+            for row in rows:
+                if isinstance(row, dict):
+                    row["_anilist_cast_batched"] = True
+            return
+        queue: list[tuple] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            info = row.get("info") if isinstance(row.get("info"), dict) else {}
+            profile = artwork_profile_for_row(row, info.get("mediatype") or "tvshow")
+            if profile not in (PROFILE_ANIME_SERIES, PROFILE_ANIME_MOVIE) and info.get("catalog") != "anime":
+                continue
+            row["_anilist_cast_batched"] = True
+            cast = row.get("cast")
+            if isinstance(cast, list) and cast:
+                continue
+            if isinstance(row.get("anilist_object"), dict):
+                continue
+            ids = external_ids_from_row(row)
+            mal_id = self.metadataHandler._coerce_int_id(ids.get("mal_id"))
+            anilist_id = self.metadataHandler._coerce_int_id(ids.get("anilist_id"))
+            simkl_id = self.metadataHandler._coerce_int_id(row.get("simkl_id") or info.get("simkl_id"))
+            if simkl_id is None or (mal_id is None and anilist_id is None):
+                continue
+            queue.append((simkl_id, row, mal_id, anilist_id))
+        if not queue:
+            return
+        resolved = get_cast_batch_for_pending(queue) or {}
+        for simkl_id, row, _mal_id, _anilist_id in queue:
+            payload = resolved.get(int(simkl_id))
+            if not isinstance(payload, dict):
+                payload = {"cast": []}
+            payload.setdefault("cast", [])
+            row["anilist_object"] = payload
+            self.metadataHandler._merge_anilist_cast(row, payload)
 
     @cached_property
     def metadataHandler(self):
@@ -1097,6 +1210,39 @@ class SimklSyncDatabase(Database):
             "info",
         )
 
+    def _migrate_movie_watch_state_repair(self) -> None:
+        """Restore movies.watched for completed Simkl movies cleared by metadata upserts."""
+        flag = "movie_watch_state_repair_v1"
+        if g.get_bool_runtime_setting(flag):
+            return
+
+        before = self.fetchone(
+            "SELECT COUNT(*) AS c FROM movies WHERE COALESCE(watched, 0) > 0"
+        )
+        before_count = int((before or {}).get("c") or 0)
+
+        self.execute_sql(
+            """
+            UPDATE movies
+            SET watched = 1
+            WHERE COALESCE(watched, 0) = 0
+              AND COALESCE(history_cleared, 0) = 0
+              AND COALESCE(simkl_status, '') = 'completed'
+            """
+        )
+
+        after = self.fetchone(
+            "SELECT COUNT(*) AS c FROM movies WHERE COALESCE(watched, 0) > 0"
+        )
+        after_count = int((after or {}).get("c") or 0)
+
+        g.set_runtime_setting(flag, True)
+        g.log(
+            f"SimklSync: movie watch-state repair complete "
+            f"({before_count} -> {after_count} watched movie rows)",
+            "info",
+        )
+
     def sync_show_watch_state_from_entries(self, entries, shows) -> None:
         """Apply Simkl per-episode flags, progress fallback, counters, and completed overrides."""
         episode_entries = [
@@ -1398,6 +1544,9 @@ class SimklSyncDatabase(Database):
         elif provider_type == "imdb":
             obj = MetadataHandler.imdb_object
             meta_hash = "imdb_v1"
+        elif provider_type == "anilist":
+            obj = lambda item: item.get("anilist_object") if isinstance(item, dict) else None
+            meta_hash = "anilist_v1"
 
         if obj is None or meta_hash is None:
             raise UnsupportedProviderType(provider_type)
@@ -1409,7 +1558,19 @@ class SimklSyncDatabase(Database):
 
         meta_rows: list[tuple] = []
         for i in items:
-            if not (i and obj(i) and i.get(id_column) and meta_ok(meta_type, obj(i))):
+            provider_obj = obj(i) if i else None
+            savable = False
+            if provider_obj:
+                if provider_type == "anilist":
+                    savable = isinstance(provider_obj, dict) and isinstance(provider_obj.get("cast"), list)
+                elif provider_type == "fanart":
+                    fanart_art = provider_obj.get("art") if isinstance(provider_obj.get("art"), dict) else {}
+                    savable = bool(fanart_art.get("clearlogo")) or MetadataHandler.full_meta_up_to_par(
+                        media_hint, provider_obj
+                    )
+                else:
+                    savable = meta_ok(meta_type, provider_obj)
+            if not (i and provider_obj and i.get(id_column) and savable):
                 continue
             lookup_id = (
                 self._meta_table_lookup_id(provider_type, i.get(id_column))
@@ -1563,6 +1724,15 @@ class SimklSyncDatabase(Database):
     def clean_meta(item, *, provider_type=None, media_type=None):
         if not item:
             return None
+
+        if provider_type == "anilist":
+            cast = item.get("cast")
+            if not isinstance(cast, list):
+                return None
+            cleaned = {"cast": cast}
+            if item.get("studio"):
+                cleaned["studio"] = item.get("studio")
+            return cleaned
 
         from resources.lib.meta.storage import slim_provider_blob
 
@@ -4727,7 +4897,7 @@ class SimklSyncDatabase(Database):
                          last_updated, tmdb_id, tvdb_id, imdb_id, meta_hash, args,
                          last_watched_at, user_rating, simkl_status,
                          needs_update
-                    ) AS (values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE))
+                    ) AS (values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE))
                 INSERT
                 INTO movies(simkl_id, info, art, cast, watched, air_date,
                             last_updated, tmdb_id, tvdb_id, imdb_id, meta_hash, args,
@@ -4770,18 +4940,8 @@ class SimklSyncDatabase(Database):
                                                     coalesce(new.user_rating, old.user_rating),
                                                     coalesce(new.simkl_status, old.simkl_status),
                                                     CASE
-                                                        WHEN old.needs_update
-                                                            THEN CASE
-                                                                     WHEN new.info <> old.info
-                                                                         OR new.art <> old.art
-                                                                         OR new.cast <> old.cast
-                                                                         THEN TRUE
-                                                                     ELSE old.needs_update END
-                                                        ELSE CASE
-                                                                 WHEN Datetime(coalesce(old.last_updated, 0))
-                                                                     < Datetime(new.last_updated)
-                                                                     THEN TRUE
-                                                                 ELSE FALSE END
+                                                        WHEN new.info IS NOT NULL THEN FALSE
+                                                        ELSE coalesce(old.needs_update, FALSE)
                                                         END AS needs_update
                                              FROM new
                                                       LEFT JOIN movies AS old
@@ -4797,7 +4957,7 @@ class SimklSyncDatabase(Database):
                      args, is_airing,
                      last_watched_at, user_rating, simkl_status, catalog,
                      needs_update, needs_milling)
-                     AS (VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, TRUE))
+                     AS (VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, TRUE))
             INSERT
             INTO shows(simkl_id, info, art, cast, air_date, last_updated,
                        tmdb_id, tvdb_id, imdb_id, meta_hash,
@@ -4854,18 +5014,8 @@ class SimklSyncDatabase(Database):
                                                  coalesce(new.simkl_status, old.simkl_status),
                                                  coalesce(old.catalog, new.catalog),
                                                  CASE
-                                                     WHEN old.needs_update
-                                                         THEN CASE
-                                                                  WHEN new.info <> old.info
-                                                                      OR new.art <> old.art
-                                                                      OR new.cast <> old.cast
-                                                                      THEN FALSE
-                                                                  ELSE old.needs_update END
-                                                     ELSE CASE
-                                                              WHEN Datetime(coalesce(old.last_updated, 0))
-                                                                  < Datetime(new.last_updated)
-                                                                  THEN TRUE
-                                                              ELSE FALSE END
+                                                     WHEN new.info IS NOT NULL THEN FALSE
+                                                     ELSE coalesce(old.needs_update, FALSE)
                                                      END AS needs_update,
                                                  CASE
                                                      WHEN old.needs_milling THEN old.needs_milling

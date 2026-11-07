@@ -104,6 +104,31 @@ def overlay_bookmark_fields(resolved: list[dict], sql_rows: list[dict]) -> list[
     return out
 
 
+def resolve_browse_page_rows(
+    catalog: str,
+    thin_rows: list[dict],
+    *,
+    profile: str,
+    source: str = "",
+    sql_rows: list[dict] | None = None,
+) -> list[dict]:
+    """Seren sync warmup for legacy resolve callers."""
+    from resources.lib.meta.paint_cache import coalesce_page_rows_paint_info
+    from resources.lib.pipeline.sync_page_warmup import warmup_sync_page_refs
+    from resources.lib.simkl.enrich import hydrate_sync_items_local
+
+    rows = _normalize_thin_items(catalog, thin_rows)
+    if not rows:
+        return []
+    refs = [{"simkl_id": row.get("simkl_id")} for row in rows if isinstance(row, dict) and row.get("simkl_id")]
+    warmup_sync_page_refs(catalog, refs)
+    rows = hydrate_sync_items_local(rows)
+    rows = coalesce_page_rows_paint_info(catalog, rows)
+    if sql_rows:
+        rows = overlay_bookmark_fields(rows, sql_rows)
+    return rows
+
+
 def resolve_mixed_browse_rows(
     sync_items: list[dict],
     *,
@@ -111,9 +136,10 @@ def resolve_mixed_browse_rows(
     source: str = "",
     sql_rows: list[dict] | None = None,
 ) -> list[dict]:
-    """Resolve mixed movie/tv/anime browse pages (actor filmography)."""
+    from resources.lib.pipeline.sync_page_warmup import warmup_sync_mixed_refs
     from resources.lib.simkl.media_ref import partition_by_catalog
 
+    warmup_sync_mixed_refs(sync_items)
     movies, tv, anime = partition_by_catalog(sync_items)
     by_id: dict[int, dict] = {}
     for catalog, group in (("movie", movies), ("tv", tv), ("anime", anime)):
@@ -254,79 +280,6 @@ def try_resolve_mixed_stamp_fast(
     return ordered, "browse_stamp"
 
 
-def resolve_browse_page_rows(
-    catalog: str,
-    thin_rows: list[dict],
-    *,
-    profile: str,
-    source: str = "",
-    sql_rows: list[dict] | None = None,
-) -> list[dict]:
-    """Cache-first page resolve for catalog browse (no seed_browse_page)."""
-    from resources.lib.meta.paint_cache import (
-        coalesce_page_rows_paint_info,
-        overlay_display_meta_stamps,
-        overlay_stamped_display_meta_page,
-    )
-    from resources.lib.simkl.enrich import _enrich_items, hydrate_sync_items_local
-
-    if g.PLUGIN_HANDLE > 0:
-        from resources.lib.net.request_policy import policy_from_settings
-
-        policy_from_settings().reset_menu_budget()
-
-    started = time.time()
-    rows = _normalize_thin_items(catalog, thin_rows)
-    if not rows:
-        return []
-
-    paint_profile = profile or _paint_profile_for_payload(source, catalog)
-
-    local_started = time.time()
-    rows = hydrate_sync_items_local(rows)
-    local_ms = int((time.time() - local_started) * 1000)
-
-    cdn_lookup_started = time.time()
-    rows = merge_discover_gaps_batch(catalog, rows)
-    cdn_lookup_ms = int((time.time() - cdn_lookup_started) * 1000)
-
-    needs_detail, _ready = _partition_needs_detail(rows)
-    detail_count = len(needs_detail)
-
-    detail_started = time.time()
-    if needs_detail:
-        parallel = len(needs_detail) > 1
-        enriched = _enrich_items(needs_detail, parallel=parallel, force_detail=True)
-        rows = _merge_enriched_by_id(rows, enriched)
-    detail_ms = int((time.time() - detail_started) * 1000)
-
-    provider_started = time.time()
-    rows, provider_stats = _merge_provider_gaps(catalog, rows, profile=paint_profile)
-    provider_ms = int((time.time() - provider_started) * 1000)
-
-    rows = coalesce_page_rows_paint_info(catalog, rows)
-    rows = overlay_stamped_display_meta_page(catalog, rows)
-    rows = overlay_display_meta_stamps(rows)
-    rows = coalesce_page_rows_paint_info(catalog, rows)
-
-    if sql_rows:
-        rows = overlay_bookmark_fields(rows, sql_rows)
-
-    total_ms = int((time.time() - started) * 1000)
-    rows_complete = int(provider_stats.get("complete", 0))
-    rows_fetched = len(rows)
-
-    g.log(
-        f"Browse resolve: source={source} catalog={catalog} profile={paint_profile} "
-        f"rows={rows_fetched} detail={detail_count} rows_complete={rows_complete} "
-        f"local_ms={local_ms} cdn_lookup_ms={cdn_lookup_ms} detail_ms={detail_ms} provider_ms={provider_ms} "
-        f"cast_batch={provider_stats.get('cast_batch')} art_fetch={provider_stats.get('art_fetch')} "
-        f"total_ms={total_ms}",
-        "debug",
-    )
-    return rows
-
-
 def prefetch_resolved_page_rows(
     catalog: str,
     thin_rows: list[dict],
@@ -337,14 +290,14 @@ def prefetch_resolved_page_rows(
     source: str,
     namespace: str,
 ) -> list[dict]:
-    """Background prefetch: resolve page and store in PaginatedListStore RAM."""
-    resolved = resolve_browse_page_rows(
-        catalog,
-        thin_rows,
-        profile=profile,
-        source=source,
-    )
-    from resources.lib.meta.list_pipeline import _page_list_id, get_list_store
+    """Background prefetch: Seren sync update for the next page."""
+    from resources.lib.pipeline.sync_page_warmup import warmup_sync_page_refs
 
+    refs = [{"simkl_id": row.get("simkl_id")} for row in (thin_rows or []) if isinstance(row, dict)]
+    warmup_sync_page_refs(catalog, refs)
+    from resources.lib.meta.list_pipeline import _page_list_id, get_list_store
+    from resources.lib.simkl.media_ref import sync_db_rows_for_refs
+
+    resolved = sync_db_rows_for_refs(catalog, refs)
     get_list_store(namespace).remember_items(catalog, _page_list_id(list_id, page), resolved)
     return resolved

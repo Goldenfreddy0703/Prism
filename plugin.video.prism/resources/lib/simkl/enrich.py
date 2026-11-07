@@ -515,8 +515,18 @@ def _fetch_simkl_detail(item: dict, *, force: bool = False) -> dict:
 
     simkl_id = item.get("simkl_id")
     catalog = item.get("catalog")
+    info = item.get("info") if isinstance(item.get("info"), dict) else {}
+    if catalog not in ("movie", "tv", "anime"):
+        catalog = info.get("catalog")
+    if catalog not in ("movie", "tv", "anime"):
+        mediatype = str(info.get("mediatype") or "").lower()
+        if mediatype == "movie":
+            catalog = "movie"
+        elif mediatype in ("tvshow", "show", "episode", "season"):
+            catalog = "tv"
     if simkl_id is None or catalog not in ("movie", "tv", "anime"):
         return item
+    item["catalog"] = catalog
 
     from resources.lib.simkl.api_normalize import api_detail_to_sync_dict
     from resources.lib.simkl.catalog import resolve_item_catalog

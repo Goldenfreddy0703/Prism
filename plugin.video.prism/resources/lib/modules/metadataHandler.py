@@ -126,6 +126,8 @@ class MetadataHandler:
                 self.fanarttv_api.fanart_support,
                 self._provider_enabled("tmdb"),
                 self._provider_enabled("tvdb"),
+                self._provider_enabled("imdb"),
+                self._provider_enabled("anilist"),
                 self._fanart_art_usable(),
             ]
         )
@@ -156,6 +158,8 @@ class MetadataHandler:
 
     # region format art
     def format_db_object(self, db_object):
+        if not db_object:
+            return []
         return [self.format_meta(i) for i in db_object]
 
     def format_meta(self, db_object):
@@ -692,11 +696,16 @@ class MetadataHandler:
             return None
         if not (self._fanart_needs_update(db_object) or self._force_update(db_object)):
             return None
+        from resources.lib.meta.provider_settings import external_ids_from_row
+
+        ids = external_ids_from_row(db_object)
         patch = {}
-        if self._tmdb_id_valid(db_object):
-            tools.smart_merge_dictionary(patch, self.fanarttv_api.get_movie(db_object.get("tmdb_id")))
-        if self._imdb_id_valid(db_object) and self._fanart_needs_update(db_object):
-            tools.smart_merge_dictionary(patch, self.fanarttv_api.get_movie(db_object.get("imdb_id")))
+        tmdb_id = db_object.get("tmdb_id") or ids.get("tmdb_id")
+        imdb_id = db_object.get("imdb_id") or ids.get("imdb_id")
+        if tmdb_id:
+            tools.smart_merge_dictionary(patch, self.fanarttv_api.get_movie(tmdb_id))
+        if imdb_id and self._fanart_needs_update(db_object) and not patch.get("fanart_object"):
+            tools.smart_merge_dictionary(patch, self.fanarttv_api.get_movie(imdb_id))
         return patch or None
 
     def _fetch_tvshow_fanart_patch(self, db_object):
@@ -705,6 +714,11 @@ class MetadataHandler:
             return None
         if not (self._fanart_needs_update(db_object) or self._force_update(db_object)):
             return None
+        from resources.lib.meta.provider_settings import external_ids_from_row
+
+        ids = external_ids_from_row(db_object)
+        if ids.get("tvdb_id") and not db_object.get("tvdb_id"):
+            db_object["tvdb_id"] = ids["tvdb_id"]
         if not self._tvdb_id_valid(db_object):
             return None
         return self.fanarttv_api.get_show(db_object.get("tvdb_id"))
@@ -764,23 +778,16 @@ class MetadataHandler:
         preferred = self._preferred_art_source_for_db_object(db_object)
         if preferred == ART_SIMKL:
             return
-        if preferred == ART_FANART and not self._fanart_art_meta_up_to_par("movie", db_object):
-            if self._provider_enabled("tmdb") and self._tmdb_id_valid(db_object):
-                self._merge_tmdb_movie_art(db_object)
-            elif self._provider_enabled("tvdb") and self._tvdb_id_valid(db_object):
-                self._merge_tvdb_movie_art(db_object)
+        if preferred == ART_FANART and not self._has_list_poster(db_object):
+            self._merge_tmdb_movie_bundle(db_object)
             return
-        if preferred == ART_TMDB and not self._tmdb_art_meta_up_to_par("movie", db_object):
+        if preferred == ART_TMDB and not self._has_list_poster(db_object):
             if self._provider_enabled("tvdb") and self._tvdb_id_valid(db_object):
                 self._merge_tvdb_movie_art(db_object)
-            elif self._fanart_art_usable() and self.fanarttv_api.fanart_support:
-                tools.smart_merge_dictionary(db_object, self._fetch_movie_fanart_patch(db_object) or {})
             return
-        if preferred == ART_TVDB and not self._tvdb_art_meta_up_to_par("movie", db_object):
-            if self._provider_enabled("tmdb") and self._tmdb_id_valid(db_object):
-                self._merge_tmdb_movie_art(db_object)
-            elif self._fanart_art_usable() and self.fanarttv_api.fanart_support:
-                tools.smart_merge_dictionary(db_object, self._fetch_movie_fanart_patch(db_object) or {})
+        if preferred == ART_TVDB and not self._has_list_poster(db_object):
+            self._merge_tmdb_movie_bundle(db_object)
+            return
 
     def _update_tvshow_art_fallback(self, db_object):
         from resources.lib.meta.provider_settings import ART_FANART, ART_SIMKL, ART_TMDB, ART_TVDB
@@ -788,23 +795,29 @@ class MetadataHandler:
         preferred = self._preferred_art_source_for_db_object(db_object)
         if preferred == ART_SIMKL:
             return
-        if preferred == ART_FANART and not self._fanart_art_meta_up_to_par("tvshow", db_object):
-            if self._provider_enabled("tmdb") and self._tmdb_id_valid(db_object):
-                self._merge_tmdb_tvshow_art(db_object)
-            elif self._provider_enabled("tvdb") and self._tvdb_id_valid(db_object):
-                self._merge_tvdb_tvshow_art(db_object)
+        if preferred == ART_FANART and not self._has_list_poster(db_object):
+            self._merge_tmdb_tvshow_bundle(db_object)
             return
-        if preferred == ART_TMDB and not self._tmdb_art_meta_up_to_par("tvshow", db_object):
+        if preferred == ART_TMDB and not self._has_list_poster(db_object):
             if self._provider_enabled("tvdb") and self._tvdb_id_valid(db_object):
                 self._merge_tvdb_tvshow_art(db_object)
-            elif self._fanart_art_usable() and self._tvdb_id_valid(db_object):
-                tools.smart_merge_dictionary(db_object, self._fetch_tvshow_fanart_patch(db_object) or {})
             return
-        if preferred == ART_TVDB and not self._tvdb_art_meta_up_to_par("tvshow", db_object):
-            if self._provider_enabled("tmdb") and self._tmdb_id_valid(db_object):
-                self._merge_tmdb_tvshow_art(db_object)
-            elif self._fanart_art_usable() and self._tvdb_id_valid(db_object):
-                tools.smart_merge_dictionary(db_object, self._fetch_tvshow_fanart_patch(db_object) or {})
+        if preferred == ART_TVDB and not self._has_list_poster(db_object):
+            self._merge_tmdb_tvshow_bundle(db_object)
+            return
+
+    @staticmethod
+    def _has_list_poster(db_object) -> bool:
+        art = db_object.get("art") if isinstance(db_object.get("art"), dict) else {}
+        info = db_object.get("info") if isinstance(db_object.get("info"), dict) else {}
+        tmdb_art = tools.safe_dict_get(db_object, "tmdb_object", "art") or {}
+        return bool(
+            art.get("poster")
+            or art.get("thumb")
+            or info.get("poster")
+            or tmdb_art.get("poster")
+            or tmdb_art.get("thumb")
+        )
 
     def _handle_art(self, media_type, art_data, art_profile=None):
         if art_data is None:
@@ -1040,6 +1053,9 @@ class MetadataHandler:
         """
         media_type = MetadataHandler.get_simkl_info(db_object, "mediatype")
 
+        if media_type in ("movie", "tvshow"):
+            self._ensure_sync_simkl_bundle(db_object, media_type)
+
         if media_type in ("movie", "tvshow") and self._sync_update_noop(db_object, media_type):
             g.log(
                 f"sync_meta_update provider_fetches=0 simkl_id={db_object.get('simkl_id')} media={media_type}",
@@ -1060,6 +1076,21 @@ class MetadataHandler:
         self._write_log(db_object, media_type)
 
         return [db_object]
+
+    def _ensure_sync_simkl_bundle(self, db_object: dict, media_type: str) -> None:
+        """Fetch Simkl detail when title/plot/poster still missing before provider merge."""
+        from resources.lib.simkl.detail_gates import simkl_detail_needed
+        from resources.lib.simkl.enrich import _fetch_simkl_detail
+
+        if not simkl_detail_needed(db_object):
+            return
+        try:
+            merged = _fetch_simkl_detail(db_object, force=True)
+        except Exception:
+            g.log_stacktrace()
+            return
+        if isinstance(merged, dict):
+            tools.smart_merge_dictionary(db_object, merged, keep_original=True)
 
     def _write_log(self, db_object, media_type):
         if (media_type == "movie" and not db_object.get("tmdb_object") and not db_object.get("tvdb_object")) or (
@@ -1170,6 +1201,8 @@ class MetadataHandler:
         return still_missing, cast_map, studio_map, blobs
 
     def _fetch_anilist_cast_for_object(self, db_object) -> None:
+        if db_object.get("_anilist_cast_batched"):
+            return
         if not self._provider_enabled("anilist"):
             return
         from resources.lib.indexers.anilist import get_cast_batch_for_pending
@@ -1235,6 +1268,8 @@ class MetadataHandler:
         return merged_rows
 
     def _fetch_imdb_cast_for_object(self, db_object) -> None:
+        if db_object.get("_imdb_cast_batched"):
+            return
         if not self._provider_enabled("imdb") or not self._imdb_id_valid(db_object):
             return
         if not self._provider_cast_missing(db_object, "imdb") and db_object.get("cast"):
@@ -1257,15 +1292,14 @@ class MetadataHandler:
         return (
             not self._tmdb_art_meta_up_to_par("movie", db_object)
             or self._provider_cast_missing(db_object, "tmdb")
-            or self._force_update(db_object)
         )
 
     def _merge_tmdb_movie_bundle(self, db_object):
-        if not self._movie_needs_tmdb_bundle(db_object):
+        if not self._provider_enabled("tmdb") or not self._tmdb_id_valid(db_object):
             return
-        if self._provider_cast_missing(db_object, "tmdb"):
-            tools.smart_merge_dictionary(db_object, self.tmdb_api.get_movie_cast(db_object["tmdb_id"]))
-        self._merge_tmdb_movie_art(db_object)
+        if not self._tmdb_needs_update(db_object):
+            return
+        tools.smart_merge_dictionary(db_object, self.tmdb_api.get_movie(db_object["tmdb_id"]))
 
     def _movie_needs_tvdb_bundle(self, db_object):
         if not self._provider_enabled("tvdb") or not self._tvdb_id_valid(db_object):
@@ -1273,7 +1307,6 @@ class MetadataHandler:
         return (
             not self._tvdb_art_meta_up_to_par("movie", db_object)
             or self._provider_cast_missing(db_object, "tvdb")
-            or self._force_update(db_object)
         )
 
     def _merge_tvdb_movie_bundle(self, db_object):
@@ -1289,15 +1322,14 @@ class MetadataHandler:
         return (
             not self._tmdb_art_meta_up_to_par("tvshow", db_object)
             or self._provider_cast_missing(db_object, "tmdb")
-            or self._force_update(db_object)
         )
 
     def _merge_tmdb_tvshow_bundle(self, db_object):
-        if not self._tvshow_needs_tmdb_bundle(db_object):
+        if not self._provider_enabled("tmdb") or not self._tmdb_id_valid(db_object):
             return
-        if self._provider_cast_missing(db_object, "tmdb"):
-            tools.smart_merge_dictionary(db_object, self.tmdb_api.get_show_cast(db_object["tmdb_id"]))
-        self._merge_tmdb_tvshow_art(db_object)
+        if not self._tmdb_needs_update(db_object):
+            return
+        tools.smart_merge_dictionary(db_object, self.tmdb_api.get_show(db_object["tmdb_id"]))
 
     def _tvshow_needs_tvdb_bundle(self, db_object):
         if not self._provider_enabled("tvdb") or not self._tvdb_id_valid(db_object):
@@ -1306,7 +1338,6 @@ class MetadataHandler:
         return (
             not self._tvdb_art_meta_up_to_par("tvshow", db_object)
             or needs_cast
-            or self._force_update(db_object)
         )
 
     def _merge_tvdb_tvshow_bundle(self, db_object):
@@ -1321,16 +1352,17 @@ class MetadataHandler:
         from resources.lib.meta.provider_settings import ART_FANART, ART_SIMKL, ART_TMDB, ART_TVDB
 
         preferred = self._preferred_art_source_for_db_object(db_object)
-        if preferred == ART_SIMKL:
-            return
         if preferred == ART_FANART:
             tools.smart_merge_dictionary(db_object, self._fetch_movie_fanart_patch(db_object) or {})
         elif preferred == ART_TMDB:
             self._merge_tmdb_movie_bundle(db_object)
         elif preferred == ART_TVDB:
             self._merge_tvdb_movie_bundle(db_object)
-        self._update_movie_art_fallback(db_object)
-        self._merge_supplementary_fanart_movie_art(db_object)
+        if preferred != ART_SIMKL:
+            self._update_movie_art_fallback(db_object)
+        self._merge_tmdb_movie_bundle(db_object)
+        self._merge_tvdb_movie_bundle(db_object)
+        self._update_movie_fanart(db_object)
         self._update_movie_cast(db_object)
 
     def _update_movie_tmdb(self, db_object):
@@ -1522,16 +1554,17 @@ class MetadataHandler:
         from resources.lib.meta.provider_settings import ART_FANART, ART_SIMKL, ART_TMDB, ART_TVDB
 
         preferred = self._preferred_art_source_for_db_object(db_object)
-        if preferred == ART_SIMKL:
-            return
         if preferred == ART_FANART:
             tools.smart_merge_dictionary(db_object, self._fetch_tvshow_fanart_patch(db_object) or {})
         elif preferred == ART_TMDB:
             self._merge_tmdb_tvshow_bundle(db_object)
         elif preferred == ART_TVDB:
             self._merge_tvdb_tvshow_bundle(db_object)
-        self._update_tvshow_art_fallback(db_object)
-        self._merge_supplementary_fanart_tvshow_art(db_object)
+        if preferred != ART_SIMKL:
+            self._update_tvshow_art_fallback(db_object)
+        self._merge_tmdb_tvshow_bundle(db_object)
+        self._merge_tvdb_tvshow_bundle(db_object)
+        self._update_tvshow_fanart(db_object)
         self._update_tvshow_cast(db_object)
 
     def _update_tvshow_tmdb(self, db_object):
@@ -1983,7 +2016,6 @@ class MetadataHandler:
             not cast
             or not isinstance(cast, list)
             or len(cast) == 0
-            or not self._cast_has_photos(cast)
         )
         cast_ok = cast_gapfill_available(row, provider_type)
         if cast_ok and cast_wanted:
@@ -2733,54 +2765,20 @@ class MetadataHandler:
                     )
 
                 wave_rows = [dict(row) for row in prepared_incomplete]
-                cast_input = [dict(row) for row in wave_rows]
-                art_input = [dict(row) for row in wave_rows]
-                parallel_start = time.time()
-                import threading
-
-                cast_holder: list = []
-                art_holder: list = []
-                parallel_error: list[BaseException] = []
-
-                def _run_cast() -> None:
-                    try:
-                        cast_holder.append(
-                            self._apply_cast_gaps_to_rows(
-                                cast_input,
-                                media_type,
-                                db=db,
-                            )
-                        )
-                    except BaseException as exc:
-                        parallel_error.append(exc)
-
-                def _run_art() -> None:
-                    try:
-                        art_holder.append(
-                            self._apply_art_gaps_to_rows(
-                                art_input,
-                                media_type,
-                                db=db,
-                                provider_cache=provider_cache,
-                                gap_scope=resolved_gap_scope,
-                            )
-                        )
-                    except BaseException as exc:
-                        parallel_error.append(exc)
-
-                cast_thread = threading.Thread(target=_run_cast, name="prism-cast-gap")
-                art_thread = threading.Thread(target=_run_art, name="prism-art-gap")
-                cast_thread.start()
-                art_thread.start()
-                cast_thread.join(timeout=180.0)
-                art_thread.join(timeout=180.0)
-                if parallel_error:
-                    raise parallel_error[0]
-                (cast_rows, cast_batch_count) = cast_holder[0]
-                (art_rows, art_stats) = art_holder[0]
+                cast_rows, cast_batch_count = self._apply_cast_gaps_to_rows(
+                    wave_rows,
+                    media_type,
+                    db=db,
+                )
+                art_rows, art_stats = self._apply_art_gaps_to_rows(
+                    wave_rows,
+                    media_type,
+                    db=db,
+                    provider_cache=provider_cache,
+                    gap_scope=resolved_gap_scope,
+                )
                 prepared_incomplete = self._merge_cast_art_paint_rows(wave_rows, cast_rows, art_rows)
                 stats["cast_batch"] = cast_batch_count
-                stats["cast_art_parallel_ms"] = round((time.time() - parallel_start) * 1000, 1)
                 stats["art_fetch"] = int(art_stats.get("art_fetch", 0))
                 stats["art_deduped"] = int(art_stats.get("art_deduped", 0))
 
@@ -3145,45 +3143,91 @@ class MetadataHandler:
 
     def _sync_update_noop(self, db_object, media_type: str) -> bool:
         """True when denormalized sync row is warm and no provider refresh is required."""
-        if self._force_update(db_object):
-            return False
         info = db_object.get("info")
         art = db_object.get("art")
         if not isinstance(info, dict) or not isinstance(art, dict):
-            result = False
-        elif not info.get("title") and not info.get("originaltitle"):
-            result = False
-        elif not art.get("poster") and not art.get("thumb") and not info.get("poster"):
-            result = False
-        elif not db_object.get("cast"):
-            result = False
-        else:
-            from resources.lib.meta.provider_settings import ART_FANART, ART_SIMKL, ART_TMDB, ART_TVDB
+            return False
+        if not info.get("title") and not info.get("originaltitle"):
+            return False
+        if not art.get("poster") and not art.get("thumb") and not info.get("poster"):
+            return False
+        if not (info.get("plot") or info.get("overview")):
+            return False
+        from resources.lib.meta.provider_settings import ART_FANART, ART_SIMKL, ART_TMDB, ART_TVDB
 
-            preferred = self._preferred_art_source_for_db_object(db_object)
-            if preferred == ART_SIMKL:
-                result = True
-            elif media_type == "movie":
-                if preferred == ART_TMDB and not self._movie_needs_tmdb_bundle(db_object):
-                    result = True
-                elif preferred == ART_TVDB and not self._movie_needs_tvdb_bundle(db_object):
-                    result = True
-                elif preferred == ART_FANART and not self._fanart_needs_update(db_object):
-                    result = True
-                else:
-                    result = False
-            elif media_type == "tvshow":
-                if preferred == ART_TMDB and not self._tvshow_needs_tmdb_bundle(db_object):
-                    result = True
-                elif preferred == ART_TVDB and not self._tvshow_needs_tvdb_bundle(db_object):
-                    result = True
-                elif preferred == ART_FANART and not self._fanart_needs_update(db_object):
-                    result = True
-                else:
-                    result = False
-            else:
-                result = False
-        return result
+        preferred = self._preferred_art_source_for_db_object(db_object)
+        if (
+            preferred == ART_TMDB
+            and self._provider_enabled("tmdb")
+            and self._tmdb_id_valid(db_object)
+            and self._tmdb_needs_update(db_object)
+        ):
+            return False
+        if (
+            preferred == ART_TVDB
+            and self._provider_enabled("tvdb")
+            and self._tvdb_id_valid(db_object)
+            and self._tvdb_needs_update(db_object)
+        ):
+            return False
+        if preferred == ART_FANART and self._fanart_art_usable() and self._fanart_needs_update(db_object):
+            return False
+        if self._fanart_clearlogo_pending(db_object, art):
+            return False
+        if self._provider_art_blob_pending(db_object):
+            return False
+        if preferred not in (ART_SIMKL, ART_TMDB, ART_TVDB, ART_FANART):
+            return False
+        if self._sync_cast_refresh_needed(db_object, media_type):
+            return False
+        return True
+
+    def _fanart_clearlogo_pending(self, db_object, art: dict) -> bool:
+        """Simkl only stores poster and fanart. A missing clearlogo still needs Fanart."""
+        if not self._fanart_art_usable() or art.get("clearlogo"):
+            return False
+        if not self._fanart_needs_update(db_object):
+            return False
+        from resources.lib.meta.provider_settings import external_ids_from_row
+
+        ids = external_ids_from_row(db_object)
+        for key in ("tmdb_id", "imdb_id", "tvdb_id"):
+            if ids.get(key) and not db_object.get(key):
+                db_object[key] = ids[key]
+        return bool(ids.get("tmdb_id") or ids.get("imdb_id") or ids.get("tvdb_id"))
+
+    def _provider_art_blob_pending(self, db_object) -> bool:
+        """Enabled TMDB/TVDB still fetch when Simkl only stored poster and fanart."""
+        if self._provider_enabled("tmdb") and self._tmdb_id_valid(db_object) and self._tmdb_needs_update(db_object):
+            return True
+        if self._provider_enabled("tvdb") and self._tvdb_id_valid(db_object) and self._tvdb_needs_update(db_object):
+            return True
+        return False
+
+    def _sync_cast_refresh_needed(self, db_object, media_type: str) -> bool:
+        """True when enabled cast providers still need a fetch for this row."""
+        cast = db_object.get("cast")
+        if isinstance(cast, list) and cast:
+            return False
+        if self._provider_enabled("imdb") and self._imdb_id_valid(db_object):
+            if db_object.get("imdb_object") is None:
+                return True
+            return False
+        if self._provider_enabled("anilist"):
+            from resources.lib.meta.artwork import artwork_profile_for_row
+
+            profile = artwork_profile_for_row(db_object, default_media_type=media_type)
+            from resources.lib.meta.artwork import PROFILE_ANIME_MOVIE, PROFILE_ANIME_SERIES
+
+            if profile in (PROFILE_ANIME_MOVIE, PROFILE_ANIME_SERIES):
+                if isinstance(cast, list) and cast:
+                    return False
+                if db_object.get("anilist_object") is not None:
+                    return False
+                return True
+        if cast is None and self._provider_enabled("imdb"):
+            return True
+        return False
 
     def _tmdb_art_meta_up_to_par(self, media_type, item):
         return self.art_meta_up_to_par(media_type, MetadataHandler.tmdb_object(item))

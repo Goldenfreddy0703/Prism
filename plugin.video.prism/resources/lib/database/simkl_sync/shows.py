@@ -4,7 +4,6 @@ import datetime
 from contextlib import contextmanager
 from typing import Callable, Iterator
 
-from resources.lib.common.thread_pool import ThreadPool
 from resources.lib.database.simkl_sync import database
 from resources.lib.modules.globals import g
 from resources.lib.modules.guard_decorators import guard_against_none
@@ -1045,10 +1044,12 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         )
         show_effective = 0
         show_unwatched = 0
+        show_watched = 0
         if show_rows and isinstance(show_rows[0], dict):
             show_stub = show_rows[0]
             show_effective = int(show_stub.get("episode_count") or 0)
             show_unwatched = int(show_stub.get("unwatched_episodes") or 0)
+            show_watched = int(show_stub.get("watched_episodes") or 0)
 
         visible: list[dict] = []
         for row in rows:
@@ -1079,6 +1080,20 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 ep_total = int(stats.get("total") or 0)
             visible_ep_sum += ep_total
 
+        from resources.lib.simkl.watch_counters import is_caught_up
+
+        aired_for_show = show_effective or visible_ep_sum
+        show_caught_up = (
+            visible_ep_sum > 0
+            and show_watched >= visible_ep_sum
+            and is_caught_up(
+                show_watched,
+                aired_for_show,
+                unwatched=show_unwatched,
+                aired_episode_count=aired_for_show,
+            )
+        )
+
         for visible_idx, row in enumerate(visible):
             info = row.get("info")
             if not isinstance(info, dict):
@@ -1099,6 +1114,9 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             watched = int(row.get("watched_episodes") or 0)
             if stats["watched"] > watched:
                 watched = stats["watched"]
+            elif stats["total"] <= 0 and show_caught_up and ep_count > 0:
+                # No episode rows yet. The show is already caught up, same rule as the show list.
+                watched = ep_count
 
             # Never spread show-level watched totals onto seasons that have per-episode data.
             # (Previously the last season absorbed the remainder → false "fully watched" seasons.)
@@ -2693,45 +2711,63 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
         return result
 
     @guard_against_none(list)
-    def _update_objects(self, db_list_to_update, media_type):
+    def _update_objects(self, db_list_to_update, media_type, *, skip_noop: bool = False):
 
-        threadpool = ThreadPool()
+        entity = "movie" if media_type == "movies" else "tvshow"
         for i in db_list_to_update:
-            threadpool.put(self.metadataHandler.update, i)
-        updated_items = threadpool.wait_completion()
+            if skip_noop:
+                self._prepare_sync_update_row(i, entity=entity)
+                if self.metadataHandler._sync_update_noop(i, entity):
+                    continue
+            self.task_queue.put(self.metadataHandler.update, i)
+        updated_items = self.task_queue.wait_completion()
 
-        if updated_items is None:
-            return
+        if not updated_items:
+            return []
 
-        threadpool.put(
+        self.task_queue.put(
             self.save_to_meta_table,
             (i for i in updated_items if i and "simkl_object" in i),
             media_type,
             "simkl",
             "simkl_id",
         )
-        threadpool.put(
+        self.task_queue.put(
             self.save_to_meta_table,
             (i for i in updated_items if i and "tmdb_object" in i),
             media_type,
             "tmdb",
             "tmdb_id",
         )
-        threadpool.put(
+        self.task_queue.put(
             self.save_to_meta_table,
             (i for i in updated_items if i and "tvdb_object" in i),
             media_type,
             "tvdb",
             "tvdb_id",
         )
-        threadpool.put(
+        self.task_queue.put(
             self.save_to_meta_table,
             (i for i in updated_items if i and "fanart_object" in i),
             media_type,
             "fanart",
             "tvdb_id",
         )
-        threadpool.wait_completion()
+        self.task_queue.put(
+            self.save_to_meta_table,
+            (i for i in updated_items if i and "imdb_object" in i),
+            media_type,
+            "imdb",
+            "imdb_id",
+        )
+        self.task_queue.put(
+            self.save_to_meta_table,
+            (i for i in updated_items if i and "anilist_object" in i),
+            media_type,
+            "anilist",
+            "simkl_id",
+        )
+        self.task_queue.wait_completion()
 
         return updated_items
 
@@ -2746,6 +2782,12 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 {','.join("({},'{}')".format(i.get('simkl_show_id', i.get('simkl_id')), get(i, 'dateadded'))
                           for i in list_to_update)})
             SELECT r.simkl_id,
+                   s.info,
+                   s.art,
+                   s.[cast],
+                   s.imdb_id,
+                   s.catalog,
+                   s.meta_hash AS entity_meta_hash,
                    simkl_meta.value      AS simkl_object,
                    simkl_meta.meta_hash  AS simkl_meta_hash,
                    tmdb_id,
@@ -2756,6 +2798,9 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                    tvdb.meta_hash   AS tvdb_meta_hash,
                    fanart.value     AS fanart_object,
                    fanart.meta_hash AS fanart_meta_hash,
+                   imdb.value       AS imdb_object,
+                   imdb.meta_hash   AS imdb_meta_hash,
+                   anilist.value    AS anilist_object,
                    s.needs_update
             FROM requested AS r
                      LEFT JOIN {self._st().show} AS s ON r.simkl_id = s.simkl_id
@@ -2763,11 +2808,17 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                      LEFT JOIN {self._st().show_meta} AS tmdb ON tmdb.id = s.tmdb_id AND tmdb.type = 'tmdb'
                      LEFT JOIN {self._st().show_meta} AS tvdb ON tvdb.id = s.tvdb_id AND tvdb.type = 'tvdb'
                      LEFT JOIN {self._st().show_meta} AS fanart ON fanart.id = s.tvdb_id AND fanart.type = 'fanart'
+                     LEFT JOIN {self._st().show_meta} AS imdb ON imdb.id = s.imdb_id AND imdb.type = 'imdb'
+                     LEFT JOIN {self._st().show_meta} AS anilist ON anilist.id = s.simkl_id AND anilist.type = 'anilist'
             """
 
         db_list_to_update = self.fetchall(sql_statement)
         self._apply_request_force_update(db_list_to_update, list_to_update)
-        updated_items = self._update_objects(db_list_to_update, "shows")
+        for row in db_list_to_update:
+            self._prepare_sync_update_row(row, entity="tvshow")
+        self._prefetch_imdb_cast(db_list_to_update)
+        self._prefetch_anilist_cast(db_list_to_update)
+        updated_items = self._update_objects(db_list_to_update, "shows", skip_noop=True)
 
         formatted_items = self._format_objects(updated_items)
 

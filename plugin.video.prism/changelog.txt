@@ -1,3 +1,14 @@
+Changelog 5.0.66
+[BUG] Movie completion indicators — a metadata refresh no longer writes playcount 0 over a completed movie. One-time repair marks completed movies that were left unwatched
+[BUG] Season lists — in-progress shows load per-episode watch flags before the first paint, so finished seasons are marked without backing out and back in
+[BUG] Fully watched shows — season checkmarks on the first open when the show is already caught up and episode rows are not saved yet
+[BUG] Mark watched / unwatched — Back returns to the previous folder. Refreshing the list no longer opens the Videos root
+[BUG] Search by actor — a filmography page runs the title update, so the page shows the full result set instead of only titles already stored
+[IMPROVEMENT] Anime lists — one AniList cast request for the page, saved on the title, instead of one request per show
+[IMPROVEMENT] Simkl trending and DVD files stay cached for 24 hours. Popular, Most Watched, and the other sorted discover lists reuse that copy
+[IMPROVEMENT] Season and episode menus build from the one Simkl episode list plus the show already open. A missing plot or still is left blank; the show poster fills a missing episode image
+[IMPROVEMENT] SQLite stays journal off, synchronous off, and a 256MB memory map. Removed the WAL setting and the separate fast-drilldown setting
+
 Changelog 5.0.65
 [BUG] Simkl library lists (#31) — lazy ``resources.lib.net`` package exports (``sync_bridge`` / ``request_policy``) to avoid ``DeadlockError`` when opening library menus under concurrent plugin threads (anime Watching / On Hold / Dropped)
 

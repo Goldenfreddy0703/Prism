@@ -550,7 +550,8 @@ def _merged_seren_direct_menu_kwargs(paint_overrides: dict) -> dict:
     merged.pop("catalog_pipeline", None)
     merged.setdefault("skip_mill", True)
     merged.setdefault("sync_path", True)
-    merged.setdefault("skip_update", True)
+    merged.setdefault("skip_update", False)
+    merged.setdefault("paint_only", False)
     merged.setdefault("seren_direct_db", True)
     merged.setdefault("seren_menu_sql", True)
     return merged
@@ -1851,11 +1852,6 @@ def render_catalog_seasons(show_id: int, list_builder, **kwargs) -> None:
     fast_enabled = drilldown_fast_open_enabled()
     paint_kwargs = _drilldown_paint_kwargs(**kwargs)
     show_ctx = load_show_menu_context(show_id)
-    if _show_menu_context_sparse(show_ctx):
-        sync_row = _fetch_show_sync_row(show_id)
-        if isinstance(sync_row, dict) and _show_needs_provider_enrich(sync_row):
-            ensure_show_metadata(show_id)
-        show_ctx = load_show_menu_context(show_id)
     set_show_menu_plugin_category(show_ctx)
 
     catalog = _resolve_drilldown_catalog(show_id, paint_kwargs, kwargs)
@@ -1955,11 +1951,6 @@ def render_catalog_drilldown_episodes(
     fast_enabled = drilldown_fast_open_enabled()
     paint_kwargs = _drilldown_paint_kwargs(**kwargs)
     show_ctx = load_show_menu_context(show_id)
-    if _show_menu_context_sparse(show_ctx):
-        sync_row = _fetch_show_sync_row(show_id)
-        if isinstance(sync_row, dict) and _show_needs_provider_enrich(sync_row):
-            ensure_show_metadata(show_id)
-        show_ctx = load_show_menu_context(show_id)
     season_ctx = load_season_menu_context(show_id, season) if season is not None else None
     set_show_menu_plugin_category(show_ctx, season_num=season)
 

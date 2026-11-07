@@ -10,7 +10,7 @@ from resources.lib.discover.definitions import Catalog, DiscoverList, get_list
 from resources.lib.discover.normalize import runtime_minutes
 from resources.lib.discover.cdn_store import rows_for_catalog
 from resources.lib.discover.query_engine import query_all_rows
-from resources.lib.indexers.simkl_cdn import SimklCDN
+from resources.lib.indexers.simkl_cdn import SimklCDN, cache_hours_for_path
 from resources.lib.modules.globals import g
 from resources.lib.simkl.media_ref import normalize_discover_db_rows, normalize_simkl_items
 from resources.lib.simkl.menu_helpers import list_filter_kwargs, paginate_refs_for_page
@@ -380,7 +380,10 @@ class DiscoverRenderer:
     def _fetch_cdn(self, discover_list: DiscoverList, catalog: Catalog) -> list:
         if not discover_list.cdn_path:
             return []
-        data = self.cdn.fetch_json(discover_list.cdn_path)
+        data = self.cdn.fetch_json(
+            discover_list.cdn_path,
+            cache_hours=cache_hours_for_path(discover_list.cdn_path),
+        )
         if discover_list.cdn_path.startswith("/calendar/"):
             from resources.lib.calendar.simkl_calendar import filter_coming_soon_rows, merge_v2_calendar_rows
 

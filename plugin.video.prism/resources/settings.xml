@@ -136,11 +136,6 @@
 					<default>false</default>
 					<control type="toggle"/>
 				</setting>
-				<setting id="general.drilldown.fast_open" type="boolean" label="31223" help="31224">
-					<level>0</level>
-					<default>true</default>
-					<control type="toggle"/>
-				</setting>
 				<setting id="general.smart.scroll.enable" type="boolean" label="31021" help="">
 					<level>0</level>
 					<default>true</default>
@@ -3433,11 +3428,6 @@
 		</category>
 		<category id="advanced" label="30260" help="">
 			<group id="1" label="30605">
-				<setting id="general.db.wal_mode" type="boolean" label="31210" help="31211">
-					<level>2</level>
-					<default>false</default>
-					<control type="toggle"/>
-				</setting>
 				<setting id="general.menucaching" type="boolean" label="30193" help="31020">
 					<level>0</level>
 					<default>true</default>

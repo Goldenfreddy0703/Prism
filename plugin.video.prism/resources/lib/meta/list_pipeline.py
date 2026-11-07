@@ -680,6 +680,11 @@ def resolve_list_flags(
             flags.setdefault("sync_path", True)
         else:
             flags.setdefault("sync_path", True)
+    elif profile_name == "actor":
+        # Filmography rows are Simkl ids only. They need the same detail/artwork update as a cold page.
+        flags["skip_update"] = False
+        flags.setdefault("skip_mill", True)
+        flags.setdefault("sync_path", True)
     elif skip_update:
         flags["skip_update"] = True
 

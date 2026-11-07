@@ -71,14 +71,16 @@ def simkl_detail_needed(item: dict) -> bool:
     """True when a row still needs GET /movies|tv|anime/{id} before list paint."""
     if not isinstance(item, dict):
         return True
-    if not sync_row_list_paint_ready(item):
+    info, _art = row_info_art(item)
+    if not (info.get("title") or item.get("title")):
         return True
-    info, _ = row_info_art(item)
     if simkl_detail_plot_missing(item):
         return True
     if anime_title_slots_need_detail(info):
         return True
-    return not has_simkl_owned_metadata(info)
+    if not sync_row_list_paint_ready(item):
+        return True
+    return False
 
 
 def _row_cast(item: dict) -> list:

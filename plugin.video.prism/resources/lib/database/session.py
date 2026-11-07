@@ -37,11 +37,7 @@ def get_sync_database():
 
 
 def ensure_browse_db_read_mode() -> None:
-    """Re-assert read-friendly pragmas before browse batch SQL (Otaku SQL pattern)."""
-    from resources.lib.modules.globals import g
-
-    if not g.get_bool_setting("general.db.wal_mode", False):
-        return
+    """Re-assert read-friendly pragmas before browse batch SQL."""
     db = get_sync_database()
     try:
         db.execute_sql("PRAGMA mmap_size = 268435456")

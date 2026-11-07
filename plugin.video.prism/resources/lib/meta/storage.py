@@ -104,6 +104,7 @@ _SIMKL_EXTRA_INFO_KEYS = frozenset(
         "en_title",
         "title_en",
         "title_romaji",
+        "simkl_detail_checked",
     }
 )
 

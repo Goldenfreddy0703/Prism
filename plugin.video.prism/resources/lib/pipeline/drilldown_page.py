@@ -11,7 +11,7 @@ _DRILLDOWN_ROW_RAM: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]]]] = 
 
 
 def drilldown_fast_open_enabled() -> bool:
-    return g.get_bool_setting("general.drilldown.fast_open", default_value=True)
+    return True
 
 
 def load_raw_episode_tree(
@@ -70,36 +70,53 @@ def _format_milled_row(
     season_info: dict | None = None,
     season_art: dict | None = None,
 ) -> dict[str, Any]:
-    simkl_object = stub.get("simkl_object")
-    if not isinstance(simkl_object, dict):
-        simkl_object = {"info": {}}
-    db_object: dict[str, Any] = {
-        "simkl_id": stub.get("simkl_id"),
-        "simkl_object": simkl_object,
-        "show_info": show_info,
-        "show_art": show_art,
-        "show_cast": show_cast,
-        "season_info": season_info,
-        "season_art": season_art,
-    }
-    formatted = db.metadataHandler.format_meta(db_object)
-    info = formatted.get("info") or {}
+    """Map one Simkl episode-list stub plus the parent show already in memory. No provider HTTP."""
+    simkl_object = stub.get("simkl_object") if isinstance(stub.get("simkl_object"), dict) else {}
+    info = dict(simkl_object.get("info") or {})
+    art = dict(simkl_object.get("art") or {})
+    parent_art = dict(show_art or {})
+    if isinstance(season_art, dict):
+        for key, value in season_art.items():
+            if value and not art.get(key):
+                art[key] = value
+    if isinstance(show_info, dict):
+        show_title = show_info.get("title") or show_info.get("tvshowtitle")
+        if show_title and not info.get("tvshowtitle"):
+            info["tvshowtitle"] = show_title
+    for key in ("poster", "fanart", "clearlogo", "landscape", "banner", "clearart"):
+        value = parent_art.get(key)
+        if not value:
+            continue
+        art.setdefault(f"tvshow.{key}", value)
+        if key != "poster":
+            art.setdefault(key, value)
+    if not art.get("thumb"):
+        still = art.get("poster")
+        if still and info.get("mediatype") == "episode":
+            art["thumb"] = still
+        elif parent_art.get("poster"):
+            art["thumb"] = parent_art["poster"]
+            art.setdefault("poster", parent_art["poster"])
+    if parent_art.get("fanart") and not art.get("fanart"):
+        art["fanart"] = parent_art["fanart"]
     row: dict[str, Any] = {
-        "simkl_id": stub.get("simkl_id"),
-        "simkl_show_id": stub.get("simkl_show_id"),
+        "simkl_id": stub.get("simkl_id") or info.get("simkl_id"),
+        "simkl_show_id": stub.get("simkl_show_id") or info.get("simkl_show_id"),
         "season": stub.get("season", info.get("season")),
         "info": info,
-        "art": formatted.get("art"),
-        "cast": formatted.get("cast"),
-        "args": formatted.get("args") or db._create_args(formatted),
+        "art": art,
+        "cast": list(show_cast or []),
     }
+    row["args"] = db._create_args({"info": info, "art": art, "cast": row["cast"]})
     if stub.get("episode") is not None:
         row["episode"] = stub.get("episode")
     aired = stub.get("aired_episodes")
     if aired is not None:
         row["episode_count"] = int(aired)
-        row.setdefault("info", {})["episode_count"] = int(aired)
-        row["info"].setdefault("aired_episodes", int(aired))
+        info["episode_count"] = int(aired)
+        info.setdefault("aired_episodes", int(aired))
+    if season_info and isinstance(season_info, dict) and not info.get("tvshowtitle"):
+        info["tvshowtitle"] = season_info.get("tvshowtitle")
     return row
 
 
@@ -266,46 +283,10 @@ def _season_watch_paint_ready(snapshot: dict[str, int]) -> bool:
 
 
 def _ensure_season_watch_state_for_paint(db, show_id: int, catalog: str) -> None:
-    """
-    Fast drilldown can paint before background persist finishes (fresh install / first open).
+    """Write missing per-episode watch flags before the season list is painted."""
+    from resources.lib.simkl.all_items_sync import ensure_show_episode_watch_aligned_for_paint
 
-    Season checkmarks need per-episode watched flags. Reconcile may run after the menu if
-    shows.watched_episodes is still 0 or episode rows are not milled yet.
-    """
-    show_id = int(show_id)
-    before = _season_watch_paint_snapshot(db, show_id)
-    if int(before.get("show_watched") or 0) > 0 or int(before.get("ep_watched") or 0) > 0:
-        try:
-            from resources.lib.simkl.all_items_sync import ensure_show_episode_watch_aligned_for_paint
-
-            if ensure_show_episode_watch_aligned_for_paint(db, show_id, catalog=catalog):
-                clear_drilldown_cache_for_show(show_id)  # reconciled before paint
-            before = _season_watch_paint_snapshot(db, show_id)
-        except Exception:
-            g.log_stacktrace()
-    if _season_watch_paint_ready(before):
-        return
-
-    g.log(
-        f"Menu perf: drilldown sync watch hydrate show={show_id} "
-        f"show_watched={before['show_watched']} ep_rows={before['ep_rows']} "
-        f"ep_watched={before['ep_watched']}",
-        "info",
-    )
-    show_meta = db._get_single_show_meta(show_id) or {"simkl_id": show_id, "catalog": catalog}
-    if int(before.get("ep_rows") or 0) == 0:
-        db.force_mill_shows(
-            show_meta,
-            mill_episodes=True,
-            skip_provider_episode_updates=True,
-            catalog=catalog,
-        )
-        db._format_seasons_local(show_id)
-    try:
-        db.refresh_show_episode_watch_state(show_id)
-    except Exception:
-        g.log_stacktrace()
-    db._refresh_show_and_season_statistics(show_id)
+    ensure_show_episode_watch_aligned_for_paint(db, int(show_id), catalog=catalog)
 
 
 def merge_watch_state_light(db, show_id: int, rows: list[dict]) -> list[dict]:
@@ -388,59 +369,11 @@ def _ensure_episode_watch_state_for_paint(
     flat_all: bool = False,
     expected_count: int | None = None,
 ) -> None:
-    """Block fast episode paint until anime/TV episode rows and watch flags match the menu scope."""
-    show_id = int(show_id)
-    before = _episode_watch_paint_snapshot(
-        db, show_id, season_num=season_num, flat_all=flat_all
-    )
-    if int(before.get("show_watched") or 0) > 0 or int(before.get("ep_watched") or 0) > 0:
-        try:
-            from resources.lib.simkl.all_items_sync import ensure_show_episode_watch_aligned_for_paint
+    """Write missing per-episode watch flags before the episode list is painted."""
+    del season_num, flat_all, expected_count
+    from resources.lib.simkl.all_items_sync import ensure_show_episode_watch_aligned_for_paint
 
-            if ensure_show_episode_watch_aligned_for_paint(db, show_id, catalog=catalog):
-                clear_drilldown_cache_for_show(show_id)
-            before = _episode_watch_paint_snapshot(
-                db, show_id, season_num=season_num, flat_all=flat_all
-            )
-        except Exception:
-            g.log_stacktrace()
-    if _episode_watch_paint_ready(before, expected_count):
-        return
-
-    g.log(
-        f"Menu perf: drilldown sync episode watch hydrate show={show_id} "
-        f"expected={expected_count} ep_rows={before['ep_rows']} ep_watched={before['ep_watched']}",
-        "info",
-    )
-    show_meta = db._get_single_show_meta(show_id) or {"simkl_id": show_id, "catalog": catalog}
-    mill_filter = None
-    if not flat_all and season_num is not None:
-        mill_filter = frozenset({int(season_num)})
-    db.force_mill_shows(
-        show_meta,
-        mill_episodes=True,
-        skip_provider_episode_updates=True,
-        mill_season_filter=mill_filter,
-        catalog=catalog,
-    )
-    from resources.lib.simkl.ids import season_key
-
-    if flat_all:
-        db._format_episodes_local(show_id)
-    elif season_num is not None:
-        db._format_episodes_local(show_id, season_key(show_id, int(season_num)))
-    try:
-        db.refresh_show_episode_watch_state(show_id)
-    except Exception:
-        g.log_stacktrace()
-    try:
-        from resources.lib.simkl.all_items_sync import ensure_show_episode_watch_aligned_for_paint
-
-        if ensure_show_episode_watch_aligned_for_paint(db, show_id, catalog=catalog):
-            clear_drilldown_cache_for_show(show_id)
-    except Exception:
-        g.log_stacktrace()
-    db._refresh_show_and_season_statistics(show_id)
+    ensure_show_episode_watch_aligned_for_paint(db, int(show_id), catalog=catalog)
 
 
 def _row_episode_coord(row: dict) -> tuple[int, int] | None:

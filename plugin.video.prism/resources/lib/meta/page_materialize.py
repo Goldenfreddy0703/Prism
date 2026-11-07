@@ -72,26 +72,12 @@ def materialize_browse_page_rows(
     profile: str = "browse",
     skip_detail_if_plot_ready: bool = False,
 ) -> list[dict]:
-    """Blocking Simkl detail + provider prepare + coalesce + display_meta stamp."""
-    from resources.lib.meta.list_paint import _seren_sync_finalize_page, _seren_sync_simkl_detail_fill
-    from resources.lib.meta.paint_cache import coalesce_page_rows_paint_info
-    from resources.lib.simkl.enrich import simkl_detail_needed
+    """Seren sync warmup for prefetch/stamp helpers."""
+    from resources.lib.pipeline.sync_page_warmup import warmup_sync_page_refs
+    from resources.lib.simkl.media_ref import sync_db_rows_for_refs
 
-    if skip_detail_if_plot_ready:
-        needs_detail = any(
-            isinstance(row, dict) and simkl_detail_needed(row) for row in (rows or [])
-        )
-        if needs_detail:
-            rows = _seren_sync_simkl_detail_fill(catalog, refs, rows)
-        rows = coalesce_page_rows_paint_info(catalog, rows)
-        from resources.lib.meta.list_paint import _seren_sync_provider_prepare
-
-        rows = _seren_sync_provider_prepare(catalog, rows, profile)
-        rows = coalesce_page_rows_paint_info(catalog, rows)
-    else:
-        rows = _seren_sync_finalize_page(catalog, refs, rows, profile)
-    stamp_page_rows_to_display_meta(catalog, rows, profile=profile)
-    return rows
+    warmup_sync_page_refs(catalog, refs)
+    return sync_db_rows_for_refs(catalog, refs) or rows
 
 
 def materialize_refs_stamp_from_sync_db(
@@ -100,17 +86,7 @@ def materialize_refs_stamp_from_sync_db(
     *,
     profile: str = "browse",
 ) -> list[dict]:
-    """Background: full provider art + display_meta stamp (no Simkl detail when plot already synced)."""
-    from resources.lib.simkl.media_ref import sync_db_rows_for_refs
-
-    rows = sync_db_rows_for_refs(catalog, refs)
-    return materialize_browse_page_rows(
-        catalog,
-        refs,
-        rows,
-        profile=profile,
-        skip_detail_if_plot_ready=True,
-    )
+    return materialize_browse_page_rows(catalog, refs, [], profile=profile, skip_detail_if_plot_ready=True)
 
 
 def materialize_refs_from_sync_db(
@@ -119,11 +95,7 @@ def materialize_refs_from_sync_db(
     *,
     profile: str = "browse",
 ) -> list[dict]:
-    """Load sync rows for refs, materialize, and return paint-ready rows."""
-    from resources.lib.simkl.media_ref import sync_db_rows_for_refs
-
-    rows = sync_db_rows_for_refs(catalog, refs)
-    return materialize_browse_page_rows(catalog, refs, rows, profile=profile)
+    return materialize_browse_page_rows(catalog, refs, [], profile=profile)
 
 
 def schedule_browse_page_materialize(

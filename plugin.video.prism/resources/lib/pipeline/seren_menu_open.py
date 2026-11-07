@@ -1,11 +1,10 @@
-"""Seren-style menu open: materialize page → seed simkl_sync → one SQL read → ListItems."""
+"""Seren-style menu open: seed simkl_sync → _update_* → one SQL read → ListItems."""
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Callable
 
 from resources.lib.modules.globals import g
 from resources.lib.net.request_policy import policy_from_settings
-from resources.lib.pipeline.browse_materialize import materialize_browse_page
 
 
 def _seren_list_kwargs(list_kwargs: dict | None) -> dict:
@@ -17,7 +16,8 @@ def _seren_list_kwargs(list_kwargs: dict | None) -> dict:
     merged.pop("prefer_catalog_payload", None)
     merged.setdefault("skip_mill", True)
     merged.setdefault("sync_path", True)
-    merged.setdefault("skip_update", True)
+    merged.setdefault("skip_update", False)
+    merged.setdefault("paint_only", False)
     return merged
 
 
@@ -32,27 +32,19 @@ def open_seren_title_list(
     page: int | None = None,
     **render_kwargs,
 ) -> None:
-    """Materialize a single-catalog title page and paint via seren_direct_db."""
+    """Single-catalog title page: Seren sync update then SQL list paint."""
     from resources.lib.meta.list_paint import render_seren_menu_page
 
     policy_from_settings().reset_menu_budget()
     merged = _seren_list_kwargs(list_kwargs)
     merged.setdefault("menu_action", g.REQUEST_PARAMS.get("action") or "browse")
-    source = str(merged.get("browse_source") or merged.get("enrichment_reason") or "browse")
-    profile = str(merged.get("paint_profile") or merged.get("enrichment_reason") or "browse")
-
-    payload = materialize_browse_page(
-        catalog,
-        items,
-        profile=profile,
-        source=source,
-        mixed=False,
-        list_id=list_id or merged.get("list_id"),
-        page=page,
-    )
+    if list_id:
+        merged.setdefault("list_id", list_id)
+    if page is not None:
+        merged["page"] = page
     render_seren_menu_page(
         catalog,
-        payload,
+        items,
         list_builder,
         list_kwargs=merged,
         **render_kwargs,
@@ -69,7 +61,7 @@ def open_seren_mixed_list(
     list_id: str | None = None,
     page: int | None = None,
 ) -> None:
-    """Materialize mixed movie/tv/anime page and paint via seren_direct_db."""
+    """Mixed movie/tv/anime page: Seren sync update then SQL list paint."""
     from resources.lib.meta.list_paint import render_seren_menu_page
 
     policy_from_settings().reset_menu_budget()
@@ -80,23 +72,15 @@ def open_seren_mixed_list(
         merged["catalog_hint"] = catalog_hint
     if label2_for_item is not None:
         merged["label2_for_item"] = label2_for_item
+    if list_id:
+        merged.setdefault("list_id", list_id)
+    if page is not None:
+        merged["page"] = page
 
-    source = str(merged.get("browse_source") or merged.get("enrichment_reason") or "mixed")
-    profile = str(merged.get("paint_profile") or merged.get("enrichment_reason") or "browse")
     catalog = catalog_hint or "movie"
-
-    payload = materialize_browse_page(
-        catalog,
-        items,
-        profile=profile,
-        source=source,
-        mixed=True,
-        list_id=list_id or merged.get("list_id"),
-        page=page,
-    )
     render_seren_menu_page(
         catalog,
-        payload,
+        items,
         list_builder,
         list_kwargs=merged,
         mixed_list=True,
@@ -116,7 +100,7 @@ def open_seren_library_list(
     list_id: str | None = None,
     **render_kwargs,
 ) -> None:
-    """Library status / recently watched: materialize visible page, Seren SQL keeps bookmark joins."""
+    """Library status / recently watched: Seren sync update then SQL list paint."""
     from resources.lib.meta.list_paint import render_seren_menu_page
 
     policy_from_settings().reset_menu_budget()
@@ -124,30 +108,11 @@ def open_seren_library_list(
     merged.setdefault("menu_action", g.REQUEST_PARAMS.get("action") or "library")
     if library_paint:
         merged["library_paint"] = True
-    source = str(merged.get("browse_source") or "library")
-    profile = str(merged.get("paint_profile") or "library")
-
-    from resources.lib.meta.paint_complete import rows_page_menu_ready
-    from resources.lib.simkl.enrich import hydrate_sync_items_local
-
-    hydrated = hydrate_sync_items_local([dict(row) for row in items if isinstance(row, dict)])
-    if rows_page_menu_ready(hydrated, profile=profile):
-        from resources.lib.pipeline.browse_materialize import _order_like_items, _seed_rows_to_sync
-
-        payload = _order_like_items(items, hydrated)
-        _seed_rows_to_sync(catalog, payload, mixed=False)
-    else:
-        payload = materialize_browse_page(
-            catalog,
-            items,
-            profile=profile,
-            source=source,
-            mixed=False,
-            list_id=list_id,
-        )
+    if list_id:
+        merged.setdefault("list_id", list_id)
     render_seren_menu_page(
         catalog,
-        payload,
+        items,
         list_builder,
         list_kwargs=merged,
         library_paint=library_paint,

@@ -413,17 +413,19 @@ def _prefetch_search(page_params: dict[str, Any]) -> bool:
     from resources.lib.meta.menu_paint_profile import MenuPaintProfile
 
     if catalog == "all":
-        from resources.lib.browse.browse_paint_resolver import resolve_mixed_browse_rows
         from resources.lib.meta.paint_cache import page_cache_catalog
+        from resources.lib.pipeline.sync_page_warmup import warmup_sync_mixed_refs
+        from resources.lib.simkl.media_ref import partition_by_catalog, sync_db_rows_for_refs
 
-        resolved = resolve_mixed_browse_rows(
-            page_items,
-            profile=MenuPaintProfile.SEARCH.value,
-            source=f"search:{query}",
-        )
-        refs = simkl_refs(resolved)
+        warmup_sync_mixed_refs(page_items)
+        refs = simkl_refs(page_items)
         if not refs:
             return False
+        movies, tv, anime = partition_by_catalog(refs)
+        resolved: list[dict] = []
+        for item_catalog, group in (("movie", movies), ("tv", tv), ("anime", anime)):
+            if group:
+                resolved.extend(sync_db_rows_for_refs(item_catalog, group))
         cache_catalog = page_cache_catalog("movie", refs, mixed_list=True)
         return _prefetch_paint_catalog_page(
             cache_catalog,
@@ -665,9 +667,9 @@ def _blocking_enrich_simkl_ids(
 
 
 def _blocking_enrich_refs(refs: list[dict], *, default_catalog: str, reason: str) -> None:
-    from resources.lib.meta.page_materialize import materialize_refs_from_sync_db
+    from resources.lib.pipeline.sync_page_warmup import warmup_sync_page_refs
 
-    materialize_refs_from_sync_db(default_catalog, refs, profile="browse")
+    warmup_sync_page_refs(default_catalog, refs)
 
 
 def _prefetch_library(page_params: dict[str, Any]) -> bool:
@@ -696,9 +698,6 @@ def _prefetch_library(page_params: dict[str, Any]) -> bool:
     from resources.lib.browse.browse_paint_resolver import prefetch_resolved_page_rows
     from resources.lib.meta.list_pipeline import make_list_id
 
-    from resources.lib.meta.page_materialize import materialize_refs_from_sync_db
-
-    materialize_refs_from_sync_db(catalog, page_refs, profile=MenuPaintProfile.LIBRARY.value)
     resolved = prefetch_resolved_page_rows(
         catalog,
         page_items,
@@ -742,16 +741,19 @@ def _prefetch_actor(page_params: dict[str, Any]) -> bool:
     )
     if not items:
         return False
-    from resources.lib.browse.browse_paint_resolver import resolve_mixed_browse_rows
+    from resources.lib.meta.paint_cache import page_cache_catalog
+    from resources.lib.pipeline.sync_page_warmup import warmup_sync_mixed_refs
+    from resources.lib.simkl.media_ref import partition_by_catalog, sync_db_rows_for_refs
 
-    resolved = resolve_mixed_browse_rows(
-        items,
-        profile="actor",
-        source=f"actor:{person_id}",
-    )
-    refs = simkl_refs(resolved)
+    warmup_sync_mixed_refs(items)
+    refs = simkl_refs(items)
     if not refs:
         return False
+    movies, tv, anime = partition_by_catalog(refs)
+    resolved: list[dict] = []
+    for item_catalog, group in (("movie", movies), ("tv", tv), ("anime", anime)):
+        if group:
+            resolved.extend(sync_db_rows_for_refs(item_catalog, group))
     cache_catalog = page_cache_catalog(catalog_hint, refs, mixed_list=True)
     return _prefetch_paint_catalog_page(
         cache_catalog,
@@ -762,11 +764,12 @@ def _prefetch_actor(page_params: dict[str, Any]) -> bool:
 
 
 def _prefetch_detail_related(page_params: dict[str, Any], *, relations: bool) -> bool:
-    from resources.lib.browse.browse_paint_resolver import resolve_mixed_browse_rows
     from resources.lib.discover.sync_bridge import simkl_refs
     from resources.lib.meta.menu_paint_profile import MenuPaintProfile
     from resources.lib.meta.paint_cache import page_cache_catalog
+    from resources.lib.pipeline.sync_page_warmup import warmup_sync_mixed_refs
     from resources.lib.simkl.ids import normalize_action_args
+    from resources.lib.simkl.media_ref import partition_by_catalog, sync_db_rows_for_refs
     from resources.lib.simkl.related import (
         _entries_to_sync,
         _fetch_detail,
@@ -788,10 +791,15 @@ def _prefetch_detail_related(page_params: dict[str, Any], *, relations: bool) ->
     if not sync_items:
         return False
     source = f"relations:{simkl_id}" if relations else f"recommendations:{simkl_id}"
-    resolved = resolve_mixed_browse_rows(sync_items, profile="related", source=source)
-    refs = simkl_refs(resolved)
+    warmup_sync_mixed_refs(sync_items)
+    refs = simkl_refs(sync_items)
     if not refs:
         return False
+    movies, tv, anime = partition_by_catalog(refs)
+    resolved: list[dict] = []
+    for item_catalog, group in (("movie", movies), ("tv", tv), ("anime", anime)):
+        if group:
+            resolved.extend(sync_db_rows_for_refs(item_catalog, group))
     cache_catalog = page_cache_catalog(catalog, refs, mixed_list=True)
     return _prefetch_paint_catalog_page(
         cache_catalog,

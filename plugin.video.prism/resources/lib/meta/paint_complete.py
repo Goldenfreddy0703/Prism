@@ -97,22 +97,13 @@ def row_paint_complete_drilldown(row: dict[str, Any] | None) -> bool:
             return False
     title = info.get("title") or info.get("tvshowtitle")
     if mediatype == "episode":
-        if not title:
-            return False
-        art = row.get("art") if isinstance(row.get("art"), dict) else {}
-        thumb = art.get("thumb") or info.get("thumb")
-        if thumb:
-            return True
-        from resources.lib.simkl.images import episode_thumb_url
-
-        img = info.get("simkl_img") or info.get("img")
-        return bool(episode_thumb_url(img))
+        episode_num = info.get("episode", info.get("number", row.get("episode")))
+        aired = info.get("aired") or info.get("first_aired")
+        return bool(title or episode_num is not None or aired)
     if mediatype == "season":
-        if not title and not info.get("season"):
+        if not title and info.get("season") is None and row.get("season") is None:
             return False
-        art = row.get("art") if isinstance(row.get("art"), dict) else {}
-        poster = art.get("poster") or art.get("thumb") or info.get("poster")
-        return bool(poster or title)
+        return True
     return row_has_display_meta(row)
 
 

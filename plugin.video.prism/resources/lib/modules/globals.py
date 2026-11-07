@@ -1954,10 +1954,12 @@ class GlobalVariables:
         return enabled
 
     def refresh_visible_container(self) -> bool:
-        """Rebuild the active Prism folder so list art/meta repaint after background actions."""
-        import time
-        from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+        """Rebuild the active Prism folder without changing its place in Back history.
 
+        Container.Update to a new query replaces the current history item. On this
+        Kodi build, Container.Refresh(true) is a path named "true" and fails open
+        onto the Videos root. Container.Refresh with no argument reloads this folder.
+        """
         import xbmc
 
         if not self.is_addon_visible():
@@ -1966,13 +1968,7 @@ class GlobalVariables:
         path = xbmc.getInfoLabel("Container.FolderPath") or ""
 
         if path.startswith("plugin://plugin.video.prism"):
-            parsed = urlparse(path)
-            query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-            query["prism_reload"] = "true"
-            query["_cb"] = str(int(time.time()))
-            new_path = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
-            escaped = new_path.replace("\\", "\\\\").replace('"', '\\"')
-            xbmc.executebuiltin(f'Container.Update("{escaped}",replace)')
+            xbmc.executebuiltin("Container.Refresh")
             return True
 
         # RunPlugin context actions (handle -1) must not rewrite folder history.

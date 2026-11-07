@@ -443,18 +443,9 @@ class SQLiteConnection(_connection):
         }
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA page_size = 32768")  # no-translate
-        from resources.lib.modules.globals import g
-
-        if g.get_bool_setting("general.db.wal_mode", False):
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.execute("PRAGMA synchronous = NORMAL")
-        else:
-            # Default OFF avoids WAL side-files and SMB edge cases.
-            connection.execute("PRAGMA journal_mode = OFF")
-            connection.execute("PRAGMA synchronous = OFF")
-        connection.execute("PRAGMA temp_store = memory")
+        connection.execute("PRAGMA journal_mode = OFF")
+        connection.execute("PRAGMA synchronous = OFF")
         connection.execute("PRAGMA mmap_size = 268435456")
-        connection.execute("PRAGMA busy_timeout = 15000")
 
     def _create_db_path(self):
         if not xbmcvfs.exists(os.path.dirname(self.path)):

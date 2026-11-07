@@ -182,6 +182,11 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             WITH requested(simkl_id, last_updated) AS (VALUES
                     {','.join(f"({i.get('simkl_id')},'{get(i, 'dateadded')}')" for i in list_to_update)})
             SELECT r.simkl_id,
+                   m.info,
+                   m.art,
+                   m.[cast],
+                   m.imdb_id,
+                   m.meta_hash AS entity_meta_hash,
                    simkl_meta.value      AS simkl_object,
                    simkl_meta.meta_hash  AS simkl_meta_hash,
                    tmdb_id,
@@ -192,6 +197,9 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                    tvdb.meta_hash   AS tvdb_meta_hash,
                    fanart.value     AS fanart_object,
                    fanart.meta_hash AS fanart_meta_hash,
+                   imdb.value       AS imdb_object,
+                   imdb.meta_hash   AS imdb_meta_hash,
+                   anilist.value    AS anilist_object,
                    m.needs_update
             FROM requested as r
                      LEFT JOIN movies AS m
@@ -204,13 +212,23 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                                ON tvdb.id = m.tvdb_id AND tvdb.type = 'tvdb'
                      LEFT JOIN movies_meta AS fanart
                                ON fanart.id = m.tmdb_id AND fanart.type = 'fanart'
+                     LEFT JOIN movies_meta AS imdb
+                               ON imdb.id = m.imdb_id AND imdb.type = 'imdb'
+                     LEFT JOIN movies_meta AS anilist
+                               ON anilist.id = m.simkl_id AND anilist.type = 'anilist'
             """
 
         db_list_to_update = self.fetchall(sql_statement)
         self._apply_request_force_update(db_list_to_update, list_to_update)
+        for movie in db_list_to_update:
+            self._prepare_sync_update_row(movie, entity="movie")
+        self._prefetch_imdb_cast(db_list_to_update)
+        self._prefetch_anilist_cast(db_list_to_update)
 
         for movie in db_list_to_update:
-            movie["_entity"] = "movie"
+            self._prepare_sync_update_row(movie, entity="movie")
+            if self.metadataHandler._sync_update_noop(movie, "movie"):
+                continue
             self.task_queue.put(self.metadataHandler.update, movie)
         updated_items = self.task_queue.wait_completion()
 
@@ -238,6 +256,20 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
             "fanart",
             "tmdb_id",
         )
+        self.task_queue.put(
+            self.save_to_meta_table,
+            (i for i in updated_items if "imdb_object" in i),
+            "movies",
+            "imdb",
+            "imdb_id",
+        )
+        self.task_queue.put(
+            self.save_to_meta_table,
+            (i for i in updated_items if "anilist_object" in i),
+            "movies",
+            "anilist",
+            "simkl_id",
+        )
         self.task_queue.wait_completion()
 
         formatted_items = self.metadataHandler.format_db_object(updated_items)
@@ -248,7 +280,7 @@ class SimklSyncDatabase(database.SimklSyncDatabase):
                 i["info"],
                 i.get("art"),
                 i.get("cast"),
-                i["info"].get("playcount") or 0,
+                None,
                 i["info"].get("aired"),
                 i["info"].get("dateadded"),
                 i["info"].get("tmdb_id"),

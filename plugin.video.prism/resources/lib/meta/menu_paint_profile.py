@@ -142,23 +142,20 @@ def profile_list_kwargs(
         base.update(_browse_hide_filters())
         base["sync_path"] = True
         base["paint_only"] = False
+        base["skip_update"] = False
         base.setdefault("enrichment_reason", "browse")
-        if overrides.get("seeded") or overrides.get("preloaded_paint_rows") or overrides.get("preloaded_paint_complete"):
-            base["skip_update"] = True
-        else:
-            base["skip_update"] = False
     elif profile == MenuPaintProfile.SEARCH:
         base.update(_library_hide_filters())
         base["paint_profile"] = MenuPaintProfile.SEARCH.value
         base["sync_path"] = True
         base["paint_only"] = False
-        base["skip_update"] = True
+        base["skip_update"] = False
         base.setdefault("enrichment_reason", "search")
     elif profile == MenuPaintProfile.LIBRARY:
         base.update(_library_hide_filters())
         base["sync_path"] = True
         base["paint_only"] = False
-        base["skip_update"] = True
+        base["skip_update"] = False
         base.setdefault("enrichment_reason", "library")
     elif profile == MenuPaintProfile.LIBRARY_EPISODES:
         base.update(_library_hide_filters())
@@ -172,40 +169,27 @@ def profile_list_kwargs(
     elif profile == MenuPaintProfile.DRILLDOWN:
         base.update(_browse_hide_filters())
         base["paint_only"] = False
-        base["menu_cache"] = False
-        base["skip_watch_refresh"] = False
-        base["force_watch_refresh"] = True
+        base["menu_cache"] = True
+        base["drilldown_fast_open"] = True
+        base["catalog_pipeline"] = True
+        base["skip_watch_refresh"] = True
+        base["force_watch_refresh"] = False
         base.setdefault("enrichment_reason", "drilldown")
-        fast_open = overrides.get("drilldown_fast_open") or g.get_bool_setting(
-            "general.drilldown.fast_open", True
-        )
-        if fast_open:
-            base["drilldown_fast_open"] = True
-            base["catalog_pipeline"] = True
-            base["skip_watch_refresh"] = True
-            base["force_watch_refresh"] = False
-            base["menu_cache"] = True
     elif profile == MenuPaintProfile.RELATED:
         base.update(_browse_hide_filters())
         base["sync_path"] = True
         base["paint_only"] = False
+        base["skip_update"] = False
         base.setdefault("no_paging", True)
         base.setdefault("related_fast_open", True)
         base.setdefault("enrichment_reason", "related")
-        if overrides.get("seeded") or overrides.get("preloaded_paint_rows") or overrides.get("preloaded_paint_complete"):
-            base["skip_update"] = True
-        else:
-            base["skip_update"] = False
     elif profile == MenuPaintProfile.AIRING:
         base.update(_library_hide_filters())
         base["sync_path"] = True
         base["paint_only"] = False
+        base["skip_update"] = False
         base["mixed_list"] = True
         base.setdefault("enrichment_reason", "airing")
-        if overrides.get("seeded") or overrides.get("preloaded_paint_rows") or overrides.get("preloaded_paint_complete"):
-            base["skip_update"] = True
-        else:
-            base["skip_update"] = False
 
     if enrichment_reason:
         base["enrichment_reason"] = enrichment_reason

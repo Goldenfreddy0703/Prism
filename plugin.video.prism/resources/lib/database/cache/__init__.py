@@ -160,7 +160,7 @@ class Cache(CacheBase):
     def set(self, cache_id, data, checksum=None, expiration=None):
 
         if expiration is None:
-            expiration = datetime.timedelta(hours=8)
+            expiration = datetime.timedelta(hours=24)
 
         checksum = self._get_checksum(checksum)
         if self.enable_mem_cache and not self._exit:
@@ -248,7 +248,7 @@ class DatabaseCache(Database, CacheBase):
 
     def set(self, cache_id, data, checksum=None, expiration=None):
         if expiration is None:
-            expiration = datetime.timedelta(hours=8)
+            expiration = datetime.timedelta(hours=24)
 
         expires = self._get_timestamp(expiration)
         query = f"""
@@ -336,7 +336,7 @@ class MemCache(CacheBase):
 
     def set(self, cache_id, data, checksum=None, expiration=None):
         if expiration is None:
-            expiration = datetime.timedelta(hours=8)
+            expiration = datetime.timedelta(hours=24)
 
         expires = self._get_timestamp(expiration)
         cached = (expires, data, checksum)
@@ -378,7 +378,7 @@ class MemCache(CacheBase):
         super().close()
 
 
-def use_cache(cache_hours=8):
+def use_cache(cache_hours=12):
     """
     Ease of use decorator to automate caching of method calls
     :param cache_hours: Hours to cache return value for

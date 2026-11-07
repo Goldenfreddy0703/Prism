@@ -10,6 +10,15 @@ from resources.lib.indexers.simkl import SimklAPI
 from resources.lib.modules.globals import g
 
 SIMKL_CDN_BASE = "https://data.simkl.in"
+# Trending and DVD files change on a daily cycle. Keep the download for a day
+# so discover lists reuse it instead of pulling the full catalog again.
+TRENDING_CACHE_HOURS = 24
+
+
+def cache_hours_for_path(path: str) -> int:
+    if path.startswith("/discover/trending/") or path.startswith("/discover/dvd/"):
+        return TRENDING_CACHE_HOURS
+    return 1
 
 
 class SimklCDN:
@@ -47,19 +56,20 @@ class SimklCDN:
         """
         slug = {"movie": "movies", "tv": "tv", "anime": "anime"}.get(catalog, catalog)
         path = f"/discover/trending/{slug}/{window}_{size}.json"
-        data = self.fetch_json(path)
+        data = self.fetch_json(path, cache_hours=cache_hours_for_path(path))
         if isinstance(data, list):
             return data
         return []
 
     def trending_dvd(self, size: int = 500):
-        data = self.fetch_json(f"/discover/dvd/releases_{size}.json")
+        path = f"/discover/dvd/releases_{size}.json"
+        data = self.fetch_json(path, cache_hours=cache_hours_for_path(path))
         return data if isinstance(data, list) else []
 
     def trending_combined(self, window: str, size: int = 500):
         """Combined file with movies/tv/anime keys."""
         path = f"/discover/trending/{window}_{size}.json"
-        return self.fetch_json(path)
+        return self.fetch_json(path, cache_hours=cache_hours_for_path(path))
 
     def calendar_bundle(self, catalog: str) -> dict:
         """Simkl calendar v2: {calendar: [...], metadata: {simkl_id: {...}}}."""

@@ -539,7 +539,10 @@ def _reconcile_show_watch_entry(
     media_key = "anime" if catalog == "anime" else "shows"
     watch_entry = entry
     stub_entry = entry
-    if status in _LIBRARY_WATCH_STATUSES:
+    watch_ready = db._entry_has_full_episode_watch_detail(watch_entry) and db._entry_has_explicit_episode_watch_fields(
+        watch_entry
+    )
+    if status in _LIBRARY_WATCH_STATUSES and not watch_ready:
         params = build_repair_watch_params(
             include_all_episodes=status in ("completed", "dropped"),
         )
@@ -633,6 +636,10 @@ def ensure_show_episode_watch_aligned_for_paint(
     show_watched = int(row.get("watched_episodes") or 0)
     local_keys = _local_watched_episode_keys(db, show_id)
     if show_watched <= 0 and not local_keys:
+        return False
+    # Flags already saved by sync or a previous open. A second season open must not
+    # wait on Simkl again.
+    if show_watched > 0 and len(local_keys) == show_watched:
         return False
 
     entry = fetch_show_watch_entry_from_sync_watched(db.simkl_api, show_id, catalog)

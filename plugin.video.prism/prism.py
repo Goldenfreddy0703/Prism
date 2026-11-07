@@ -65,7 +65,7 @@ def _configure_invoker_thread_pool(action: str | None) -> None:
     if plugin_action_allows_threads(action):
         exit_prism_plugin_mode()
         return
-    if g.PLUGIN_HANDLE > 0 and not g.FROM_WIDGET:
+    if int(getattr(g, "PLUGIN_HANDLE", 0) or 0) > 0:
         exit_prism_plugin_mode()
         return
     enter_prism_plugin_mode()

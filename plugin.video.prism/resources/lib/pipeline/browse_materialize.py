@@ -1,176 +1,9 @@
-"""Foreground page materialize: menu-ready rows in simkl_sync before Seren menu paint."""
+"""Legacy browse materialize entry — Seren sync warmup only."""
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from resources.lib.modules.globals import g
-
-_MATERIALIZED_RAM: dict[tuple[str, str, str, int], tuple[float, list[dict]]] = {}
-_MATERIALIZED_TTL = 900.0
-
-
-def _paint_profile(source: str, catalog: str, profile: str | None) -> str:
-    if profile:
-        return str(profile)
-    from resources.lib.browse.page_payload import _paint_profile_for_payload
-
-    return _paint_profile_for_payload(source, catalog)
-
-
-def _materialize_cache_key(
-    source: str,
-    catalog: str,
-    list_id: str | None,
-    page: int | None,
-) -> tuple[str, str, str, int]:
-    return (str(source or ""), str(catalog or ""), str(list_id or ""), max(1, int(page or 1)))
-
-
-def _read_materialized_cache(key: tuple[str, str, str, int]) -> list[dict] | None:
-    entry = _MATERIALIZED_RAM.get(key)
-    if not entry:
-        return None
-    ts, rows = entry
-    if time.time() - ts > _MATERIALIZED_TTL:
-        _MATERIALIZED_RAM.pop(key, None)
-        return None
-    return [dict(row) for row in rows if isinstance(row, dict)]
-
-
-def _write_materialized_cache(key: tuple[str, str, str, int], rows: list[dict]) -> None:
-    if not rows:
-        return
-    _MATERIALIZED_RAM[key] = (time.time(), [dict(row) for row in rows if isinstance(row, dict)])
-
-
-def _seed_rows_to_sync(catalog: str, rows: list[dict], *, mixed: bool) -> None:
-    from resources.lib.meta.list_pipeline import seed_browse_page
-    from resources.lib.simkl.media_ref import partition_by_catalog
-
-    if not rows:
-        return
-    if mixed:
-        movies, tv, anime = partition_by_catalog(rows)
-        for cat, group in (("movie", movies), ("tv", tv), ("anime", anime)):
-            if group:
-                seed_browse_page(cat, group)
-        return
-    seed_browse_page(catalog, rows)
-
-
-def _stamp_rows(catalog: str, rows: list[dict], *, profile: str, mixed: bool) -> None:
-    from resources.lib.meta.page_materialize import stamp_page_rows_to_display_meta
-    from resources.lib.simkl.media_ref import partition_by_catalog
-
-    if not rows:
-        return
-    if mixed:
-        movies, tv, anime = partition_by_catalog(rows)
-        for cat, group in (("movie", movies), ("tv", tv), ("anime", anime)):
-            if group:
-                stamp_page_rows_to_display_meta(cat, group, profile=profile)
-        return
-    stamp_page_rows_to_display_meta(catalog, rows, profile=profile)
-
-
-def materialize_browse_page(
-    catalog: str,
-    items: list[dict],
-    *,
-    profile: str | None = None,
-    source: str = "",
-    mixed: bool = False,
-    list_id: str | None = None,
-    page: int | None = None,
-    skip_resolve_if_ready: bool = True,
-) -> list[dict]:
-    """
-    Ensure visible page rows are menu-ready (clearlogo + plot + cast), persist to simkl_sync,
-    and stamp display_meta. Returns ordered rows matching ``items``.
-    """
-    from resources.lib.meta.paint_complete import rows_page_menu_ready
-    from resources.lib.simkl.enrich import hydrate_sync_items_local
-
-    if not items:
-        return []
-
-    paint_profile = _paint_profile(source, catalog, profile)
-    cache_key = _materialize_cache_key(source, catalog, list_id, page or g.PAGE)
-    cached = _read_materialized_cache(cache_key)
-    if cached and rows_page_menu_ready(cached, profile=paint_profile):
-        _seed_rows_to_sync(catalog, cached, mixed=mixed)
-        return _order_like_items(items, cached)
-
-    from resources.lib.meta.list_window_cache import (
-        browse_materialize_window_key,
-        get_browse_materialized_items,
-        set_browse_materialized_items,
-    )
-
-    window_key = browse_materialize_window_key(source, catalog, list_id, page or g.PAGE)
-    window_cached = get_browse_materialized_items(window_key)
-    if window_cached:
-        ordered = _order_like_items(items, window_cached)
-        if ordered:
-            _seed_rows_to_sync(catalog, ordered, mixed=mixed)
-            _write_materialized_cache(cache_key, ordered)
-            g.log(
-                f"Browse materialize: path=window source={source} catalog={catalog} mixed={mixed} "
-                f"rows={len(ordered)}",
-                "debug",
-            )
-            return ordered
-
-    if g.PLUGIN_HANDLE > 0:
-        from resources.lib.net.request_policy import policy_from_settings
-
-        policy_from_settings().reset_menu_budget()
-
-    started = time.time()
-    hydrated = hydrate_sync_items_local([dict(row) for row in items if isinstance(row, dict)])
-    if skip_resolve_if_ready and rows_page_menu_ready(hydrated, profile=paint_profile):
-        rows = _order_like_items(items, hydrated)
-        _seed_rows_to_sync(catalog, rows, mixed=mixed)
-        _stamp_rows(catalog, rows, profile=paint_profile, mixed=mixed)
-        _write_materialized_cache(cache_key, rows)
-        set_browse_materialized_items(window_key, rows)
-        g.log(
-            f"Browse materialize: path=ready source={source} catalog={catalog} mixed={mixed} "
-            f"rows={len(rows)} ms={int((time.time() - started) * 1000)}",
-            "debug",
-        )
-        return rows
-
-    if mixed:
-        from resources.lib.browse.browse_paint_resolver import resolve_mixed_browse_rows
-
-        rows = resolve_mixed_browse_rows(
-            items,
-            profile=paint_profile,
-            source=source or paint_profile,
-        )
-    else:
-        from resources.lib.browse.browse_paint_resolver import resolve_browse_page_rows
-
-        rows = resolve_browse_page_rows(
-            catalog,
-            items,
-            profile=paint_profile,
-            source=source or paint_profile,
-        )
-
-    rows = _order_like_items(items, rows)
-    _seed_rows_to_sync(catalog, rows, mixed=mixed)
-    _stamp_rows(catalog, rows, profile=paint_profile, mixed=mixed)
-    _write_materialized_cache(cache_key, rows)
-    set_browse_materialized_items(window_key, rows)
-    g.log(
-        f"Browse materialize: path=resolve source={source} catalog={catalog} mixed={mixed} "
-        f"rows={len(rows)} ms={int((time.time() - started) * 1000)}",
-        "debug",
-    )
-    return rows
 
 
 def _order_like_items(items: list[dict], rows: list[dict]) -> list[dict]:
@@ -200,31 +33,56 @@ def _order_like_items(items: list[dict], rows: list[dict]) -> list[dict]:
     return ordered
 
 
-def materialize_episode_page(
-    catalog: str,
-    episode_rows: list[dict],
-    *,
-    profile: str = "library_episodes",
-    library_paint: bool = False,
-) -> list[dict]:
-    """Seed parent shows for episode menus; paint happens in render_catalog_episodes."""
-    from resources.lib.meta.list_paint import (
-        peek_episode_page_cache,
-        prefetch_episode_parent_simkl_detail,
-        upsert_episode_parent_shows,
-    )
-    from resources.lib.meta.paint_complete import rows_page_paint_ready
+def _seed_rows_to_sync(catalog: str, rows: list[dict], *, mixed: bool) -> None:
+    from resources.lib.meta.list_pipeline import seed_browse_page
+    from resources.lib.simkl.media_ref import partition_by_catalog
 
-    if not episode_rows:
+    if not rows:
+        return
+    if mixed:
+        movies, tv, anime = partition_by_catalog(rows)
+        for cat, group in (("movie", movies), ("tv", tv), ("anime", anime)):
+            if group:
+                seed_browse_page(cat, group)
+        return
+    seed_browse_page(catalog, rows)
+
+
+def materialize_browse_page(
+    catalog: str,
+    items: list[dict],
+    *,
+    profile: str | None = None,
+    source: str = "",
+    mixed: bool = False,
+    list_id: str | None = None,
+    page: int | None = None,
+    skip_resolve_if_ready: bool = True,
+) -> list[dict]:
+    """Warm simkl_sync rows via Seren _update_* (no blocking resolve pipeline)."""
+    from resources.lib.pipeline.sync_page_warmup import warmup_sync_mixed_refs, warmup_sync_page_refs
+    from resources.lib.simkl.enrich import hydrate_sync_items_local
+
+    if not items:
         return []
 
-    if peek_episode_page_cache(catalog, episode_rows, paint_profile=profile) is not None:
-        return episode_rows
+    refs = [{"simkl_id": row.get("simkl_id")} for row in items if isinstance(row, dict) and row.get("simkl_id")]
+    if mixed:
+        warmup_sync_mixed_refs(items)
+    else:
+        warmup_sync_page_refs(catalog, refs)
 
-    if rows_page_paint_ready(episode_rows, profile=profile):
-        return episode_rows
+    hydrated = hydrate_sync_items_local([dict(row) for row in items if isinstance(row, dict)])
+    rows = _order_like_items(items, hydrated)
+    _seed_rows_to_sync(catalog, rows, mixed=mixed)
+    g.log(
+        f"Browse materialize: path=sync_update source={source} catalog={catalog} mixed={mixed} rows={len(rows)}",
+        "debug",
+    )
+    return rows
 
-    upsert_episode_parent_shows(episode_rows, catalog)
-    if library_paint:
-        prefetch_episode_parent_simkl_detail(episode_rows, catalog)
-    return episode_rows
+
+def materialize_episode_page(*args, **kwargs) -> list[dict]:
+    """Episode drilldown pages use Simkl-local paint only."""
+    items = kwargs.get("items") or (args[1] if len(args) > 1 else [])
+    return list(items or [])

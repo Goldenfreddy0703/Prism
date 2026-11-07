@@ -13,7 +13,7 @@ def begin_browse_menu_snapshot() -> dict[str, Any]:
     _SNAPSHOT = {
         "page_limit": max(1, g.get_int_setting("item.limit", 25)),
         "menu_caching": g.kodi_menu_caching_enabled(),
-        "wal_mode": g.get_bool_setting("general.db.wal_mode", False),
+        "wal_mode": True,
     }
     return dict(_SNAPSHOT)
 

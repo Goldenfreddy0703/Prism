@@ -85,6 +85,7 @@ def api_detail_to_sync_dict(payload: dict[str, Any] | None, catalog: str) -> dic
 
     enrich_info_from_simkl(info, payload, catalog=sync_dict.get("catalog", catalog), mediatype=info.get("mediatype"))
     finalize_playback_info(info)
+    info["simkl_detail_checked"] = True
 
     from resources.lib.simkl.images import attach_show_art
 

@@ -6,7 +6,7 @@ import time
 from typing import Any, Dict, Tuple
 
 from resources.lib.database.cache import use_cache
-from resources.lib.indexers.simkl_cdn import SimklCDN
+from resources.lib.indexers.simkl_cdn import TRENDING_CACHE_HOURS, SimklCDN
 from resources.lib.modules.globals import g
 
 RowKey = Tuple[str, int]
@@ -185,9 +185,9 @@ def _ingest_dvd(store: RowStore, cdn: SimklCDN) -> None:
             merge_trending_into_row(store, "movie", item)
 
 
-@use_cache(cache_hours=1)
+@use_cache(cache_hours=TRENDING_CACHE_HOURS)
 def warm_cdn_trending_store() -> RowStore:
-    """Download full Simkl CDN trending lists — discover hub / background only."""
+    """Download full Simkl CDN trending lists and keep them for 24 hours."""
     started = time.time()
     store: RowStore = {}
     cdn = SimklCDN()
