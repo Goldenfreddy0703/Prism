@@ -638,7 +638,9 @@ class SmartPlay:
         if len(playlist_uris) == 1 and g.PLAYLIST.getposition() <= 0:
             g.PLAYLIST.clear()
 
-        if g.PLAYLIST.getposition() == -1:
+        if g.PLAYLIST.size() == 0:
+            # Combined Landscape PlayMedia leaves no playlist row. Seed one and replay
+            # so playback is playlist playback; the slot is released before that replay.
             return self.create_single_item_playlist_from_info()
 
         if any(g.ADDON_ID not in u for u in playlist_uris):

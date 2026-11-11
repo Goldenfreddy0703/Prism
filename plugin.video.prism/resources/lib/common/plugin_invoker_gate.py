@@ -15,6 +15,7 @@ _PLUGIN_SLOT_LOCK_KEY = "prism.plugin_slot.owner"
 _PLUGIN_SLOT_FINISHED_KEY = "prism.plugin_slot.last_finished"
 _MIN_INVOKER_GAP_SEC = 2.0
 _LOCK_STALE_SEC = 90.0
+_slot_handed_off = False
 _runtime_settings_cache = None
 
 
@@ -135,23 +136,53 @@ def acquire_prism_plugin_slot(max_wait_sec: float = 45.0) -> str:
     while not _abort_requested():
         if _try_acquire_slot(token):
             _wait_invoker_gap()
-            return token
+            break
         if time.time() >= deadline:
             try:
                 g.log("PRISM: Plugin slot timeout — continuing without exclusive lock", "warning")
             except Exception:
                 pass
-            return token
+            break
         _wait_abort(0.05)
     return token
 
 
 def release_prism_plugin_slot(token: str | None) -> None:
+    global _slot_handed_off
     if not token:
+        return
+    if _slot_handed_off:
+        _slot_handed_off = False
+        if _get_runtime_setting(_PLUGIN_SLOT_LOCK_KEY) == token:
+            _clear_runtime_setting(_PLUGIN_SLOT_LOCK_KEY)
         return
     if _get_runtime_setting(_PLUGIN_SLOT_LOCK_KEY) == token:
         _clear_runtime_setting(_PLUGIN_SLOT_LOCK_KEY)
     _set_runtime_setting(_PLUGIN_SLOT_FINISHED_KEY, time.time())
+
+
+def release_current_plugin_slot(*, pace_next: bool = True) -> bool:
+    """Drop this process's slot once Kodi is playing.
+
+    getSources stays inside _keep_alive until the file ends. Holding the slot
+    for that whole time makes a playlist click wait out the 45s timeout.
+    """
+    global _slot_handed_off
+    owner = _get_runtime_setting(_PLUGIN_SLOT_LOCK_KEY)
+    if not owner:
+        return False
+    try:
+        owner_pid = int(str(owner).split(":", 1)[0])
+    except (TypeError, ValueError):
+        return False
+    if owner_pid != os.getpid():
+        return False
+    _clear_runtime_setting(_PLUGIN_SLOT_LOCK_KEY)
+    if pace_next:
+        _set_runtime_setting(_PLUGIN_SLOT_FINISHED_KEY, time.time())
+    else:
+        _slot_handed_off = True
+    return True
 
 
 def prepare_foreground_plugin_invoke() -> bool:

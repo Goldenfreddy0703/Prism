@@ -249,6 +249,10 @@ class PrismPlayer(xbmc.Player):
 
             xbmcplugin.setResolvedUrl(g.PLUGIN_HANDLE, True, self._create_list_item(stream_link))
 
+            from resources.lib.common.plugin_invoker_gate import release_current_plugin_slot
+
+            release_current_plugin_slot(pace_next=False)
+
             from resources.lib.common import tools
 
             tools.run_threaded(g.clear_kodi_bookmarks)

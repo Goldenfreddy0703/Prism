@@ -1,3 +1,7 @@
+Changelog 5.0.68
+[BUG] Combined Landscape — choosing an episode opens Get Sources immediately, and the up-next playlist is built for that episode
+[BUG] Playlist during playback — choosing another episode opens Get Sources immediately instead of waiting on the episode that is already playing
+
 Changelog 5.0.67
 [IMPROVEMENT] My Lists — saved anime lists on Discover, above Genres. Preview, Edit, Clear editor, and Save. Rename, delete, or load a saved list back into the editor. Current, Next, and Previous season and year stay current when the list opens
 [IMPROVEMENT] My Lists for movies and TV — the same editor, using TMDB Discover. Titles are matched to Simkl, and the page fills up to the item limit

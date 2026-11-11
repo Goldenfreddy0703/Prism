@@ -219,6 +219,9 @@ def dispatch(params):
 
             if play_list:
                 g.log("Cancelling non playlist playback", "warning")
+                from resources.lib.common.plugin_invoker_gate import release_current_plugin_slot
+
+                release_current_plugin_slot(pace_next=False)
                 xbmc.Player().play(g.PLAYLIST)
                 return
 
