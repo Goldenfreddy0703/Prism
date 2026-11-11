@@ -133,7 +133,7 @@ class TenraiAPI(ApiBase):
     ) -> dict | None:
         params: dict = {
             "page": max(1, int(page)),
-            "limit": min(50, max(1, int(limit))),
+            "limit": min(100, max(1, int(limit))),
         }
         # Tenrai/Jikan: sfw=true or sfw= (empty) strips NSFW genres; omit sfw to include them.
         if sfw:

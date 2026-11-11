@@ -50,6 +50,7 @@ _DISCOVER_ACTOR_DESCRIPTIONS: dict[Catalog, int] = {
 }
 # Icon filenames use the "shows" prefix for the tv catalog.
 _ICON_PREFIX = {"movie": "movies", "tv": "shows", "anime": "anime"}
+_LIST_ICONS = {"movie": "list_movies", "tv": "list_shows", "anime": "list_anime"}
 
 _CALENDAR_MENU = {
     "movie": ("movieAiringCalendar", "Weekly Movie Calendar", "movies_calendar"),
@@ -141,6 +142,22 @@ class DiscoverRenderer:
                 list_id=item.list_id,
                 description=item.label,
                 menu_item=g.create_icon_dict(_discover_list_icon(item), g.ICONS_PATH),
+            )
+
+        if catalog == "anime":
+            g.add_directory_item(
+                g.get_language_string(31280),
+                action="animeTenraiLists",
+                description=g.get_language_string(31280),
+                menu_item=g.create_icon_dict(_LIST_ICONS["anime"], g.ICONS_PATH),
+            )
+        elif catalog in ("movie", "tv") and tmdb_features_enabled():
+            g.add_directory_item(
+                g.get_language_string(31280),
+                action="tmdbMyLists",
+                catalog=catalog,
+                description=g.get_language_string(31280),
+                menu_item=g.create_icon_dict(_LIST_ICONS[catalog], g.ICONS_PATH),
             )
 
         g.add_directory_item(

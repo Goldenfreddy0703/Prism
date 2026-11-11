@@ -1,5 +1,7 @@
-Prism 5.0.65 — Simkl library deadlock (#31)
+Prism 5.0.67 — My Lists
 
-Fixes ``DeadlockError`` on ``resources.lib.net.sync_bridge`` when opening Simkl library lists (especially My Anime → Watching / On Hold / Dropped) under concurrent plugin threads. The ``net`` package now lazy-loads ``sync_bridge`` and related exports instead of importing them at startup.
+Build your own anime, movie, and TV lists from Discover. My Lists sits above Genres. Preview a list, edit the filters, clear the editor, and save it. Rename, delete, or load a saved list back into the editor. Current, Next, and Previous season and year stay up to date when the list opens.
 
-Includes all 5.0.64 changes if you skipped that release: library menu window cache, season identity / simklSync schema, anime pack auto-pick (#26), and related sync improvements.
+Movie and TV lists use TMDB Discover. Every title is matched to Simkl, and the page fills up to your item limit. Saved lists are stored in lists.db, and export and import backup include that file. Lists you already saved as JSON are copied in the first time you open My Lists.
+
+Includes the 5.0.66 fixes if you skipped that release: movie and season completion indicators, Back after marking watched, actor filmography pages, and faster trending lists.

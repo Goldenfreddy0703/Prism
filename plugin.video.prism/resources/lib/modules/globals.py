@@ -932,6 +932,7 @@ class GlobalVariables:
         )
         self.INFO_DB_PATH = os.path.join(self.CONTEXT_ADDON_PATH, "info.db")
         self.SEARCH_HISTORY_DB_PATH = tools.translate_path(os.path.join(self.ADDON_USERDATA_PATH, "search.db"))
+        self.LISTS_DB_PATH = tools.translate_path(os.path.join(self.ADDON_USERDATA_PATH, "lists.db"))
         self.SKINS_DB_PATH = tools.translate_path(os.path.join(self.ADDON_USERDATA_PATH, "skins.db"))
 
     def get_kodi_video_db_connection(

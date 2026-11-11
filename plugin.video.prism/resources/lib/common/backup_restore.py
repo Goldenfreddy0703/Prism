@@ -33,6 +33,10 @@ BACKUP_FILES = frozenset(
         "skins.db.md5",
         "premiumize.db",
         "premiumize.db.md5",
+        "lists.db",
+        "tenrai_anime_lists.json",
+        "tmdb_movie_lists.json",
+        "tmdb_tv_lists.json",
     }
 )
 BACKUP_FOLDERS = frozenset(
@@ -45,7 +49,7 @@ BACKUP_FOLDERS = frozenset(
     }
 )
 SKIP_SUFFIXES = (".db-wal", ".db-shm", ".md5", ".temp")
-DB_FILENAMES = frozenset({"simklSync.db", "providers.db", "skins.db", "premiumize.db"})
+DB_FILENAMES = frozenset({"simklSync.db", "providers.db", "skins.db", "premiumize.db", "lists.db"})
 
 
 def _deferred_restore_dirname() -> str:

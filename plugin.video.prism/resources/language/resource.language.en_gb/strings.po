@@ -6211,3 +6211,664 @@ msgstr "View changelog"
 msgctxt "#31271"
 msgid "Restart Kodi when you can so Prism finishes loading with a clean profile."
 msgstr "Restart Kodi when you can so Prism finishes loading with a clean profile."
+
+#: /resources/lib/simkl/tenrai_custom_lists.py
+msgctxt "#31280"
+msgid "My Lists"
+msgstr "My Lists"
+
+msgctxt "#31281"
+msgid "New list"
+msgstr "New list"
+
+msgctxt "#31282"
+msgid "Edit"
+msgstr "Edit"
+
+msgctxt "#31283"
+msgid "Clear editor"
+msgstr "Clear editor"
+
+msgctxt "#31284"
+msgid "Save"
+msgstr "Save"
+
+msgctxt "#31285"
+msgid "List name"
+msgstr "List name"
+
+msgctxt "#31286"
+msgid "Rename"
+msgstr "Rename"
+
+msgctxt "#31287"
+msgid "Delete"
+msgstr "Delete"
+
+msgctxt "#31288"
+msgid "Load into editor"
+msgstr "Load into editor"
+
+msgctxt "#31289"
+msgid "Delete this list?"
+msgstr "Delete this list?"
+
+msgctxt "#31290"
+msgid "Sort"
+msgstr "Sort"
+
+msgctxt "#31291"
+msgid "Any"
+msgstr "Any"
+
+msgctxt "#31292"
+msgid "Members"
+msgstr "Members"
+
+msgctxt "#31293"
+msgid "Popularity"
+msgstr "Popularity"
+
+msgctxt "#31294"
+msgid "Score"
+msgstr "Score"
+
+msgctxt "#31295"
+msgid "Favorites"
+msgstr "Favorites"
+
+msgctxt "#31296"
+msgid "Title"
+msgstr "Title"
+
+msgctxt "#31297"
+msgid "Start date"
+msgstr "Start date"
+
+msgctxt "#31298"
+msgid "Episode count"
+msgstr "Episode count"
+
+msgctxt "#31299"
+msgid "Number of scores"
+msgstr "Number of scores"
+
+msgctxt "#31300"
+msgid "Rank"
+msgstr "Rank"
+
+msgctxt "#31301"
+msgid "Date added"
+msgstr "Date added"
+
+msgctxt "#31302"
+msgid "Season"
+msgstr "Season"
+
+msgctxt "#31303"
+msgid "Season year"
+msgstr "Season year"
+
+msgctxt "#31304"
+msgid "Year"
+msgstr "Year"
+
+msgctxt "#31305"
+msgid "From year"
+msgstr "From year"
+
+msgctxt "#31306"
+msgid "To year"
+msgstr "To year"
+
+msgctxt "#31307"
+msgid "Broadcast day"
+msgstr "Broadcast day"
+
+msgctxt "#31308"
+msgid "Type"
+msgstr "Type"
+
+msgctxt "#31309"
+msgid "Exclude types"
+msgstr "Exclude types"
+
+msgctxt "#31310"
+msgid "Status"
+msgstr "Status"
+
+msgctxt "#31311"
+msgid "Exclude statuses"
+msgstr "Exclude statuses"
+
+msgctxt "#31312"
+msgid "Content rating"
+msgstr "Content rating"
+
+msgctxt "#31313"
+msgid "Exclude ratings"
+msgstr "Exclude ratings"
+
+msgctxt "#31314"
+msgid "Source"
+msgstr "Source"
+
+msgctxt "#31315"
+msgid "Genres"
+msgstr "Genres"
+
+msgctxt "#31316"
+msgid "Exclude genres"
+msgstr "Exclude genres"
+
+msgctxt "#31317"
+msgid "Minimum score"
+msgstr "Minimum score"
+
+msgctxt "#31318"
+msgid "Minimum members"
+msgstr "Minimum members"
+
+msgctxt "#31319"
+msgid "Minimum episodes"
+msgstr "Minimum episodes"
+
+msgctxt "#31320"
+msgid "Maximum episodes"
+msgstr "Maximum episodes"
+
+msgctxt "#31321"
+msgid "Voice language"
+msgstr "Voice language"
+
+msgctxt "#31322"
+msgid "Studio"
+msgstr "Studio"
+
+msgctxt "#31323"
+msgid "Hide Ecchi"
+msgstr "Hide Ecchi"
+
+msgctxt "#31324"
+msgid "Choose"
+msgstr "Choose"
+
+msgctxt "#31325"
+msgid "Studio name"
+msgstr "Studio name"
+
+msgctxt "#31326"
+msgid "No studios found"
+msgstr "No studios found"
+
+msgctxt "#31327"
+msgid "Winter"
+msgstr "Winter"
+
+msgctxt "#31328"
+msgid "Spring"
+msgstr "Spring"
+
+msgctxt "#31329"
+msgid "Summer"
+msgstr "Summer"
+
+msgctxt "#31330"
+msgid "Fall"
+msgstr "Fall"
+
+msgctxt "#31331"
+msgid "Today"
+msgstr "Today"
+
+msgctxt "#31332"
+msgid "Tomorrow"
+msgstr "Tomorrow"
+
+msgctxt "#31333"
+msgid "Monday"
+msgstr "Monday"
+
+msgctxt "#31334"
+msgid "Tuesday"
+msgstr "Tuesday"
+
+msgctxt "#31335"
+msgid "Wednesday"
+msgstr "Wednesday"
+
+msgctxt "#31336"
+msgid "Thursday"
+msgstr "Thursday"
+
+msgctxt "#31337"
+msgid "Friday"
+msgstr "Friday"
+
+msgctxt "#31338"
+msgid "Saturday"
+msgstr "Saturday"
+
+msgctxt "#31339"
+msgid "Sunday"
+msgstr "Sunday"
+
+msgctxt "#31340"
+msgid "TV"
+msgstr "TV"
+
+msgctxt "#31341"
+msgid "Movie"
+msgstr "Movie"
+
+msgctxt "#31342"
+msgid "OVA"
+msgstr "OVA"
+
+msgctxt "#31343"
+msgid "ONA"
+msgstr "ONA"
+
+msgctxt "#31344"
+msgid "Special"
+msgstr "Special"
+
+msgctxt "#31345"
+msgid "TV special"
+msgstr "TV special"
+
+msgctxt "#31346"
+msgid "Airing"
+msgstr "Airing"
+
+msgctxt "#31347"
+msgid "Finished"
+msgstr "Finished"
+
+msgctxt "#31348"
+msgid "Upcoming"
+msgstr "Upcoming"
+
+msgctxt "#31349"
+msgid "G"
+msgstr "G"
+
+msgctxt "#31350"
+msgid "PG"
+msgstr "PG"
+
+msgctxt "#31351"
+msgid "PG-13"
+msgstr "PG-13"
+
+msgctxt "#31352"
+msgid "R - 17+"
+msgstr "R - 17+"
+
+msgctxt "#31353"
+msgid "R+"
+msgstr "R+"
+
+msgctxt "#31354"
+msgid "Rx"
+msgstr "Rx"
+
+msgctxt "#31355"
+msgid "Original"
+msgstr "Original"
+
+msgctxt "#31356"
+msgid "Manga"
+msgstr "Manga"
+
+msgctxt "#31357"
+msgid "Light novel"
+msgstr "Light novel"
+
+msgctxt "#31358"
+msgid "Web novel"
+msgstr "Web novel"
+
+msgctxt "#31359"
+msgid "Visual novel"
+msgstr "Visual novel"
+
+msgctxt "#31360"
+msgid "Game"
+msgstr "Game"
+
+msgctxt "#31361"
+msgid "Web manga"
+msgstr "Web manga"
+
+msgctxt "#31362"
+msgid "Novel"
+msgstr "Novel"
+
+msgctxt "#31363"
+msgid "4-koma manga"
+msgstr "4-koma manga"
+
+msgctxt "#31364"
+msgid "Mixed media"
+msgstr "Mixed media"
+
+msgctxt "#31365"
+msgid "Other"
+msgstr "Other"
+
+msgctxt "#31366"
+msgid "English"
+msgstr "English"
+
+msgctxt "#31367"
+msgid "French"
+msgstr "French"
+
+msgctxt "#31368"
+msgid "German"
+msgstr "German"
+
+msgctxt "#31369"
+msgid "Spanish"
+msgstr "Spanish"
+
+msgctxt "#31370"
+msgid "Portuguese (BR)"
+msgstr "Portuguese (BR)"
+
+msgctxt "#31371"
+msgid "Italian"
+msgstr "Italian"
+
+msgctxt "#31372"
+msgid "Korean"
+msgstr "Korean"
+
+msgctxt "#31373"
+msgid "Mandarin"
+msgstr "Mandarin"
+
+msgctxt "#31374"
+msgid "Hebrew"
+msgstr "Hebrew"
+
+msgctxt "#31375"
+msgid "Hungarian"
+msgstr "Hungarian"
+
+msgctxt "#31376"
+msgid "Japanese"
+msgstr "Japanese"
+
+msgctxt "#31377"
+msgid "On"
+msgstr "On"
+
+msgctxt "#31378"
+msgid "Current"
+msgstr "Current"
+
+msgctxt "#31379"
+msgid "Enter a year"
+msgstr "Enter a year"
+
+msgctxt "#31383"
+msgid "Next"
+msgstr "Next"
+
+msgctxt "#31384"
+msgid "Previous"
+msgstr "Previous"
+
+msgctxt "#31380"
+msgid "Preview: %s"
+msgstr "Preview: %s"
+
+msgctxt "#31381"
+msgid "Change the filters on the preview. Saved lists stay as they are until you save."
+msgstr "Change the filters on the preview. Saved lists stay as they are until you save."
+
+msgctxt "#31382"
+msgid "Reset the preview to a new list. Saved lists are not deleted."
+msgstr "Reset the preview to a new list. Saved lists are not deleted."
+
+msgctxt "#31385"
+msgid "Popularity, highest first"
+msgstr "Popularity, highest first"
+
+msgctxt "#31386"
+msgid "Popularity, lowest first"
+msgstr "Popularity, lowest first"
+
+msgctxt "#31387"
+msgid "Vote average, highest first"
+msgstr "Vote average, highest first"
+
+msgctxt "#31388"
+msgid "Vote average, lowest first"
+msgstr "Vote average, lowest first"
+
+msgctxt "#31389"
+msgid "Vote count, highest first"
+msgstr "Vote count, highest first"
+
+msgctxt "#31390"
+msgid "Vote count, lowest first"
+msgstr "Vote count, lowest first"
+
+msgctxt "#31391"
+msgid "Release date, newest first"
+msgstr "Release date, newest first"
+
+msgctxt "#31392"
+msgid "Release date, oldest first"
+msgstr "Release date, oldest first"
+
+msgctxt "#31393"
+msgid "Title, A to Z"
+msgstr "Title, A to Z"
+
+msgctxt "#31394"
+msgid "Title, Z to A"
+msgstr "Title, Z to A"
+
+msgctxt "#31395"
+msgid "Original title, A to Z"
+msgstr "Original title, A to Z"
+
+msgctxt "#31396"
+msgid "Original title, Z to A"
+msgstr "Original title, Z to A"
+
+msgctxt "#31397"
+msgid "Revenue, highest first"
+msgstr "Revenue, highest first"
+
+msgctxt "#31398"
+msgid "Revenue, lowest first"
+msgstr "Revenue, lowest first"
+
+msgctxt "#31399"
+msgid "First air date, newest first"
+msgstr "First air date, newest first"
+
+msgctxt "#31400"
+msgid "First air date, oldest first"
+msgstr "First air date, oldest first"
+
+msgctxt "#31401"
+msgid "Name, A to Z"
+msgstr "Name, A to Z"
+
+msgctxt "#31402"
+msgid "Name, Z to A"
+msgstr "Name, Z to A"
+
+msgctxt "#31403"
+msgid "Original name, A to Z"
+msgstr "Original name, A to Z"
+
+msgctxt "#31404"
+msgid "Original name, Z to A"
+msgstr "Original name, Z to A"
+
+msgctxt "#31405"
+msgid "Minimum vote average"
+msgstr "Minimum vote average"
+
+msgctxt "#31406"
+msgid "Maximum vote average"
+msgstr "Maximum vote average"
+
+msgctxt "#31407"
+msgid "Minimum vote count"
+msgstr "Minimum vote count"
+
+msgctxt "#31408"
+msgid "Maximum vote count"
+msgstr "Maximum vote count"
+
+msgctxt "#31409"
+msgid "Minimum runtime"
+msgstr "Minimum runtime"
+
+msgctxt "#31410"
+msgid "Maximum runtime"
+msgstr "Maximum runtime"
+
+msgctxt "#31411"
+msgid "Original language"
+msgstr "Original language"
+
+msgctxt "#31412"
+msgid "Origin country"
+msgstr "Origin country"
+
+msgctxt "#31413"
+msgid "Company"
+msgstr "Company"
+
+msgctxt "#31414"
+msgid "Exclude company"
+msgstr "Exclude company"
+
+msgctxt "#31415"
+msgid "Company name"
+msgstr "Company name"
+
+msgctxt "#31416"
+msgid "No companies found"
+msgstr "No companies found"
+
+msgctxt "#31417"
+msgid "Network"
+msgstr "Network"
+
+msgctxt "#31418"
+msgid "Network name"
+msgstr "Network name"
+
+msgctxt "#31419"
+msgid "No networks found"
+msgstr "No networks found"
+
+msgctxt "#31420"
+msgid "Status"
+msgstr "Status"
+
+msgctxt "#31421"
+msgid "Returning"
+msgstr "Returning"
+
+msgctxt "#31422"
+msgid "Planned"
+msgstr "Planned"
+
+msgctxt "#31423"
+msgid "In production"
+msgstr "In production"
+
+msgctxt "#31424"
+msgid "Ended"
+msgstr "Ended"
+
+msgctxt "#31425"
+msgid "Canceled"
+msgstr "Canceled"
+
+msgctxt "#31426"
+msgid "Pilot"
+msgstr "Pilot"
+
+msgctxt "#31427"
+msgid "Hindi"
+msgstr "Hindi"
+
+msgctxt "#31428"
+msgid "Russian"
+msgstr "Russian"
+
+msgctxt "#31429"
+msgid "Arabic"
+msgstr "Arabic"
+
+msgctxt "#31430"
+msgid "Portuguese"
+msgstr "Portuguese"
+
+msgctxt "#31431"
+msgid "United States"
+msgstr "United States"
+
+msgctxt "#31432"
+msgid "United Kingdom"
+msgstr "United Kingdom"
+
+msgctxt "#31433"
+msgid "Japan"
+msgstr "Japan"
+
+msgctxt "#31434"
+msgid "South Korea"
+msgstr "South Korea"
+
+msgctxt "#31435"
+msgid "France"
+msgstr "France"
+
+msgctxt "#31436"
+msgid "Germany"
+msgstr "Germany"
+
+msgctxt "#31437"
+msgid "Spain"
+msgstr "Spain"
+
+msgctxt "#31438"
+msgid "Italy"
+msgstr "Italy"
+
+msgctxt "#31439"
+msgid "China"
+msgstr "China"
+
+msgctxt "#31440"
+msgid "India"
+msgstr "India"
+
+msgctxt "#31441"
+msgid "Canada"
+msgstr "Canada"
+
+msgctxt "#31442"
+msgid "Australia"
+msgstr "Australia"
+
+msgctxt "#31443"
+msgid "Brazil"
+msgstr "Brazil"
+
+msgctxt "#31444"
+msgid "Mexico"
+msgstr "Mexico"

@@ -589,6 +589,98 @@ def dispatch(params):
 
         animeMenus.Menus().anime_genres_multi_list(action_args)
 
+    elif action == "animeTenraiLists":
+        from resources.lib.simkl.tenrai_custom_lists import show_lists
+
+        show_lists()
+
+    elif action == "animeTenraiListOpen":
+        from resources.lib.gui.animeMenus import Menus
+        from resources.lib.simkl.tenrai_custom_lists import open_list
+
+        open_list(Menus().list_builder)
+
+    elif action == "animeTenraiListEdit":
+        from resources.lib.simkl.tenrai_custom_lists import edit_draft
+
+        edit_draft()
+
+    elif action == "animeTenraiListClear":
+        from resources.lib.simkl.tenrai_custom_lists import clear_draft
+
+        clear_draft()
+
+    elif action == "animeTenraiListSave":
+        from resources.lib.simkl.tenrai_custom_lists import save_draft
+
+        save_draft()
+
+    elif action == "animeTenraiListRenameDraft":
+        from resources.lib.simkl.tenrai_custom_lists import rename_draft
+
+        rename_draft()
+
+    elif action == "animeTenraiListRename":
+        from resources.lib.simkl.tenrai_custom_lists import rename_list
+
+        rename_list()
+
+    elif action == "animeTenraiListDelete":
+        from resources.lib.simkl.tenrai_custom_lists import delete_list
+
+        delete_list()
+
+    elif action == "animeTenraiListLoad":
+        from resources.lib.simkl.tenrai_custom_lists import load_list_into_draft
+
+        load_list_into_draft()
+
+    elif action == "tmdbMyLists":
+        from resources.lib.simkl.tmdb_custom_lists import show_lists
+
+        show_lists()
+
+    elif action == "tmdbMyListOpen":
+        from resources.lib.modules.list_builder import ListBuilder
+        from resources.lib.simkl.tmdb_custom_lists import open_list
+
+        open_list(ListBuilder())
+
+    elif action == "tmdbMyListEdit":
+        from resources.lib.simkl.tmdb_custom_lists import edit_draft
+
+        edit_draft()
+
+    elif action == "tmdbMyListClear":
+        from resources.lib.simkl.tmdb_custom_lists import clear_draft
+
+        clear_draft()
+
+    elif action == "tmdbMyListSave":
+        from resources.lib.simkl.tmdb_custom_lists import save_draft
+
+        save_draft()
+
+    elif action == "tmdbMyListRenameDraft":
+        from resources.lib.simkl.tmdb_custom_lists import rename_draft
+
+        rename_draft()
+
+    elif action == "tmdbMyListRename":
+        from resources.lib.simkl.tmdb_custom_lists import rename_list
+
+        rename_list()
+
+    elif action == "tmdbMyListDelete":
+        from resources.lib.simkl.tmdb_custom_lists import delete_list
+
+        delete_list()
+
+    elif action == "tmdbMyListLoad":
+        from resources.lib.simkl.tmdb_custom_lists import load_list_into_draft
+
+        load_list_into_draft()
+
     elif action == "shufflePlay":
         from resources.lib.modules import smartPlay
 
