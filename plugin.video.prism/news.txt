@@ -1,7 +1,7 @@
-Prism 5.0.67 — My Lists
+Prism 5.0.69 — Info and widgets
 
-Build your own anime, movie, and TV lists from Discover. My Lists sits above Genres. Preview a list, edit the filters, clear the editor, and save it. Rename, delete, or load a saved list back into the editor. Current, Next, and Previous season and year stay up to date when the list opens.
+Movie dialogs now show the director, content rating, theatrical date, and status. A released movie says Released. TV and anime show the content rating when Simkl has one, and anime uses the Simkl studio names. Plots no longer show raw line-break tags.
 
-Movie and TV lists use TMDB Discover. Every title is matched to Simkl, and the page fills up to your item limit. Saved lists are stored in lists.db, and export and import backup include that file. Lists you already saved as JSON are copied in the first time you open My Lists.
+Tools has a Widgets folder with mixed movie, TV, and anime lists for skin home widgets, including Trending, Popular, and Top Rated.
 
-Includes the 5.0.66 fixes if you skipped that release: movie and season completion indicators, Back after marking watched, actor filmography pages, and faster trending lists.
+Includes the 5.0.68 playback fix if you skipped that release: Combined Landscape and playlist episode clicks open Get Sources immediately, and the up-next playlist is still built.

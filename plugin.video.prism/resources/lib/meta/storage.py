@@ -35,6 +35,7 @@ _DISPLAY_INFO_KEYS = frozenset(
         "catalog",
         "type",
         "anime_type",
+        "season_name_year",
         "simkl_id",
         "tmdb_id",
         "tvdb_id",

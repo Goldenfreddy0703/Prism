@@ -1,3 +1,9 @@
+Changelog 5.0.69
+[IMPROVEMENT] Movie info — director, content rating, theatrical date, and status. A released movie shows as Released
+[IMPROVEMENT] TV and anime info — content rating when Simkl has one. Anime studio names come from Simkl. The TV studio line stays the network
+[IMPROVEMENT] Plots — Simkl line breaks and web text codes are shown as normal text
+[IMPROVEMENT] Tools → Widgets — mixed movie, TV, and anime lists for skin home widgets. Trending, Popular, Most Watched, Most Anticipated, Top Rated, New This Year, New Releases, Easy to Finish, Ongoing, and Ended
+
 Changelog 5.0.68
 [BUG] Combined Landscape — choosing an episode opens Get Sources immediately, and the up-next playlist is built for that episode
 [BUG] Playlist during playback — choosing another episode opens Get Sources immediately instead of waiting on the episode that is already playing

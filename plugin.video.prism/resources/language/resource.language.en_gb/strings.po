@@ -6872,3 +6872,63 @@ msgstr "Brazil"
 msgctxt "#31444"
 msgid "Mexico"
 msgstr "Mexico"
+
+msgctxt "#31445"
+msgid "Widgets"
+msgstr "Widgets"
+
+msgctxt "#31446"
+msgid "Mixed movie, TV, and anime lists for skin home widgets"
+msgstr "Mixed movie, TV, and anime lists for skin home widgets"
+
+msgctxt "#31447"
+msgid "Simkl Trending — Last 24 Hours"
+msgstr "Simkl Trending — Last 24 Hours"
+
+msgctxt "#31448"
+msgid "Simkl Trending — Last 7 Days"
+msgstr "Simkl Trending — Last 7 Days"
+
+msgctxt "#31449"
+msgid "Simkl Trending — Last 30 Days"
+msgstr "Simkl Trending — Last 30 Days"
+
+msgctxt "#31450"
+msgid "Popular on Simkl"
+msgstr "Popular on Simkl"
+
+msgctxt "#31451"
+msgid "Most Watched on Simkl"
+msgstr "Most Watched on Simkl"
+
+msgctxt "#31452"
+msgid "Most Anticipated on Simkl"
+msgstr "Most Anticipated on Simkl"
+
+msgctxt "#31453"
+msgid "Top Rated on Simkl"
+msgstr "Top Rated on Simkl"
+
+msgctxt "#31454"
+msgid "Top Rated on IMDb and MAL"
+msgstr "Top Rated on IMDb and MAL"
+
+msgctxt "#31455"
+msgid "New This Year"
+msgstr "New This Year"
+
+msgctxt "#31456"
+msgid "New Releases"
+msgstr "New Releases"
+
+msgctxt "#31457"
+msgid "Easy to Finish"
+msgstr "Easy to Finish"
+
+msgctxt "#31458"
+msgid "Ongoing"
+msgstr "Ongoing"
+
+msgctxt "#31459"
+msgid "Ended"
+msgstr "Ended"

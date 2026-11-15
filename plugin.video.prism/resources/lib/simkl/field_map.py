@@ -2,12 +2,44 @@
 from __future__ import annotations
 
 import html
+import re
 from typing import Any
 
 from resources.lib.discover.normalize import _int_or_none, _normalize_air_date, ensure_info_duration
 
 # Discover CDN fields that must not be copied into Kodi list info (popularity metrics).
 _DISCOVER_POPULARITY_INFO_KEYS = frozenset({"watched", "plan_to_watch"})
+
+
+_BR_TAG = re.compile(r"(?i)<\s*br\s*/?\s*>")
+_BLOCK_CLOSE = re.compile(r"(?i)<\s*/\s*(?:p|div|li|h[1-6])\s*>")
+_BLOCK_OPEN = re.compile(r"(?i)<\s*(?:p|div|li|h[1-6])(?:\s[^>]*)?>")
+_INLINE_TAG = re.compile(r"(?i)<\s*/?\s*(?:b|strong|i|em|u|span)\s*>")
+_TRAILING_SPACE = re.compile(r"[ \t]+\n")
+_LEADING_SPACE = re.compile(r"\n[ \t]+")
+_EXTRA_BREAKS = re.compile(r"\n{3,}")
+
+
+def clean_simkl_text(value: str | None) -> str:
+    """Turn Simkl HTML breaks and entities into plain synopsis text."""
+    if not isinstance(value, str):
+        return ""
+    text = value
+    for _ in range(2):
+        unescaped = html.unescape(text)
+        if unescaped == text:
+            break
+        text = unescaped
+    text = text.replace("\xa0", " ")
+    text = _BR_TAG.sub("\n", text)
+    text = _BLOCK_CLOSE.sub("\n", text)
+    text = _BLOCK_OPEN.sub("\n", text)
+    text = _INLINE_TAG.sub("", text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _TRAILING_SPACE.sub("\n", text)
+    text = _LEADING_SPACE.sub("\n", text)
+    text = _EXTRA_BREAKS.sub("\n\n", text)
+    return text.strip()
 
 
 def real_synopsis_text(info: dict[str, Any] | None) -> str:
@@ -23,8 +55,11 @@ def real_synopsis_text(info: dict[str, Any] | None) -> str:
         placeholder = "No episode synopsis is available at this time."
     for key in ("plot", "overview", "description"):
         value = info.get(key)
-        if isinstance(value, str) and value.strip() and value.strip() != placeholder.strip():
-            return value.strip()
+        if not isinstance(value, str):
+            continue
+        text = clean_simkl_text(value)
+        if text and text != placeholder.strip():
+            return text
     return ""
 
 
@@ -58,8 +93,15 @@ def sanitize_list_info(info: dict[str, Any] | None, *, catalog: str | None = Non
             cleaned.pop("watched", None)
 
     status = str(cleaned.get("status") or "").strip().lower()
-    if is_movie and status == "ended":
-        cleaned.pop("status", None)
+    if is_movie and status:
+        movie_status = {
+            "ended": "Released",
+            "released": "Released",
+            "premiere": "Premiere",
+            "ongoing": "Ongoing",
+        }.get(status)
+        if movie_status:
+            cleaned["status"] = movie_status
 
     return cleaned
 
@@ -615,6 +657,82 @@ def promote_ratings_for_display(
     apply_display_rating(info, priority)
 
 
+_THEATRICAL_RELEASE_TYPES = (3, 2, 1)
+_DIGITAL_RELEASE_TYPE = 4
+
+
+def _studio_names(studios: Any) -> list[str]:
+    """Simkl anime ``studios`` entries are ``{id, name}`` objects."""
+    if isinstance(studios, str) and studios.strip():
+        return [studios.strip()]
+    if not isinstance(studios, list):
+        return []
+    names: list[str] = []
+    for entry in studios:
+        if isinstance(entry, str):
+            name = entry.strip()
+        elif isinstance(entry, dict):
+            name = str(entry.get("name") or entry.get("title") or "").strip()
+        else:
+            continue
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _release_events(release_dates: Any) -> list[tuple[str, int, str]]:
+    if not isinstance(release_dates, list):
+        return []
+    events: list[tuple[str, int, str]] = []
+    for block in release_dates:
+        if not isinstance(block, dict):
+            continue
+        country = str(block.get("iso_3166_1") or "").strip().upper()
+        results = block.get("results")
+        if not isinstance(results, list):
+            continue
+        for event in results:
+            if not isinstance(event, dict):
+                continue
+            try:
+                event_type = int(event.get("type"))
+            except (TypeError, ValueError):
+                continue
+            date = str(event.get("release_date") or "").strip()
+            if date:
+                events.append((country, event_type, date))
+    return events
+
+
+def _earliest_release(events: list[tuple[str, int, str]], countries: list[str], types: tuple[int, ...]) -> str | None:
+    wanted = {country for country in countries if country}
+    matches = [
+        (types.index(event_type), date)
+        for country, event_type, date in events
+        if event_type in types and (not wanted or country in wanted)
+    ]
+    if not matches:
+        return None
+    matches.sort()
+    return matches[0][1]
+
+
+def preferred_movie_release_date(release_dates: Any, production_country: Any = None) -> str | None:
+    """Prefer a US theatrical date, then the production country, then any theatrical date."""
+    events = _release_events(release_dates)
+    if not events:
+        return None
+    home = str(production_country or "").strip().upper()
+    countries = ["US"]
+    if home and home not in countries:
+        countries.append(home)
+    for country_set in (["US"], [home] if home else [], []):
+        found = _earliest_release(events, country_set, _THEATRICAL_RELEASE_TYPES)
+        if found:
+            return found
+    return _earliest_release(events, countries, (_DIGITAL_RELEASE_TYPE,))
+
+
 def _apply_ratings(info: dict[str, Any], ratings: dict[str, Any] | None) -> None:
     if not ratings or not isinstance(ratings, dict):
         return
@@ -642,8 +760,8 @@ def enrich_info_from_simkl(
     elif catalog is None and mt in ("tvshow", "episode", "season"):
         catalog = "tv"
 
-    overview = source.get("overview") or source.get("description")
-    if overview and not info.get("plot"):
+    overview = clean_simkl_text(source.get("overview") or source.get("description") or "")
+    if overview and not clean_simkl_text(info.get("plot") if isinstance(info.get("plot"), str) else ""):
         info["plot"] = overview
 
     title = _unescape(source.get("title"))
@@ -675,6 +793,19 @@ def enrich_info_from_simkl(
         if info.get("year") is None:
             info["year"] = _int_or_none(str(air)[:4])
 
+    theatrical = preferred_movie_release_date(
+        source.get("release_dates"),
+        source.get("country") or info.get("country"),
+    )
+    if not theatrical and (catalog == "movie" or mt == "movie"):
+        theatrical = source.get("theater")
+    if theatrical and (catalog == "movie" or mt == "movie"):
+        theatrical_air = _normalize_air_date(theatrical)
+        if theatrical_air:
+            info["premiered"] = theatrical_air
+            info["aired"] = theatrical_air
+            info["released"] = theatrical_air
+
     country = source.get("country") or source.get("country_origin")
     if country:
         info.setdefault("country", country)
@@ -694,11 +825,29 @@ def enrich_info_from_simkl(
     if source.get("status") and not info.get("status"):
         info["status"] = source.get("status")
 
-    if source.get("network") and not info.get("studio"):
+    studio_names = _studio_names(source.get("studios"))
+    if studio_names and (catalog == "anime" or source.get("anime_type") or info.get("mal_id")):
+        info["studio"] = studio_names
+    elif source.get("network") and not info.get("studio"):
         info["studio"] = source.get("network")
+
+    director = source.get("director")
+    if isinstance(director, str):
+        director = director.strip()
+    if director and not info.get("director") and (catalog == "movie" or mt == "movie"):
+        info["director"] = director
 
     if source.get("certification") and not info.get("mpaa"):
         info["mpaa"] = source.get("certification")
+
+    season_label = source.get("season_name_year")
+    if (
+        isinstance(season_label, str)
+        and season_label.strip()
+        and not info.get("season_name_year")
+        and (catalog == "anime" or source.get("anime_type") or info.get("mal_id"))
+    ):
+        info["season_name_year"] = season_label.strip()
 
     trailer = _youtube_trailer(source.get("trailer"))
     if trailer and not info.get("trailer"):

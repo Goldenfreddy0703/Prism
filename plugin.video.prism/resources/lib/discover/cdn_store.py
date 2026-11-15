@@ -42,6 +42,11 @@ def _blank_row(catalog: str, simkl_id: int) -> dict[str, Any]:
         "runtime": None,
         "status": None,
         "network": None,
+        "director": None,
+        "certification": None,
+        "theater": None,
+        "season_name_year": None,
+        "studios": None,
         "metadata_line": None,
         "anime_type": None,
         "total_episodes": None,
@@ -124,6 +129,13 @@ def _merge_from_trending_blob(row: dict[str, Any], blob: dict[str, Any]) -> None
     _merge_str_field(row, "runtime", blob.get("runtime"))
     _merge_str_field(row, "status", blob.get("status"))
     _merge_str_field(row, "network", blob.get("network"))
+    _merge_str_field(row, "director", blob.get("director"))
+    _merge_str_field(row, "certification", blob.get("certification"))
+    _merge_str_field(row, "theater", blob.get("theater"))
+    _merge_str_field(row, "season_name_year", blob.get("season_name_year"))
+    studios = blob.get("studios")
+    if isinstance(studios, list) and studios and not row.get("studios"):
+        row["studios"] = studios
     _merge_str_field(row, "metadata_line", blob.get("metadata"))
     _merge_str_field(row, "anime_type", blob.get("anime_type"))
     _merge_str_field(row, "trailer", blob.get("trailer"))

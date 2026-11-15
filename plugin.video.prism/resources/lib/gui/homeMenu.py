@@ -146,6 +146,12 @@ class Menus:
     @staticmethod
     def tools_menu():
         g.add_directory_item(
+            g.get_language_string(31445),
+            action="widgetTools",
+            description=g.get_language_string(31446),
+            menu_item=g.create_icon_dict("list", g.ICONS_PATH),
+        )
+        g.add_directory_item(
             g.get_language_string(31232),
             action="showReleaseNotes",
             is_folder=False,

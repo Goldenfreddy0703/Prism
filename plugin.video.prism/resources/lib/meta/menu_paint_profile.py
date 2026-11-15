@@ -23,6 +23,7 @@ class MenuPaintProfile(str, Enum):
 _ACTION_PROFILES: dict[str, MenuPaintProfile] = {
     # Discover
     "simklDiscoverList": MenuPaintProfile.BROWSE,
+    "widgetMixedList": MenuPaintProfile.BROWSE,
     "genericEndpoint": MenuPaintProfile.BROWSE,
     "moviesUpdated": MenuPaintProfile.BROWSE,
     "showsUpdated": MenuPaintProfile.BROWSE,

@@ -502,6 +502,16 @@ def dispatch(params):
 
         homeMenu.Menus().tools_menu()
 
+    elif action == "widgetTools":
+        from resources.lib.gui.widget_menus import show_widget_menu
+
+        show_widget_menu()
+
+    elif action == "widgetMixedList":
+        from resources.lib.gui.widget_menus import render_mixed_trending
+
+        render_mixed_trending(action_args)
+
     elif action == "showReleaseNotes":
         from resources.lib.modules import release_notes
 

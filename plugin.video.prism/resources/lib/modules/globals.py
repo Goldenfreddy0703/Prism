@@ -395,7 +395,7 @@ def set_video_info_tag(item, info, cast=None, unique_ids=None):
         info_tag.setTrailer(str(info["trailer"]))
     if info.get("code"):
         info_tag.setProductionCode(str(info["code"]))
-    if info.get("status") and str(info.get("mediatype") or "").lower() in ("tvshow", "season"):
+    if info.get("status") and str(info.get("mediatype") or "").lower() in ("tvshow", "season", "movie"):
         info_tag.setTvShowStatus(str(info["status"]))
     if info.get("path"):
         info_tag.setPath(str(info["path"]))

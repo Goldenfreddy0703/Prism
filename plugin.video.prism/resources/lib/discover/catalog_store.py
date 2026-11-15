@@ -471,6 +471,8 @@ def _sync_base_to_cdn_row(
         "runtime",
         "status",
         "network",
+        "director",
+        "season_name_year",
         "metadata_line",
         "anime_type",
         "total_episodes",
@@ -480,6 +482,13 @@ def _sync_base_to_cdn_row(
         val = _pick(key)
         if val is not None:
             row[key] = val
+
+    if info.get("mpaa") and not row.get("certification"):
+        row["certification"] = info.get("mpaa")
+    if info.get("studio") and not row.get("studios"):
+        row["studios"] = info.get("studio")
+    if catalog == "movie" and info.get("premiered") and not row.get("theater"):
+        row["theater"] = info.get("premiered")
 
     ids = dict(base.get("ids") or {})
     if not ids and isinstance(info.get("ids"), dict):
