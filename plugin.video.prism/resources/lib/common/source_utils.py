@@ -1028,21 +1028,36 @@ def _cloud_file_episode_conflicts(file_title: str, simple_info: dict) -> bool:
         wanted = (int(simple_info["season_number"]), int(simple_info["episode_number"]))
     except (KeyError, TypeError, ValueError):
         return False
+    # Negative placeholders are unknown coordinates, not a definite mismatch.
+    if wanted[0] < 0 or wanted[1] < 0:
+        return False
 
+    # Underscores separate filename tokens, but count as word characters for \b.
+    filename = filename.replace("_", " ")
+    # Each pattern captures (season, episode); leading zeroes are accepted.
     patterns = (
-        r"\bs(\d+)[ ._-]*x?[ ._-]*e(\d+)(?!\d)",
-        r"\b(\d+)[ ._-]*x[ ._-]*(\d+)(?!\d)",
-        r"\bseason[ ._-]*(\d+)[ ._-]*(?:episode|ep)[ ._-]*(\d+)(?!\d)",
+        # S02E04 / S2E4, optional separators (S02.E04), or S02xE04.
+        r"\bs(\d+)[ ._-]*x?[ ._-]*e(\d+)",
+        # 2x04 / 02x04, including separators around x.
+        r"\b(\d+)[ ._-]*x[ ._-]*(\d+)",
+        # Season 2 Episode 4 / Season2Ep4, with optional filename separators.
+        r"\bseason[ ._-]*(\d+)[ ._-]*(?:episode|ep)[ ._-]*(\d+)",
     )
     coordinates = [match for pattern in patterns for match in re.finditer(pattern, filename, re.IGNORECASE)]
+    # No pair, or multiple pairs, cannot establish a single-episode conflict.
     if len(coordinates) != 1:
         return False
     match = coordinates[0]
+    # Inspect the suffix immediately after the pair for another episode or range.
     continuation = (
-        r"(?:[ex]\s*\d+(?!\d)"
-        r"|[\s,._-]+(?:episode|ep|e)\s*\d+(?!\d)"
+        # Appended episode: S02E02E03 or 2x02x03.
+        r"(?:[ex]\s*\d+"
+        # Separated marker: S02E02-E03 or Season 2 Episode 2 Episode 3.
+        r"|[\s,._-]+(?:episode|ep|e)\s*\d+"
+        # Bare list/range: S02E02-03, S02E02 to 03, or 2x02 x03.
         r"|[\s,_-]+(?:(?:to|through)[\s_-]+)?(?:[ex][\s_-]*)?\d+\b)"
     )
+    # Dots are excluded before bare numbers so .7.1 stays audio metadata.
     # Leave multi-episode releases to the existing matching rules.
     if re.match(continuation, filename[match.end():], re.IGNORECASE):
         return False
