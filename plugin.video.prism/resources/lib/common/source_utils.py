@@ -514,19 +514,16 @@ def build_cloud_match_title(item: dict) -> str:
     return clean_title(" ".join(parts))
 
 
-def build_cloud_file_title(item: dict) -> str:
-    """Filename-only title for cloud episode/season matching (avoids folder season false positives)."""
+def build_cloud_file_title(item: dict, *, clean: bool = True) -> str:
+    """Cloud filename without parent folders; optionally retain its original punctuation."""
     if not isinstance(item, dict):
         return ""
-    for key in ("name", "release_title", "short_name"):
+    for key in ("name", "release_title", "short_name", "path"):
         value = item.get(key)
         if isinstance(value, str) and value.strip():
-            return clean_title(value.strip())
-    path = item.get("path")
-    if isinstance(path, str) and path.strip():
-        segment = path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
-        if segment.strip():
-            return clean_title(segment.strip())
+            filename = value.strip().replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+            if filename:
+                return clean_title(filename) if clean else filename
     return ""
 
 
@@ -1020,6 +1017,38 @@ def cloud_loose_episode_match(release_title: str, simple_info: dict) -> bool:
     )
 
 
+def _cloud_file_episode_conflicts(file_title: str, simple_info: dict) -> bool:
+    """Reject clear single-episode TV files before trying loose cloud matches."""
+    if not simple_info or simple_info.get("isanime"):
+        return False
+    filename = file_title.strip().replace("\\", "/").rsplit("/", 1)[-1]
+    if not filename.lower().endswith(g.common_video_extensions):
+        return False
+    try:
+        wanted = (int(simple_info["season_number"]), int(simple_info["episode_number"]))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+    patterns = (
+        r"\bs(\d+)[ ._-]*x?[ ._-]*e(\d+)(?!\d)",
+        r"\b(\d+)[ ._-]*x[ ._-]*(\d+)(?!\d)",
+        r"\bseason[ ._-]*(\d+)[ ._-]*(?:episode|ep)[ ._-]*(\d+)(?!\d)",
+    )
+    coordinates = [match for pattern in patterns for match in re.finditer(pattern, filename, re.IGNORECASE)]
+    if len(coordinates) != 1:
+        return False
+    match = coordinates[0]
+    continuation = (
+        r"(?:[ex]\s*\d+(?!\d)"
+        r"|[\s,._-]+(?:episode|ep|e)\s*\d+(?!\d)"
+        r"|[\s,_-]+(?:(?:to|through)[\s_-]+)?(?:[ex][\s_-]*)?\d+\b)"
+    )
+    # Leave multi-episode releases to the existing matching rules.
+    if re.match(continuation, filename[match.end():], re.IGNORECASE):
+        return False
+    return tuple(int(value) for value in match.groups()) != wanted
+
+
 def cloud_episode_item_matches(
     release_title: str,
     *,
@@ -1032,6 +1061,8 @@ def cloud_episode_item_matches(
     match_title = clean_title(release_title)
     file_title_clean = clean_title(file_title) if file_title else match_title
 
+    if file_title and _cloud_file_episode_conflicts(file_title, simple_info):
+        return False
     if episode_regex(match_title) or episode_regex(file_title_clean):
         return True
     # Season-pack regex must not run on folder paths (e.g. "Beyblade X Season 1/...").
