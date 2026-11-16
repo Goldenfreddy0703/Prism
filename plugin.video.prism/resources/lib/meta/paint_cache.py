@@ -482,7 +482,7 @@ def episode_page_paint_cache_key(
     return (
         "episode_page",
         catalog,
-        tuple(sorted(int(i) for i in episode_simkl_ids)),
+        tuple(int(i) for i in episode_simkl_ids),
         flags["hide_unaired"],
         flags["hide_watched"],
         paint_profile,

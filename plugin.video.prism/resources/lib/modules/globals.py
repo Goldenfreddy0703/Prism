@@ -1981,6 +1981,8 @@ class GlobalVariables:
     def close_directory(self, content_type, sort=False, cache=None):
         if content_type == self.CONTENT_EPISODE and not sort:
             sort = "episode"
+        if sort == "unsorted":
+            xbmcplugin.addSortMethod(self.PLUGIN_HANDLE, xbmcplugin.SORT_METHOD_UNSORTED)
         if sort == "title":
             xbmcplugin.addSortMethod(self.PLUGIN_HANDLE, xbmcplugin.SORT_METHOD_LABEL_IGNORE_THE)
         if sort == "episode":
