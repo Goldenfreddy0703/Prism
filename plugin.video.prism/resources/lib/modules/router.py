@@ -213,7 +213,21 @@ def dispatch(params):
                     smart_play.prepare_external_playlist(external_url_extras)
                 play_list = False
             elif manual_playback_override:
+                # Source select still has to show the picker. Seed a playlist first when
+                # Kodi is not already playing one, so setResolvedUrl joins that playlist.
                 play_list = False
+                if (
+                    item_information.get("info", {}).get("mediatype") == g.MEDIA_EPISODE
+                    and g.get_bool_setting("smartplay.playlistcreate")
+                    and g.PLAYLIST.getposition() < 0
+                    and g.PLAYLIST.size() == 0
+                ):
+                    url_extras = {}
+                    if source_select_param in ("true", "false"):
+                        url_extras["source_select"] = source_select_param
+                    if overwrite_cache:
+                        url_extras["prism_reload"] = "true"
+                    play_list = smart_play.create_single_item_playlist_from_info(url_extras)
             else:
                 play_list = smart_play.playlist_present_check(smart_url_arg)
 
@@ -226,6 +240,32 @@ def dispatch(params):
                 return
 
             resume_time = smart_play.handle_resume_prompt(resume, force_resume_off, force_resume_on, force_resume_check)
+            if item_information['info']['mediatype'] == g.MEDIA_EPISODE and (
+                overwrite_cache or source_select_param == "true"
+            ):
+                from resources.lib.modules.last_played_source import clear_played_pack
+
+                clear_played_pack()
+
+            if (
+                item_information['info']['mediatype'] == g.MEDIA_EPISODE
+                and source_select_param != "true"
+                and not overwrite_cache
+            ):
+                from resources.lib.modules.last_played_source import take_saved_pack_stream
+
+                saved_stream = take_saved_pack_stream(item_information)
+                if saved_stream:
+                    g.log("Playing next file from saved pack without scraping", "info")
+                    from resources.lib.modules import player
+
+                    try:
+                        prism_player = player.PrismPlayer()
+                        prism_player.play_source(saved_stream, item_information, resume_time=resume_time)
+                    finally:
+                        del prism_player
+                    return
+
             background = helpers.show_persistent_window_if_required(item_information)
             # Clear out last resolved title for a show if we are doing a rescrape
             if overwrite_cache and item_information['info']['mediatype'] == g.MEDIA_EPISODE:
@@ -350,6 +390,13 @@ def dispatch(params):
             from resources.lib.common import tools
 
             item_information = tools.get_item_information(action_args)
+
+            if item_information.get("info", {}).get("mediatype") == g.MEDIA_EPISODE:
+                from resources.lib.modules.last_played_source import saved_pack_pending
+
+                if saved_pack_pending(item_information):
+                    g.log("preScrape: skipped, saved pack will supply the next file", "info")
+                    return
 
             # Get Sources
             sources_helper = helpers.SourcesHelper()

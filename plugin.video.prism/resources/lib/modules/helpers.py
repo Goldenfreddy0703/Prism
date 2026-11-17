@@ -83,11 +83,18 @@ class Resolverhelper:
             and item_information.get("info", {}).get("mediatype") == g.MEDIA_EPISODE
         ):
             from resources.lib.simkl.ids import show_id_from_info
+            from resources.lib.modules.last_played_source import remember_played_pack
             from resources.lib.modules.last_played_source import save_last_played_source
 
+            show_id = show_id_from_info(item_information.get("info"))
             save_last_played_source(
                 resolved_source,
-                show_id=show_id_from_info(item_information.get("info")),
+                show_id=show_id,
+            )
+            remember_played_pack(
+                resolved_source,
+                show_id=show_id,
+                pack_select=bool(pack_select),
             )
         return stream_link
 

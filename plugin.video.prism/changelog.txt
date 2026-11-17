@@ -1,3 +1,8 @@
+Changelog 5.0.70
+[BUG] Rescrape and Source Select — the episode starts in the playlist, so the rest of the season is queued
+[BUG] Next Up — stays closed on the last episode, and when playback is not coming from the playlist
+[IMPROVEMENT] Season packs — the torrent you played is reused for the next episode, and the file is chosen by Episode number in the filename. A single-episode file, Rescrape, or Source Select clears that saved pack
+
 Changelog 5.0.69
 [IMPROVEMENT] Movie info — director, content rating, theatrical date, and status. A released movie shows as Released
 [IMPROVEMENT] TV and anime info — content rating when Simkl has one. Anime studio names come from Simkl. The TV studio line stays the network

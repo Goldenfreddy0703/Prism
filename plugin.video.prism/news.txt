@@ -1,7 +1,5 @@
-Prism 5.0.69 — Info and widgets
+Prism 5.0.70 — Playlists and season packs
 
-Movie dialogs now show the director, content rating, theatrical date, and status. A released movie says Released. TV and anime show the content rating when Simkl has one, and anime uses the Simkl studio names. Plots no longer show raw line-break tags.
+Rescrape and Source Select now start the episode in the playlist, so the following episodes are queued. Next Up stays closed on the last episode.
 
-Tools has a Widgets folder with mixed movie, TV, and anime lists for skin home widgets, including Trending, Popular, and Top Rated.
-
-Includes the 5.0.68 playback fix if you skipped that release: Combined Landscape and playlist episode clicks open Get Sources immediately, and the up-next playlist is still built.
+When a season pack plays, the next episode uses that same torrent and picks the file by the episode number in the name. A single-episode file, Rescrape, or Source Select clears the saved pack.

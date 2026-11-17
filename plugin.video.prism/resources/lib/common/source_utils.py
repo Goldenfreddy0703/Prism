@@ -1440,6 +1440,71 @@ def get_best_episode_match(dict_key, dictionary_list, item_information):
     return files[0]
 
 
+_EPISODE_FILE_TOKEN = re.compile(
+    r"(?:^|[\s._\[\-\(])(?:episode|ep)[\s._\-]*0*(\d{1,4})(?!\d)",
+    re.IGNORECASE,
+)
+
+
+def _optional_positive_int(value) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _episode_token_targets(simple_info: dict) -> list[int]:
+    """Episode numbers to look for in Episode.NN / Ep.NN file names."""
+    menu = _menu_episode_int(simple_info)
+    absolute = _optional_positive_int(
+        simple_info.get("simkl_episode_number") or simple_info.get("absolute_number")
+    )
+    alternative = _optional_positive_int(simple_info.get("alternative_episode"))
+    targets: list[int] = []
+    # A full-series pack numbers Episode.13 for season 2 episode 1. Do not also
+    # accept Episode.01 once the absolute number and the menu number disagree.
+    if simple_info.get("isanime") and absolute and menu and absolute != menu:
+        targets.append(absolute)
+        if alternative and alternative not in targets and alternative != menu:
+            targets.append(alternative)
+        return targets
+    for number in (menu, absolute, alternative):
+        if number and number not in targets:
+            targets.append(number)
+    return targets
+
+
+def _episode_numbers_in_filename(filename: str) -> set[int]:
+    numbers: set[int] = set()
+    for match in _EPISODE_FILE_TOKEN.finditer(filename or ""):
+        numbers.add(int(match.group(1)))
+    return numbers
+
+
+def _pick_file_by_episode_token(dict_key, dictionary_list, simple_info):
+    """Pick Episode.NN / Ep.NN inside a pack when the show-title matchers miss."""
+    targets = _episode_token_targets(simple_info or {})
+    if not targets or not dictionary_list:
+        return None
+    rows = []
+    for item in dictionary_list:
+        path = str(item.get("path") or item.get(dict_key) or "")
+        base = path.replace("\\", "/").rsplit("/", 1)[-1]
+        numbers = _episode_numbers_in_filename(base)
+        if numbers:
+            rows.append((item, numbers, base))
+    for target in targets:
+        hits = [row for row in rows if target in row[1]]
+        if not hits:
+            continue
+        hits.sort(key=lambda row: int(row[0].get("size") or 0), reverse=True)
+        return hits[0][0]
+    return None
+
+
 def get_best_episode_match_cloud(dict_key, dictionary_list, item_information, simple_info=None):
     """
     Cloud-style episode matching for torrent season packs (full path + anime loose matching).
@@ -1478,7 +1543,10 @@ def get_best_episode_match_cloud(dict_key, dictionary_list, item_information, si
             matches.append((tier, item, path_hint))
 
     if not matches:
-        return get_best_episode_match(dict_key, dictionary_list, item_information)
+        legacy = get_best_episode_match(dict_key, dictionary_list, item_information)
+        if legacy is not None:
+            return legacy
+        return _pick_file_by_episode_token(dict_key, dictionary_list, simple_info)
 
     menu_ep = _menu_episode_int(simple_info)
 

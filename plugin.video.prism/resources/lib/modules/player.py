@@ -849,7 +849,10 @@ class PrismPlayer(xbmc.Player):
             break
 
     def _has_next_item(self):
-        return g.PLAYLIST.size() > 0 and g.PLAYLIST.getposition() != (g.PLAYLIST.size() - 1)
+        position = g.PLAYLIST.getposition()
+        size = g.PLAYLIST.size()
+        # Position -1 means this playback is not a playlist item. That is not a next episode.
+        return position >= 0 and size > 0 and position < (size - 1)
 
     def _handle_introdb_segments(self):
         current = self.current_time
@@ -1001,7 +1004,9 @@ class PlayerDialogs(xbmc.Player):
             except RuntimeError:
                 g.log("Kodi did not return a playing file, killing playback dialogs", "error")
                 return
-            if g.PLAYLIST.size() > 0 and g.PLAYLIST.getposition() != (g.PLAYLIST.size() - 1):
+            playlist_size = g.PLAYLIST.size()
+            playlist_position = g.PLAYLIST.getposition()
+            if playlist_position >= 0 and playlist_size > 0 and playlist_position < (playlist_size - 1):
                 if g.get_bool_setting("smartplay.stillwatching") and self._still_watching_calc():
                     target = self._show_still_watching
                 elif g.get_bool_setting("smartplay.playingnextdialog"):

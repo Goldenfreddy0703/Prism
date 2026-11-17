@@ -1,6 +1,7 @@
 """Digit-position last-played source matching for Smart Play auto-resolve."""
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -8,6 +9,15 @@ from resources.lib.modules.globals import g
 
 _SETTING_ID = "general.last_played_source"
 _SHOW_ID_SETTING = "general.last_played_show_id"
+_PACK_SETTING = "general.last_played_pack"
+_PACK_PACKAGES = frozenset({"show", "season"})
+_DEBRID_READY = {
+    "premiumize": "premiumize_enabled",
+    "real_debrid": "real_debrid_enabled",
+    "all_debrid": "all_debrid_enabled",
+    "torbox": "torbox_enabled",
+    "offcloud": "offcloud_enabled",
+}
 _PLAYSTYLE_EPISODES = "general.playstyleEpisodes"
 _PLAYSTYLE_SOURCE_SELECT = 1
 _PLAYSTYLE_GUIDED_AUTO = 2
@@ -95,6 +105,141 @@ def is_smart_play_reorder_context(
 def clear_last_played_source() -> None:
     g.set_setting(_SETTING_ID, "")
     g.set_setting(_SHOW_ID_SETTING, "")
+
+
+def _pack_magnet(source: dict[str, Any]) -> str:
+    magnet = str(source.get("magnet") or "").strip()
+    if magnet:
+        return magnet
+    info_hash = str(source.get("hash") or "").strip()
+    if info_hash:
+        return f"magnet:?xt=urn:btih:{info_hash}"
+    return ""
+
+
+def _is_reusable_pack(source: dict[str, Any], *, pack_select: bool) -> bool:
+    if source.get("type") != "torrent":
+        return False
+    if not source.get("debrid_provider") or not _pack_magnet(source):
+        return False
+    package = str(source.get("package") or "").lower()
+    if package in _PACK_PACKAGES or pack_select:
+        return True
+    files = source.get("_prism_cached_files")
+    return isinstance(files, list) and len(files) > 1
+
+
+def _load_played_pack() -> dict[str, Any] | None:
+    raw = g.get_setting(_PACK_SETTING) or ""
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        g.set_setting(_PACK_SETTING, "")
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def clear_played_pack() -> None:
+    g.set_setting(_PACK_SETTING, "")
+
+
+def remember_played_pack(
+    source: dict[str, Any] | None,
+    *,
+    show_id: int | None,
+    pack_select: bool = False,
+) -> None:
+    """Keep a season/show pack for the next episode, or drop it when a single file plays."""
+    if show_id is None or not isinstance(source, dict):
+        return
+    if not _is_reusable_pack(source, pack_select=pack_select):
+        current = _load_played_pack()
+        if current and str(current.get("show_id")) == str(show_id):
+            clear_played_pack()
+        return
+
+    payload = {
+        "show_id": str(show_id),
+        "hash": str(source.get("hash") or ""),
+        "magnet": _pack_magnet(source),
+        "debrid_provider": str(source.get("debrid_provider") or ""),
+        "package": str(source.get("package") or ""),
+        "release_title": str(source.get("release_title") or ""),
+        "type": "torrent",
+    }
+    g.set_setting(_PACK_SETTING, json.dumps(payload))
+    g.log(f"Saved pack for the next episode: {payload['release_title']}", "info")
+
+
+def _debrid_ready(provider: str) -> bool:
+    method_name = _DEBRID_READY.get(provider)
+    if not method_name:
+        return False
+    return bool(getattr(g, method_name)())
+
+
+def _saved_pack_for_episode(item_information: dict[str, Any]) -> dict[str, Any] | None:
+    info = item_information.get("info") if isinstance(item_information, dict) else None
+    if not isinstance(info, dict) or info.get("mediatype") != g.MEDIA_EPISODE:
+        return None
+
+    from resources.lib.simkl.ids import show_id_from_info
+
+    show_id = show_id_from_info(info)
+    pack = _load_played_pack()
+    if show_id is None or not pack or str(pack.get("show_id")) != str(show_id):
+        return None
+    if not _debrid_ready(str(pack.get("debrid_provider") or "")):
+        return None
+    return pack
+
+
+def saved_pack_pending(item_information: dict[str, Any]) -> bool:
+    """True when the next episode should try the saved pack instead of scraping."""
+    return _saved_pack_for_episode(item_information) is not None
+
+
+def take_saved_pack_stream(item_information: dict[str, Any]) -> str | None:
+    """Play this episode from the saved pack. None means the caller should scrape."""
+    pack = _saved_pack_for_episode(item_information)
+    if not pack:
+        return None
+
+    provider = str(pack.get("debrid_provider") or "")
+
+    source = {
+        "type": "torrent",
+        "hash": pack.get("hash") or "",
+        "magnet": pack.get("magnet") or "",
+        "debrid_provider": provider,
+        "package": pack.get("package") or "show",
+        "release_title": pack.get("release_title") or "",
+    }
+    from resources.lib.modules.resolver import Resolver
+
+    try:
+        stream_link, _release_title = Resolver().resolve_single_source(
+            source,
+            item_information,
+            pack_select=False,
+            silent=True,
+            allow_manual_prompt=False,
+            quiet_failure=True,
+        )
+    except Exception:
+        g.log_stacktrace()
+        return None
+
+    if not stream_link or stream_link == "none":
+        g.log("Saved pack has no file for this episode, scraping", "info")
+        return None
+
+    g.log(f"Saved pack has this episode: {source['release_title']}", "info")
+    return stream_link
 
 
 def _info_tokens(info) -> list[str]:

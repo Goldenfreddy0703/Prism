@@ -581,10 +581,10 @@ class SmartPlay:
         g.PLAYLIST.add(url=entry[0], listitem=entry[1])
         return entry
 
-    def create_single_item_playlist_from_info(self):
+    def create_single_item_playlist_from_info(self, url_extras=None):
         g.cancel_playback()
         g.PLAYLIST.clear()
-        self.add_episode_to_playlist()
+        self.add_episode_to_playlist(url_extras=url_extras)
         return g.PLAYLIST
 
     def ensure_binge_playlist_expanded(self) -> None:

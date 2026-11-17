@@ -87,7 +87,15 @@ class Resolver:
 
         return stream_link, release_title, resolved_source
 
-    def resolve_single_source(self, source, item_information, pack_select=False, silent=False, allow_manual_prompt=True):
+    def resolve_single_source(
+        self,
+        source,
+        item_information,
+        pack_select=False,
+        silent=False,
+        allow_manual_prompt=True,
+        quiet_failure=False,
+    ):
         """
         Resolves source to a streamable object
         :param source: Item to attempt to resolve
@@ -135,6 +143,11 @@ class Resolver:
             if source.get("type") == "torrent" and not self._torrent_has_playable_file(source):
                 g.log(
                     f"Skipping source with no playable video: {source.get('release_title')}",
+                    "info",
+                )
+            elif quiet_failure:
+                g.log(
+                    f"Saved pack could not play a file for this episode: {source.get('release_title')}",
                     "info",
                 )
             else:
