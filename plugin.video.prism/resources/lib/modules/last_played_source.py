@@ -182,20 +182,34 @@ def _debrid_ready(provider: str) -> bool:
     return bool(getattr(g, method_name)())
 
 
+def saved_pack_for_show(show_id: int | str | None) -> dict[str, Any] | None:
+    """Saved pack for this show, when its debrid account is still enabled."""
+    if show_id is None:
+        return None
+    pack = _load_played_pack()
+    if not pack or str(pack.get("show_id")) != str(show_id):
+        return None
+    if not _debrid_ready(str(pack.get("debrid_provider") or "")):
+        return None
+    return pack
+
+
 def _saved_pack_for_episode(item_information: dict[str, Any]) -> dict[str, Any] | None:
     info = item_information.get("info") if isinstance(item_information, dict) else None
     if not isinstance(info, dict) or info.get("mediatype") != g.MEDIA_EPISODE:
+        action_args = item_information.get("action_args") if isinstance(item_information, dict) else None
+        if isinstance(action_args, dict) and action_args.get("mediatype") == g.MEDIA_EPISODE:
+            return saved_pack_for_show(action_args.get("simkl_show_id"))
         return None
 
     from resources.lib.simkl.ids import show_id_from_info
 
     show_id = show_id_from_info(info)
-    pack = _load_played_pack()
-    if show_id is None or not pack or str(pack.get("show_id")) != str(show_id):
-        return None
-    if not _debrid_ready(str(pack.get("debrid_provider") or "")):
-        return None
-    return pack
+    if show_id is None:
+        action_args = item_information.get("action_args")
+        if isinstance(action_args, dict):
+            show_id = action_args.get("simkl_show_id")
+    return saved_pack_for_show(show_id)
 
 
 def saved_pack_pending(item_information: dict[str, Any]) -> bool:

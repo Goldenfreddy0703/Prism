@@ -1301,7 +1301,7 @@ class GlobalVariables:
     @staticmethod
     def kodi_content_type(content_type):
         """Map Prism list content keys to ``xbmcplugin.setContent`` values."""
-        if content_type == GlobalVariables.CONTENT_ANIME:
+        if content_type in (GlobalVariables.CONTENT_ANIME, GlobalVariables.CONTENT_MIXED):
             return GlobalVariables.CONTENT_SHOW
         return content_type
 

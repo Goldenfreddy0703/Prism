@@ -464,13 +464,18 @@ class SmartPlay:
         next_season_num = next_season.get("season", int(season) + 1)
         self.build_playlist(next_season_num, 1)
 
-    @staticmethod
-    def pre_scrape():
+    def pre_scrape(self):
         """
         Checks whether a item exists in the current playlist after current item and then pre-fetches results
         :return:
         :rtype:
         """
+        from resources.lib.modules.last_played_source import saved_pack_pending
+
+        if saved_pack_pending(self.item_information):
+            g.log("preScrape: skipped, saved pack will supply the next file", "info")
+            return
+
         next_position = g.PLAYLIST.getposition() + 1
         if next_position >= g.PLAYLIST.size():
             return

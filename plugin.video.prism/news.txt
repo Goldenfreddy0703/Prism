@@ -1,5 +1,5 @@
-Prism 5.0.70 — Playlists and season packs
+Prism 5.0.71 — Playback and mixed lists
 
-Rescrape and Source Select now start the episode in the playlist, so the following episodes are queued. Next Up stays closed on the last episode.
+A saved season pack is no longer scraped again during the last part of an episode, so the file you are watching keeps its download.
 
-When a season pack plays, the next episode uses that same torrent and picks the file by the episode number in the name. A single-episode file, Rescrape, or Source Select clears the saved pack.
+Watch History and other mixed lists now use the show view types, including Poster, Circle, and Card. The mixed view setting stays separate from the TV view.

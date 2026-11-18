@@ -388,15 +388,14 @@ def dispatch(params):
 
         try:
             from resources.lib.common import tools
+            from resources.lib.modules.last_played_source import saved_pack_for_show
+
+            show_id = action_args.get("simkl_show_id") if isinstance(action_args, dict) else None
+            if saved_pack_for_show(show_id):
+                g.log("preScrape: skipped, saved pack will supply the next file", "info")
+                return
 
             item_information = tools.get_item_information(action_args)
-
-            if item_information.get("info", {}).get("mediatype") == g.MEDIA_EPISODE:
-                from resources.lib.modules.last_played_source import saved_pack_pending
-
-                if saved_pack_pending(item_information):
-                    g.log("preScrape: skipped, saved pack will supply the next file", "info")
-                    return
 
             # Get Sources
             sources_helper = helpers.SourcesHelper()

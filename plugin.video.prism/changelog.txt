@@ -1,3 +1,7 @@
+Changelog 5.0.71
+[BUG] Pre-scrape — a saved season pack is not scraped again while the current episode is still playing
+[IMPROVEMENT] Mixed lists — Watch History and other mixed lists use the show view types. The mixed view setting stays separate from the TV view
+
 Changelog 5.0.70
 [BUG] Rescrape and Source Select — the episode starts in the playlist, so the rest of the season is queued
 [BUG] Next Up — stays closed on the last episode, and when playback is not coming from the playlist
