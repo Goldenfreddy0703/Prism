@@ -102,8 +102,34 @@ def _simkl_episode_id_lookup(info: dict[str, Any]) -> dict[str, str] | None:
     return payload or None
 
 
+def _anime_simkl_episode_ids(show_id: int) -> dict[int, int]:
+    """Map an episode Simkl id to Simkl's own episode number (not the TVDB number)."""
+    from resources.lib.database.simkl_sync.milling import fetch_raw_show_episodes
+
+    mapping: dict[int, int] = {}
+    for raw in fetch_raw_show_episodes(int(show_id), "anime") or []:
+        if not isinstance(raw, dict) or raw.get("type") == "special":
+            continue
+        raw_ids = raw.get("ids") or {}
+        raw_id = raw_ids.get("simkl_id") or raw_ids.get("simkl")
+        number = raw.get("episode")
+        if number is None:
+            number = raw.get("number")
+        if raw_id is None or number is None:
+            continue
+        try:
+            mapping[int(raw_id)] = int(number)
+        except (TypeError, ValueError):
+            continue
+    return mapping
+
+
 def _anime_season_episode_numbers(show_id: int, season_num: int) -> list[int]:
-    """Episode numbers in a TVDB menu season bucket (``episodes`` with ``catalog='anime'``)."""
+    """Simkl episode numbers for one menu season.
+
+    The local ``number`` column is the TVDB episode. Show 523776 stores 13-24,
+    while Simkl's own list is 1-12. History has to send 1-12.
+    """
     from resources.lib.database.session import get_sync_database
     from resources.lib.database.simkl_sync.serial_sync import serial_profile_scope
 
@@ -112,43 +138,84 @@ def _anime_season_episode_numbers(show_id: int, season_num: int) -> list[int]:
         st = db._st()
         rows = db.fetchall(
             f"""
-            SELECT number
+            SELECT simkl_id, number
             FROM {st.episode}
             WHERE simkl_show_id = ? AND season = ? AND season > 0
             ORDER BY number
             """,
             (int(show_id), int(season_num)),
         ) or []
+    by_id = _anime_simkl_episode_ids(show_id)
     nums: list[int] = []
     for row in rows:
+        try:
+            episode_id = int(row["simkl_id"])
+        except (TypeError, ValueError, KeyError):
+            episode_id = None
+        if episode_id is not None and episode_id in by_id:
+            nums.append(by_id[episode_id])
+            continue
         try:
             nums.append(int(row["number"]))
         except (TypeError, ValueError, KeyError):
             continue
-    return nums
+    return sorted(set(nums))
+
+
+def _anime_scrobble_episode_number(info: dict[str, Any]) -> int:
+    """Simkl's own episode number, not the TVDB number stored for menus."""
+    native = info.get("anime_episode")
+    if native is not None:
+        try:
+            return int(native)
+        except (TypeError, ValueError):
+            pass
+
+    episode_id = info.get("simkl_id")
+    show_id = show_id_from_info(info)
+    if episode_id is not None and show_id is not None:
+        try:
+            from resources.lib.database.simkl_sync.milling import fetch_raw_show_episodes
+
+            target = int(episode_id)
+            for raw in fetch_raw_show_episodes(int(show_id), "anime") or []:
+                if not isinstance(raw, dict):
+                    continue
+                raw_ids = raw.get("ids") or {}
+                raw_id = raw_ids.get("simkl_id") or raw_ids.get("simkl")
+                if raw_id is None or int(raw_id) != target:
+                    continue
+                number = raw.get("episode")
+                if number is None:
+                    number = raw.get("number")
+                if number is not None:
+                    return int(number)
+        except Exception:
+            pass
+
+    fallback = info.get("episode")
+    if fallback is None:
+        fallback = info.get("number") or 0
+    try:
+        return int(fallback or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _simkl_api_episode_block(info: dict[str, Any], *, for_history: bool = False) -> dict[str, Any]:
-    """Episode object for Simkl scrobble / sync/history."""
-    if _is_anime(info):
-        ep_num = info.get("anime_episode")
-        if ep_num is None:
-            ep_num = info.get("episode") or info.get("number") or 0
-        ep_num = int(ep_num or 0)
+    """Episode object for Simkl scrobble / sync/history.
 
-        tvdb_season = info.get("tvdb_season")
-        tvdb_episode = info.get("tvdb_episode")
-        if tvdb_season is not None:
-            season = 1 if int(tvdb_season) == 0 else int(tvdb_season)
-            number = int(tvdb_episode if tvdb_episode is not None else ep_num)
-            block: dict[str, Any] = {"season": season, "number": number}
-        elif info.get("anime_season") is not None:
-            block = {"season": int(info["anime_season"]), "number": ep_num}
-        elif for_history:
-            # Each Simkl anime entry is its own cour; history uses a season bucket.
-            block = {"season": 1, "number": ep_num}
+    Anime menus and scrapers use the TVDB season and episode. Simkl's anime
+    episode list does not. Episode 1729886 is Simkl episode 4 and TVDB episode 16.
+    Sending 16 returns 404.
+    """
+    if _is_anime(info):
+        ep_num = _anime_scrobble_episode_number(info)
+        if for_history:
+            season = info.get("anime_season")
+            season = 1 if season is None else int(season)
+            block: dict[str, Any] = {"season": season, "number": ep_num}
         else:
-            # Anime-native scrobble: flat episode number within the cour title.
             block = {"number": ep_num}
     else:
         season_num, episode_num = _simkl_episode_coords(info)
@@ -173,21 +240,21 @@ def info_to_history_payload(info: dict[str, Any], force_show: bool = False) -> d
         key = "anime" if _is_anime(info) else "shows"
         item = _base_media(_show_info_for_child(info))
         season_num = int(info.get("season") or 0)
-        if _is_anime(info) and info.get("tvdb_season") is not None:
-            tvdb_season = int(info["tvdb_season"])
-            season_num = 1 if tvdb_season == 0 else tvdb_season
         if _is_anime(info):
             show_id = show_id_from_info(info)
-            ep_numbers = _anime_season_episode_numbers(int(show_id), season_num) if show_id else []
+            menu_season = int(info.get("season") or 1)
+            ep_numbers = _anime_season_episode_numbers(int(show_id), menu_season) if show_id else []
+            # Simkl anime history is one cour: season 1 plus Simkl's own episode numbers.
+            history_season = 0 if menu_season == 0 else 1
             if ep_numbers:
                 item["seasons"] = [
                     {
-                        "number": season_num,
+                        "number": history_season,
                         "episodes": [{"number": n} for n in ep_numbers],
                     }
                 ]
             else:
-                item["seasons"] = [{"number": season_num}]
+                item["seasons"] = [{"number": history_season}]
         else:
             item["seasons"] = [{"number": season_num}]
         return {key: [item]}

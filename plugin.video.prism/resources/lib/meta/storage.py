@@ -98,6 +98,8 @@ _SIMKL_EXTRA_INFO_KEYS = frozenset(
         "anidb_id",
         "anilist_id",
         "kitsu_id",
+        "anime_episode",
+        "anime_season",
         "simkl_img",
         "img",
         "anime_type",

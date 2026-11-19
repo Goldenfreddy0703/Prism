@@ -348,11 +348,6 @@ def apply_anime_streams(player: xbmc.Player, *, catalog: str = "anime") -> None:
 
     try:
         player.setSubtitleStream(stream_index)
-        g.log(
-            f"Playback trace: subtitle stream {stream_index} of {len(subtitle_streams)} "
-            f"mode={active_keyword_mode}",
-            "info",
-        )
     except RuntimeError:
         pass
 

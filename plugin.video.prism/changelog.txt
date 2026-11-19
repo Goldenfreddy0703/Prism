@@ -1,3 +1,7 @@
+Changelog 5.0.72
+[BUG] Anime watch tracking — playback and Simkl Manager use Simkl's own episode number, so a later cour is marked on the website
+[BUG] Simkl Manager on an anime season — marking the season watched or unwatched updates every episode in that season on the website
+
 Changelog 5.0.71
 [BUG] Pre-scrape — a saved season pack is not scraped again while the current episode is still playing
 [IMPROVEMENT] Mixed lists — Watch History and other mixed lists use the show view types. The mixed view setting stays separate from the TV view
