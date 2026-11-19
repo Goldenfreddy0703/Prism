@@ -113,7 +113,7 @@ class CloudScraper(ApiBase):
                     episode_regex=self.episode_regex,
                     season_regex=self.season_regex,
                     simple_info=self.simple_info,
-                    file_title=source_utils.build_cloud_file_title(item),
+                    file_title=source_utils.build_cloud_file_title(item, clean=False),
                 ):
                     sources.append(item)
 
@@ -180,7 +180,7 @@ class CloudScraper(ApiBase):
                 episode_regex=self.episode_regex,
                 season_regex=self.season_regex,
                 simple_info=self.simple_info,
-                file_title=source_utils.build_cloud_file_title(item),
+                file_title=source_utils.build_cloud_file_title(item, clean=False),
             )
 
         else:
