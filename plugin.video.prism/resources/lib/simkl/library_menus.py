@@ -427,6 +427,7 @@ def render_next_up(catalog: str) -> None:
         ListBuilder(),
         **profile_list_kwargs(
             MenuPaintProfile.LIBRARY_EPISODES,
+            sort="unsorted",
             no_paging=not paging,
             has_next_page=has_next,
             seeded=True,
