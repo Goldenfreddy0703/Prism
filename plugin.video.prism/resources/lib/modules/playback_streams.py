@@ -50,6 +50,7 @@ SIGNS_SONGS_KEYWORDS = (
     "songs",
     "s&s",
     "snh",
+    "forced",
 )
 
 KEYWORD_LABEL_IDS = {
